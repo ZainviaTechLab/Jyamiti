@@ -49,8 +49,6 @@ jobs:
 
       - name: ⚙️ Deploy Backend to DigitalOcean
         run: |
-          scp -o StrictHostKeyChecking=no backend/models/SlideDeck.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/models/SlideDeck.js
-          scp -o StrictHostKeyChecking=no backend/models/Course.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/models/Course.js
-          scp -o StrictHostKeyChecking=no backend/routes/slideRoutes.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/routes/slideRoutes.js
-          scp -o StrictHostKeyChecking=no backend/server.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/server.js
-          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "pm2 restart jyamiti-backend"
+          tar --exclude='node_modules' --exclude='uploads' --exclude='.env' --exclude='mongodb_data' --exclude='backend.tar.gz' -czf backend_build.tar.gz -C backend .
+          scp -o StrictHostKeyChecking=no backend_build.tar.gz root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/backend_build.tar.gz
+          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "cd /var/www/jyamiti-backend && tar -xzf backend_build.tar.gz && rm backend_build.tar.gz && npm install --omit=dev && pm2 restart jyamiti-backend"
