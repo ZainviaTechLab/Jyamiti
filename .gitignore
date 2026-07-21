@@ -1,0 +1,21 @@
+# Flutter / Dart
+jyamiti/.dart_tool/
+jyamiti/.flutter-plugins
+jyamiti/.flutter-plugins-dependencies
+jyamiti/.pub-cache/
+jyamiti/.pub/
+jyamiti/build/
+jyamiti/android/.gradle
+jyamiti/android/local.properties
+jyamiti/ios/Flutter/Generated.xcconfig
+jyamiti/ios/Flutter/app.framework
+
+# Node backend
+backend/node_modules/
+backend/.env
+
+# Temporary build & logs
+*.log
+*.tar.gz
+temp_deploy/
+temp_analyze.txt

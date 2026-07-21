@@ -1,0 +1,26 @@
+# Tasks
+
+- [x] Backend implementation
+  - [x] Add `GEOMETRIC` enum to `AssessmentQuestion.js`
+  - [x] Update Course model schema in `backend/models/Course.js`
+- [x] Update routes in `backend/routes/courses.js` for dynamic populating GET
+- [x] Update routes in `backend/routes/assessmentQuestions.js` for listing questions
+- [x] Deploy backend updates to droplet and test connectionbility (no changes needed since standard body payload)
+- [ ] Flutter Question Form Editor
+  - [ ] Add `GEOMETRIC` option in dropdown
+  - [ ] Implement responsive 4:3 interactive Node Placer canvas
+  - [ ] Implement nodes metadata card list (label, isFixed)
+  - [ ] Implement lines count selector and correct connections dropdown builder
+  - [ ] Update save request body to map nodes and lines configuration
+- [ ] Flutter Student Testing Canvas
+  - [ ] Declare movable line states & snap variables
+  - [ ] Add `GEOMETRIC` question initialization & shuffle in `_loadQuestion`
+  - [ ] Implement 4:3 AspectRatio drawing canvas
+  - [ ] Render fixed/blue and target/black nodes
+  - [ ] Implement Gesture recognition & Snapping handles
+  - [ ] Add custom painter to render lines between active handles
+  - [ ] Implement connections validation logic on submit
+  - [ ] Format incorrect answer feedback banner
+- [ ] Verification & Testing
+  - [ ] Run `flutter analyze` to ensure compilation
+  - [ ] Manually test creating & solving a Geometric Construction question

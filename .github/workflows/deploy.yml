@@ -1,0 +1,56 @@
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: 📦 Install Flutter Dependencies
+        run: |
+          cd jyamiti
+          flutter pub get
+
+      - name: 🔍 Run Static Code Analysis
+        run: |
+          cd jyamiti
+          flutter analyze lib/services/api_service.dart
+
+      - name: 🚀 Build Flutter Web Release
+        run: |
+          cd jyamiti
+          flutter build web --release
+
+      - name: 🔑 Setup SSH Key
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.DO_SSH_KEY }}
+
+      - name: 🌐 Deploy Web Frontend to DigitalOcean
+        run: |
+          cd jyamiti/build/web
+          tar -czf web_build.tar.gz .
+          scp -o StrictHostKeyChecking=no web_build.tar.gz root@${{ secrets.DO_SERVER_IP }}:/var/www/app.jyamitimath.com/web_build.tar.gz
+          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "cd /var/www/app.jyamitimath.com && tar -xzf web_build.tar.gz && rm web_build.tar.gz && chown -R www-data:www-data /var/www/app.jyamitimath.com && systemctl reload nginx"
+
+      - name: ⚙️ Deploy Backend to DigitalOcean
+        run: |
+          scp -o StrictHostKeyChecking=no backend/models/SlideDeck.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/models/SlideDeck.js
+          scp -o StrictHostKeyChecking=no backend/models/Course.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/models/Course.js
+          scp -o StrictHostKeyChecking=no backend/routes/slideRoutes.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/routes/slideRoutes.js
+          scp -o StrictHostKeyChecking=no backend/server.js root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/server.js
+          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "pm2 restart jyamiti-backend"

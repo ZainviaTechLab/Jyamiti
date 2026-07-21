@@ -1,0 +1,53 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  password       String
+  name           String
+  role           String   // "ADMIN" | "TUTOR" | "MENTOR" | "STUDENT"
+  tutorBatches   Batch[]  @relation("TutorBatches")
+  mentorBatches  Batch[]  @relation("MentorBatches")
+  studentBatches Batch[]  @relation("StudentBatches")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Course {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  batches     Batch[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Batch {
+  id          String   @id @default(uuid())
+  name        String
+  courseId    String
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  tutorId     String
+  tutor       User     @relation("TutorBatches", fields: [tutorId], references: [id])
+  mentors     User[]   @relation("MentorBatches")
+  students    User[]   @relation("StudentBatches")
+  daysOfWeek  String   // comma-separated, e.g., "Monday,Wednesday,Friday"
+  timePeriod  String   // e.g., "10:00 AM - 12:00 PM"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  email     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
