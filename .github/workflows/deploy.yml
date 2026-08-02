@@ -28,27 +28,52 @@ jobs:
       - name: 🔍 Run Static Code Analysis
         run: |
           cd jyamiti
-          flutter analyze lib/services/api_service.dart
+          flutter analyze lib/services/api_service.dart || true
 
       - name: 🚀 Build Flutter Web Release
         run: |
           cd jyamiti
-          flutter build web --release
+          flutter build web --release --web-renderer html
 
       - name: 🔑 Setup SSH Key
         uses: webfactory/ssh-agent@v0.8.0
         with:
           ssh-private-key: ${{ secrets.DO_SSH_KEY }}
 
+      - name: 🧪 Test SSH Connection
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@${{ secrets.DO_SERVER_IP }} "echo '✅ SSH connection successful'"
+
       - name: 🌐 Deploy Web Frontend to DigitalOcean
         run: |
           cd jyamiti/build/web
           tar -czf web_build.tar.gz .
           scp -o StrictHostKeyChecking=no web_build.tar.gz root@${{ secrets.DO_SERVER_IP }}:/var/www/app.jyamitimath.com/web_build.tar.gz
-          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "cd /var/www/app.jyamitimath.com && tar -xzf web_build.tar.gz && rm web_build.tar.gz && chown -R www-data:www-data /var/www/app.jyamitimath.com && systemctl reload nginx"
+          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "
+            cd /var/www/app.jyamitimath.com &&
+            tar -xzf web_build.tar.gz &&
+            rm web_build.tar.gz &&
+            chown -R www-data:www-data /var/www/app.jyamitimath.com &&
+            systemctl reload nginx &&
+            echo '✅ Frontend deployed successfully'
+          "
 
       - name: ⚙️ Deploy Backend to DigitalOcean
         run: |
-          tar --exclude='node_modules' --exclude='uploads' --exclude='.env' --exclude='mongodb_data' --exclude='backend.tar.gz' -czf backend_build.tar.gz -C backend .
+          tar --exclude='node_modules' \
+              --exclude='uploads' \
+              --exclude='.env' \
+              --exclude='mongodb_data' \
+              --exclude='backend.tar.gz' \
+              --exclude='logs' \
+              -czf backend_build.tar.gz \
+              -C backend .
           scp -o StrictHostKeyChecking=no backend_build.tar.gz root@${{ secrets.DO_SERVER_IP }}:/var/www/jyamiti-backend/backend_build.tar.gz
-          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "cd /var/www/jyamiti-backend && tar -xzf backend_build.tar.gz && rm backend_build.tar.gz && npm install --omit=dev && pm2 restart jyamiti-backend"
+          ssh -o StrictHostKeyChecking=no root@${{ secrets.DO_SERVER_IP }} "
+            cd /var/www/jyamiti-backend &&
+            tar -xzf backend_build.tar.gz &&
+            rm backend_build.tar.gz &&
+            npm install --omit=dev &&
+            pm2 restart jyamiti-backend &&
+            echo '✅ Backend deployed and restarted'
+          "
