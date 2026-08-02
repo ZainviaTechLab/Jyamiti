@@ -33,7 +33,7 @@ jobs:
       - name: 🚀 Build Flutter Web Release
         run: |
           cd jyamiti
-          flutter build web --release --web-renderer html
+          flutter build web --release
 
       - name: 🔑 Setup SSH Key
         uses: webfactory/ssh-agent@v0.8.0
