@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -115,7 +116,7 @@ class _StudentTutorialsScreenState extends State<StudentTutorialsScreen> {
                 ),
               ),
         child: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+            ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
             : Column(
                 children: [
                   // Filter bar
@@ -280,7 +281,7 @@ class _StudentTutorialsScreenState extends State<StudentTutorialsScreen> {
                                                     color: Colors.black.withOpacity(0.55),
                                                     border: Border.all(color: context.textColor54.withOpacity(0.4), width: 2),
                                                   ),
-                                                  child: Icon(Icons.play_arrow_rounded, color: context.textColor, size: 40),
+                                                  child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 40),
                                                 ),
                                                 // Duration badge area top right
                                                 Positioned(
@@ -293,9 +294,9 @@ class _StudentTutorialsScreenState extends State<StudentTutorialsScreen> {
                                                     ),
                                                     child: Row(
                                                       children: [
-                                                        Icon(Icons.play_circle_outline_rounded, color: context.textColor70, size: 12),
-                                                        SizedBox(width: 4),
-                                                        Text('Watch', style: TextStyle(color: context.textColor70, fontSize: 11)),
+                                                        const Icon(Icons.play_circle_outline_rounded, color: Colors.white70, size: 12),
+                                                        const SizedBox(width: 4),
+                                                        const Text('Watch', style: TextStyle(color: Colors.white70, fontSize: 11)),
                                                       ],
                                                     ),
                                                   ),

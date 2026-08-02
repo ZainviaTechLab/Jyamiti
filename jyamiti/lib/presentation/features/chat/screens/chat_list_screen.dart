@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
@@ -55,7 +56,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       body: BlocBuilder<ChatBloc, ChatState>(
         builder: (context, state) {
           if (state.isLoading && state.chats.isEmpty) {
-            return const Center(child: CircularProgressIndicator(color: Colors.blueAccent));
+            return const Center(child: JyamitiLoader(color: Colors.blueAccent));
           }
 
           if (state.error != null && state.chats.isEmpty) {

@@ -48,8 +48,13 @@ class AuthProvider extends ChangeNotifier {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200) {
+        final user = data['user'];
+        if (user != null && (user['isActive'] == false || user['status'] == 'INACTIVE' || user['status'] == 'SUSPENDED')) {
+          return 'Your account is deactivated or suspended. Please contact admin.';
+        }
+
         _token = data['token'];
-        _user = data['user'];
+        _user = user;
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auth_token', _token!);
@@ -73,8 +78,13 @@ class AuthProvider extends ChangeNotifier {
     try {
       final response = await ApiService.get('/auth/profile');
       if (response.statusCode == 200) {
-        _profile = jsonDecode(response.body);
-        notifyListeners();
+        final profile = jsonDecode(response.body);
+        if (profile != null && (profile['isActive'] == false || profile['status'] == 'INACTIVE' || profile['status'] == 'SUSPENDED')) {
+          await logout();
+        } else {
+          _profile = profile;
+          notifyListeners();
+        }
       }
     } catch (e) {
       debugPrint('Error fetching profile: $e');

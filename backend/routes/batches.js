@@ -29,6 +29,8 @@ function formatBatch(b) {
     daysOfWeek: b.daysOfWeek,
     timePeriod: b.timePeriod,
     classLink: b.classLink,
+    meetType: b.meetType || 'CUSTOM',
+    jitsiServer: b.jitsiServer || 'meet.jit.si',
     startDate: b.startDate,
     createdAt: b.createdAt,
   };
@@ -74,10 +76,10 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 // POST /api/batches
 router.post('/', authenticateToken, requireRole(['ADMIN']), async (req, res) => {
-  const { name, categoryId, courseId, tutorId, mentorIds, daysOfWeek, timePeriod, classLink, startDate } = req.body;
+  const { name, categoryId, courseId, tutorId, mentorIds, daysOfWeek, timePeriod, classLink, meetType, jitsiServer, startDate } = req.body;
 
-  if (!name || !categoryId || !courseId || !tutorId || !daysOfWeek || !timePeriod || !classLink) {
-    return res.status(400).json({ message: 'name, categoryId, courseId, tutorId, daysOfWeek, timePeriod, and classLink are required' });
+  if (!name || !categoryId || !courseId || !tutorId || !daysOfWeek || !timePeriod) {
+    return res.status(400).json({ message: 'name, categoryId, courseId, tutorId, daysOfWeek, and timePeriod are required' });
   }
 
   try {
@@ -116,7 +118,9 @@ router.post('/', authenticateToken, requireRole(['ADMIN']), async (req, res) => 
       mentors: mentorIds || [],
       daysOfWeek: daysStr,
       timePeriod,
-      classLink,
+      classLink: classLink || '',
+      meetType: meetType || 'CUSTOM',
+      jitsiServer: jitsiServer || 'meet.jit.si',
       startDate: startDate ? new Date(startDate) : new Date(),
     });
 
@@ -133,7 +137,7 @@ router.post('/', authenticateToken, requireRole(['ADMIN']), async (req, res) => 
 
 // PUT /api/batches/:id
 router.put('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res) => {
-  const { name, categoryId, courseId, tutorId, mentorIds, daysOfWeek, timePeriod, classLink, startDate } = req.body;
+  const { name, categoryId, courseId, tutorId, mentorIds, daysOfWeek, timePeriod, classLink, meetType, jitsiServer, startDate } = req.body;
   try {
     const batch = await Batch.findById(req.params.id);
     if (!batch) return res.status(404).json({ message: 'Batch not found' });
@@ -181,6 +185,8 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res) =
     if (daysOfWeek) batch.daysOfWeek = Array.isArray(daysOfWeek) ? daysOfWeek.join(',') : daysOfWeek;
     if (timePeriod) batch.timePeriod = timePeriod;
     if (classLink !== undefined) batch.classLink = classLink;
+    if (meetType !== undefined) batch.meetType = meetType;
+    if (jitsiServer !== undefined) batch.jitsiServer = jitsiServer;
     if (startDate !== undefined) batch.startDate = new Date(startDate);
 
     await batch.save();

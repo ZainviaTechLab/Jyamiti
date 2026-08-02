@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -46,7 +47,7 @@ class _ExamManagementScreenState extends State<ExamManagementScreen> {
   void _showCreateExamDialog() async {
     final courseId = widget.batch['course']['_id'] ?? widget.batch['course'];
     
-    showDialog(context: context, builder: (_) => const Center(child: CircularProgressIndicator()));
+    showDialog(context: context, builder: (_) => const Center(child: JyamitiLoader()));
     final qRes = await ApiService.get('/questions/course/$courseId');
     Navigator.pop(context);
 
@@ -150,7 +151,7 @@ class _ExamManagementScreenState extends State<ExamManagementScreen> {
   void _showEditExamDialog(Map<String, dynamic> exam) async {
     final courseId = widget.batch['course']['_id'] ?? widget.batch['course'];
     
-    showDialog(context: context, builder: (_) => const Center(child: CircularProgressIndicator()));
+    showDialog(context: context, builder: (_) => const Center(child: JyamitiLoader()));
     final qRes = await ApiService.get('/questions/course/$courseId');
     Navigator.pop(context);
 
@@ -304,7 +305,7 @@ class _ExamManagementScreenState extends State<ExamManagementScreen> {
           ),
           SafeArea(
             child: _isLoading 
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+              ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
               : _exams.isEmpty
                 ? Center(child: Text('No exams scheduled', style: TextStyle(color: context.textColor70)))
                 : ListView.builder(

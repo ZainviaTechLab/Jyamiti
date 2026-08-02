@@ -92,6 +92,8 @@ class UserBloc extends Bloc<UserEvent, UserState> {
         'name': event.name,
         'email': event.email,
         'phone': event.phone,
+        'isActive': event.isActive,
+        'status': event.isActive ? 'ACTIVE' : 'INACTIVE',
       });
 
       if (res.statusCode == 200) {

@@ -205,6 +205,7 @@ class AdminBatchDetailScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    _buildSyllabusProgressCard(context, batch),
                     Row(
                       children: [
                         Container(
@@ -451,6 +452,171 @@ class AdminBatchDetailScreen extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Map<String, int> _calculateBatchProgress(Map<String, dynamic> batch) {
+    int total = 0;
+    int completed = 0;
+    int inProgress = 0;
+
+    void inspectNode(dynamic rawNode) {
+      if (rawNode is! Map) return;
+      total++;
+      final status = (rawNode['status'] ?? 'not_started').toString();
+      if (status == 'completed') {
+        completed++;
+      } else if (status == 'in_progress') {
+        inProgress++;
+      }
+
+      if (rawNode['topics'] is List) {
+        for (var t in rawNode['topics']) inspectNode(t);
+      }
+      if (rawNode['subTopics'] is List) {
+        for (var s in rawNode['subTopics']) inspectNode(s);
+      }
+    }
+
+    final syllabus = batch['syllabus'] ?? batch['course']?['syllabus'];
+    if (syllabus is List) {
+      for (var chapter in syllabus) inspectNode(chapter);
+    } else if (syllabus is Map && syllabus['chapters'] is List) {
+      for (var chapter in syllabus['chapters']) inspectNode(chapter);
+    }
+
+    final percentage = total > 0 ? ((completed / total) * 100).round() : 0;
+    return {
+      'total': total,
+      'completed': completed,
+      'inProgress': inProgress,
+      'notStarted': total - completed - inProgress,
+      'percentage': percentage,
+    };
+  }
+
+  Widget _buildSyllabusProgressCard(
+      BuildContext context, Map<String, dynamic> batch) {
+    final stats = _calculateBatchProgress(batch);
+    final percentage = stats['percentage'] ?? 0;
+    final completed = stats['completed'] ?? 0;
+    final total = stats['total'] ?? 0;
+    final inProgress = stats['inProgress'] ?? 0;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: context.isDark
+            ? const Color(0xFF0F172A).withValues(alpha: 0.6)
+            : Colors.white.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: const Color(0xFF10B981).withValues(alpha: 0.35),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF10B981).withValues(alpha: 0.08),
+            blurRadius: 12,
+            spreadRadius: 0,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.auto_graph_rounded,
+                  color: Color(0xFF10B981),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Syllabus Completion',
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color:
+                                const Color(0xFF6366F1).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            'Batch Live',
+                            style: TextStyle(
+                              color: Color(0xFF6366F1),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$completed of $total syllabus units completed ($inProgress in progress)',
+                      style: TextStyle(
+                        color: context.textColor60,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF10B981)),
+                ),
+                child: Text(
+                  '$percentage%',
+                  style: const TextStyle(
+                    color: Color(0xFF10B981),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: total > 0 ? (completed / total) : 0.0,
+              minHeight: 8,
+              backgroundColor: context.textColor54.withValues(alpha: 0.2),
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,21 +1,27 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../../../providers/auth_provider.dart';
+import '../../../widgets/theme_reveal.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../academic/screens/batch_worksheets_screen.dart';
 import '../../academic/screens/batch_notes_screen.dart';
 import '../../exams/screens/exam_management_screen.dart';
-import '../../exams/screens/question_bank_screen.dart';
-import '../../exams/screens/assessment_question_management_screen.dart';
 import '../../chat/screens/chat_list_screen.dart';
 import '../../academic/screens/schedules_screen.dart';
 import '../../academic/screens/tutor_tutorials_screen.dart';
 import '../../academic/screens/student_learning_path_screen.dart';
 import '../../academic/screens/tutor_manage_assignments_screen.dart';
 import '../../academic/screens/batch_performances_screen.dart';
+import '../../slides/screens/slide_decks_manager_screen.dart';
 import '../../../widgets/writing_pad_widget.dart';
+import '../../competitions/screens/tutor_competition_host_screen.dart';
+import '../../competitions/screens/tutor_arena_history_screen.dart';
+import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
 
 class TutorDashboard extends StatefulWidget {
   const TutorDashboard({super.key});
@@ -176,6 +182,18 @@ class _TutorDashboardState extends State<TutorDashboard> {
         return const ChatListScreen(isInline: true);
       case 5:
         return const TutorManageAssignmentsScreen(isInline: true);
+      case 7:
+        return _buildSavedNotesTab();
+      case 8:
+        return TutorArenaHistoryScreen(
+          batches: profile?['batches'] as List?,
+          isInline: true,
+        );
+      case 9:
+        return ParentMeetingsDashboardScreen(
+          batches: profile?['batches'] as List?,
+          isInline: true,
+        );
       default:
         return _buildOverviewTab(profile);
     }
@@ -294,91 +312,6 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
           const SizedBox(height: 28),
 
-          // Quick Actions Grid
-          Text(
-            'Quick Actions',
-            style: TextStyle(
-              color: context.textColor,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
-            ),
-          ).animate().fade(delay: 150.ms).slideX(begin: -0.1, end: 0),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final crossCount = constraints.maxWidth > 600 ? 4 : 2;
-              return GridView.count(
-                crossAxisCount: crossCount,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                childAspectRatio: 1.5,
-                children: [
-                  _buildQuickActionCard(
-                    icon: Icons.library_books_rounded,
-                    label: 'Question Bank',
-                    color: const Color(0xFFF59E0B),
-                    onTap: () {
-                      final isLargeScreen = MediaQuery.of(context).size.width > 900;
-                      if (isLargeScreen) {
-                        setState(() {
-                          _activeInlineSubScreen = QuestionBankScreen(
-                            isInline: true,
-                            onBack: () => setState(() => _activeInlineSubScreen = null),
-                          );
-                        });
-                      } else {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const QuestionBankScreen()));
-                      }
-                    },
-                  ),
-                  _buildQuickActionCard(
-                    icon: Icons.assessment_rounded,
-                    label: 'Assessments',
-                    color: const Color(0xFF8B5CF6),
-                    onTap: () {
-                      final isLargeScreen = MediaQuery.of(context).size.width > 900;
-                      if (isLargeScreen) {
-                        setState(() {
-                          _activeInlineSubScreen = AssessmentQuestionManagementScreen(
-                            isInline: true,
-                            onBack: () => setState(() => _activeInlineSubScreen = null),
-                          );
-                        });
-                      } else {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const AssessmentQuestionManagementScreen()));
-                      }
-                    },
-                  ),
-                  _buildQuickActionCard(
-                    icon: Icons.calendar_month_rounded,
-                    label: 'Schedules',
-                    color: const Color(0xFF6366F1),
-                    onTap: () => setState(() {
-                      _selectedSidebarTab = 1;
-                      _activeInlineSubScreen = null;
-                    }),
-                  ),
-                  _buildQuickActionCard(
-                    icon: Icons.assignment_rounded,
-                    label: 'Assignments',
-                    color: const Color(0xFF3B82F6),
-                    onTap: () => setState(() {
-                      _selectedSidebarTab = 5;
-                      _activeInlineSubScreen = null;
-                    }),
-                  ),
-                ],
-              );
-            },
-          ).animate().fade(delay: 200.ms).slideY(begin: 0.1, end: 0),
-
-          const SizedBox(height: 32),
-
           // My Batches Section
           Text(
             'My Batches',
@@ -393,7 +326,7 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
           if (profile == null)
             const Center(
-              child: CircularProgressIndicator(color: _roleColor),
+              child: JyamitiLoader(color: _roleColor),
             )
           else if (batches == null || batches.isEmpty)
             Container(
@@ -419,59 +352,6 @@ class _TutorDashboardState extends State<TutorDashboard> {
           else
             ...batches.map((b) => _buildBatchCard(b)),
         ],
-      ),
-    );
-  }
-
-  // ─── Quick Action Card ───────────────────────────────────────────────────────
-  Widget _buildQuickActionCard({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: context.isDark
-              ? color.withValues(alpha: 0.08)
-              : color.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.25)),
-          boxShadow: [
-            BoxShadow(
-              color: color.withValues(alpha: context.isDark ? 0.05 : 0.08),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: color, size: 22),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: context.isDark ? color.withValues(alpha: 0.9) : color,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -750,6 +630,32 @@ class _TutorDashboardState extends State<TutorDashboard> {
                         children: [
                           Expanded(child: _buildActionBtn(
                             context,
+                            icon: Icons.sports_esports_rounded,
+                            label: 'Arena',
+                            color: const Color(0xFF10B981),
+                            onTap: () {
+                              final isLargeScreen = MediaQuery.of(context).size.width > 900;
+                              if (isLargeScreen) {
+                                setState(() {
+                                  _activeInlineSubScreen = TutorCompetitionHostScreen(
+                                    batch: b,
+                                    isInline: true,
+                                    onBack: () => setState(() => _activeInlineSubScreen = null),
+                                  );
+                                });
+                              } else {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => TutorCompetitionHostScreen(batch: b),
+                                  ),
+                                );
+                              }
+                            },
+                          )),
+                          const SizedBox(width: 10),
+                          Expanded(child: _buildActionBtn(
+                            context,
                             icon: Icons.book_rounded,
                             label: 'Worksheets',
                             color: const Color(0xFF6366F1),
@@ -792,6 +698,15 @@ class _TutorDashboardState extends State<TutorDashboard> {
                             onTap: () => Navigator.push(context,
                                 MaterialPageRoute(builder: (_) => BatchPerformancesScreen(batch: b))),
                           )),
+                          const SizedBox(width: 10),
+                          Expanded(child: _buildActionBtn(
+                            context,
+                            icon: Icons.slideshow_rounded,
+                            label: 'Slides',
+                            color: const Color(0xFF0EA5E9),
+                            onTap: () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const SlideDecksManagerScreen(isTutor: true))),
+                          )),
                         ],
                       )
                     else
@@ -800,6 +715,28 @@ class _TutorDashboardState extends State<TutorDashboard> {
                         physics: const BouncingScrollPhysics(),
                         child: Row(
                           children: [
+                            _buildActionBtn(context, icon: Icons.sports_esports_rounded, label: 'Arena',
+                                color: const Color(0xFF10B981),
+                                onTap: () {
+                                  final isLargeScreen = MediaQuery.of(context).size.width > 900;
+                                  if (isLargeScreen) {
+                                    setState(() {
+                                      _activeInlineSubScreen = TutorCompetitionHostScreen(
+                                        batch: b,
+                                        isInline: true,
+                                        onBack: () => setState(() => _activeInlineSubScreen = null),
+                                      );
+                                    });
+                                  } else {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => TutorCompetitionHostScreen(batch: b),
+                                      ),
+                                    );
+                                  }
+                                }),
+                            const SizedBox(width: 10),
                             _buildActionBtn(context, icon: Icons.book_rounded, label: 'Worksheets',
                                 color: const Color(0xFF6366F1),
                                 onTap: () => Navigator.push(context,
@@ -824,6 +761,11 @@ class _TutorDashboardState extends State<TutorDashboard> {
                                 color: const Color(0xFFF59E0B),
                                 onTap: () => Navigator.push(context,
                                     MaterialPageRoute(builder: (_) => BatchPerformancesScreen(batch: b)))),
+                            const SizedBox(width: 10),
+                            _buildActionBtn(context, icon: Icons.slideshow_rounded, label: 'Slides',
+                                color: const Color(0xFF0EA5E9),
+                                onTap: () => Navigator.push(context,
+                                    MaterialPageRoute(builder: (_) => const SlideDecksManagerScreen(isTutor: true)))),
                           ],
                         ),
                       ),
@@ -885,7 +827,7 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
     return Scaffold(
       extendBodyBehindAppBar: !isLargeScreen,
-      floatingActionButton: const JyamitiPadFab(),
+      floatingActionButton: const JyamitiPadFab(enableSaveNotes: true),
       appBar: isLargeScreen
           ? null
           : AppBar(
@@ -897,6 +839,34 @@ class _TutorDashboardState extends State<TutorDashboard> {
               elevation: 0,
               iconTheme: IconThemeData(color: context.textColor),
               actions: [
+                Builder(
+                  builder: (iconContext) => IconButton(
+                    icon: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 500),
+                      transitionBuilder: (child, animation) {
+                        return RotationTransition(
+                          turns: animation,
+                          child: ScaleTransition(
+                            scale: animation,
+                            child: child,
+                          ),
+                        );
+                      },
+                      child: Icon(
+                        context.isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                        key: ValueKey<bool>(context.isDark),
+                        color: context.textColor,
+                      ),
+                    ),
+                    tooltip: 'Toggle Theme',
+                    onPressed: () {
+                      final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+                      ThemeReveal.animate(iconContext, () {
+                        themeProvider.toggleTheme(!themeProvider.isDarkMode);
+                      });
+                    },
+                  ),
+                ),
                 IconButton(
                   icon: Icon(Icons.chat_bubble_outline_rounded, color: context.textColor),
                   onPressed: () => Navigator.push(context,
@@ -977,35 +947,63 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
                         _buildSidebarItem(0, 'Overview', Icons.dashboard_rounded),
                         _buildSidebarItem(1, 'Schedules', Icons.calendar_month_rounded),
-                        _buildSidebarNavBtn('Question Bank', Icons.library_books_rounded, const Color(0xFFF59E0B), () {
-                          final isLargeScreen = MediaQuery.of(context).size.width > 900;
-                          if (isLargeScreen) {
-                            setState(() {
-                              _activeInlineSubScreen = QuestionBankScreen(
-                                isInline: true,
-                                onBack: () => setState(() => _activeInlineSubScreen = null),
-                              );
-                            });
-                          } else {
-                            Navigator.push(context, MaterialPageRoute(builder: (_) => const QuestionBankScreen()));
-                          }
-                        }),
-                        _buildSidebarNavBtn('Assessments', Icons.assessment_rounded, const Color(0xFF8B5CF6), () {
-                          final isLargeScreen = MediaQuery.of(context).size.width > 900;
-                          if (isLargeScreen) {
-                            setState(() {
-                              _activeInlineSubScreen = AssessmentQuestionManagementScreen(
-                                isInline: true,
-                                onBack: () => setState(() => _activeInlineSubScreen = null),
-                              );
-                            });
-                          } else {
-                            Navigator.push(context, MaterialPageRoute(builder: (_) => const AssessmentQuestionManagementScreen()));
-                          }
-                        }),
                         _buildSidebarItem(5, 'Assignments', Icons.assignment_rounded),
+                        _buildSidebarItem(8, 'Arena History', Icons.emoji_events_rounded),
+                        _buildSidebarItem(9, 'Parent Meetings', Icons.video_call_rounded),
+                        _buildSidebarItem(7, 'My Notes', Icons.note_alt_rounded),
 
                         const Spacer(),
+
+                        // Theme toggle link
+                        Builder(
+                          builder: (inkContext) => Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: () {
+                                    final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+                                    ThemeReveal.animate(inkContext, () {
+                                      themeProvider.toggleTheme(!themeProvider.isDarkMode);
+                                    });
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                                    child: Row(
+                                      children: [
+                                        AnimatedSwitcher(
+                                          duration: const Duration(milliseconds: 500),
+                                          transitionBuilder: (child, animation) {
+                                            return RotationTransition(
+                                              turns: animation,
+                                              child: ScaleTransition(
+                                                scale: animation,
+                                                child: child,
+                                              ),
+                                            );
+                                          },
+                                          child: Icon(
+                                            context.isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                                            key: ValueKey<bool>(context.isDark),
+                                            color: context.textColor70,
+                                            size: 20,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Text(
+                                          context.isDark ? 'Light Theme' : 'Dark Theme',
+                                          style: TextStyle(color: context.textColor70, fontSize: 14),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
 
                         _buildSidebarItem(4, 'Messages', Icons.chat_bubble_outline_rounded),
 
@@ -1060,5 +1058,230 @@ class _TutorDashboardState extends State<TutorDashboard> {
         ],
       ),
     );
+  }
+
+  Widget _buildSavedNotesTab() {
+    return FutureBuilder<List<dynamic>>(
+      future: _loadSavedNotes(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: JyamitiLoader());
+        }
+        final notes = snapshot.data ?? [];
+        if (notes.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6366F1).withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.note_alt_rounded,
+                    size: 64,
+                    color: Color(0xFF6366F1),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'No Saved Notes Yet',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: context.textColor,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 40),
+                  child: Text(
+                    'Draw anything on JyamitiPad and save it to access your personal notebook here.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: context.textColor70,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'My Personal Notes',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: context.textColor,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Quickly open and edit your JyamitiPad sketch notes',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: context.textColor70,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: notes.length,
+                    itemBuilder: (context, index) {
+                      final note = notes[index];
+                      final timestamp = note['timestamp'] != null
+                          ? DateTime.parse(note['timestamp']).toLocal()
+                          : DateTime.now();
+                      final formattedDate = '${timestamp.day}/${timestamp.month}/${timestamp.year} at ${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: context.isDark ? context.glassBg : Colors.white.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: context.isDark ? context.glassBorder : Colors.black.withValues(alpha: 0.1),
+                          ),
+                        ),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                          leading: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.gesture_rounded,
+                              color: Color(0xFF6366F1),
+                              size: 22,
+                            ),
+                          ),
+                          title: Text(
+                            note['title'] ?? 'Untitled Sketch',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: context.textColor,
+                            ),
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4.0),
+                            child: Text(
+                              'Last edited: $formattedDate',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: context.textColor60,
+                              ),
+                            ),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.open_in_new_rounded, color: Color(0xFF10B981)),
+                                tooltip: 'Open and Edit Note',
+                                onPressed: () => _openNoteInPad(note),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                                tooltip: 'Delete Note',
+                                onPressed: () => _deleteNote(note['id']),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<List<dynamic>> _loadSavedNotes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedNotesStr = prefs.getString('jyamiti_my_notes') ?? '[]';
+    return jsonDecode(savedNotesStr);
+  }
+
+  void _openNoteInPad(Map<String, dynamic> note) {
+    final List<dynamic> linesList = note['lines'] ?? [];
+    final List<DrawnLine> parsedLines = linesList.map((l) {
+      final pointsList = (l['points'] as List).map((p) {
+        return StrokePoint(Offset((p['dx'] as num).toDouble(), (p['dy'] as num).toDouble()));
+      }).toList();
+      return DrawnLine(
+        points: pointsList,
+        color: Color(l['color'] as int),
+        strokeWidth: (l['strokeWidth'] as num).toDouble(),
+        isEraser: l['isEraser'] ?? false,
+        isShape: l['isShape'] ?? false,
+      );
+    }).toList();
+
+    JyamitiPadFullScreenPage.open(
+      context,
+      initialLines: parsedLines,
+      enableSaveNotes: true,
+      noteId: note['id'],
+      noteTitle: note['title'],
+    );
+  }
+
+  Future<void> _deleteNote(String noteId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          title: Text(
+            'Delete Note',
+            style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.bold),
+          ),
+          content: Text(
+            'Are you sure you want to delete this note? This action cannot be undone.',
+            style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              child: const Text('Delete', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      final prefs = await SharedPreferences.getInstance();
+      final savedNotesStr = prefs.getString('jyamiti_my_notes') ?? '[]';
+      final List<dynamic> savedNotes = jsonDecode(savedNotesStr);
+      savedNotes.removeWhere((n) => n['id'] == noteId);
+      await prefs.setString('jyamiti_my_notes', jsonEncode(savedNotes));
+      setState(() {});
+    }
   }
 }

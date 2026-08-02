@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../providers/theme_provider.dart';
@@ -229,7 +230,7 @@ class _QuestionBankScreenState extends State<QuestionBankScreen> {
           ],
           Expanded(
             child: _isLoading 
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+              ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
               : Builder(builder: (context) {
                   final filteredQuestions = _questions.where((q) {
                     if (_selectedChapterFilter != null && q['chapter'] != _selectedChapterFilter) return false;

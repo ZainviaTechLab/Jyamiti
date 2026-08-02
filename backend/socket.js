@@ -3,6 +3,7 @@ import { createClient } from 'redis';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Message from './models/Message.js';
 import Chat from './models/Chat.js';
+import Competition from './models/Competition.js';
 
 let io;
 
@@ -46,6 +47,291 @@ export const initSocket = async (httpServer) => {
     socket.on('join_chat', (chatId) => {
       socket.join(chatId);
       console.log('User joined chat:', chatId);
+    });
+
+    // ----------------------------------------------------
+    // LIVE BATCH COMPETITION ARENA REAL-TIME SOCKET HANDLERS
+    // ----------------------------------------------------
+    socket.on('competition:join_room', async ({ roomCode, userId, name, avatar }) => {
+      try {
+        const code = roomCode.toUpperCase();
+        socket.join(code);
+
+        const competition = await Competition.findOne({ roomCode: code });
+        if (!competition) return;
+
+        const uId = String(userId || socket.id);
+
+        // Add or update participant
+        let participant = competition.participants.find(p => p.userId && p.userId.toString() === uId);
+        if (!participant) {
+          competition.participants.push({
+            userId: uId,
+            name: name || 'Student',
+            avatar: avatar || '',
+            totalScore: 0,
+            currentRank: competition.participants.length + 1,
+            streak: 0,
+            responseHistory: []
+          });
+          await competition.save();
+        }
+
+        console.log(`Student ${name} (${uId}) joined competition room ${code}. Total participants: ${competition.participants.length}`);
+        
+        const payload = {
+          roomCode: code,
+          participants: competition.participants,
+          status: competition.status
+        };
+        io.to(code).emit('competition:player_joined', payload);
+        socket.emit('competition:player_joined', payload);
+      } catch (err) {
+        console.error('Error handling competition:join_room', err);
+      }
+    });
+
+    socket.on('competition:start_game', async ({ roomCode }) => {
+      try {
+        const code = roomCode.toUpperCase();
+        const competition = await Competition.findOne({ roomCode: code });
+        if (!competition || competition.questions.length === 0) return;
+
+        competition.status = 'IN_PROGRESS';
+        competition.currentRoundIndex = 0;
+        competition.startedAt = new Date();
+        await competition.save();
+
+        const formattedQuestions = competition.questions.map((q, idx) => ({
+          id: q.id || `q_${idx}`,
+          text: q.text,
+          options: q.options,
+          correctOptionIndex: q.correctOptionIndex,
+          explanation: q.explanation,
+          category: q.category,
+          subtopic: q.subtopic
+        }));
+
+        const payload = {
+          roomCode: code,
+          roundIndex: 0,
+          totalRounds: competition.questions.length,
+          timePerQuestion: competition.timePerQuestion,
+          questions: formattedQuestions,
+          question: formattedQuestions[0]
+        };
+
+        io.to(code).emit('competition:round_started', payload);
+        socket.emit('competition:round_started', payload);
+      } catch (err) {
+        console.error('Error handling competition:start_game', err);
+      }
+    });
+
+    socket.on('competition:submit_answer', async ({ roomCode, userId, roundIndex, selectedOptionIndex, timeTakenSec }) => {
+      try {
+        const code = roomCode.toUpperCase();
+        const competition = await Competition.findOne({ roomCode: code });
+        if (!competition || competition.status !== 'IN_PROGRESS') return;
+
+        const uId = String(userId || '');
+        const participant = competition.participants.find(p => p.userId && p.userId.toString() === uId);
+        if (!participant) return;
+
+        const rIdx = roundIndex !== undefined ? parseInt(roundIndex) : participant.responseHistory.length;
+        const question = competition.questions[rIdx];
+        if (!question) return;
+
+        // Check if student already answered this round
+        const existingResp = participant.responseHistory.find(r => r.roundIndex === rIdx);
+        if (!existingResp) {
+          const isCorrect = (selectedOptionIndex === question.correctOptionIndex);
+          let pointsEarned = 0;
+
+          if (isCorrect) {
+            participant.streak += 1;
+            const streakMultiplier = participant.streak >= 3 ? 1.5 : (participant.streak === 2 ? 1.2 : 1.0);
+            const basePoints = 1000;
+            const maxTime = competition.timePerQuestion || 30;
+            const speedFactor = Math.max(0, (maxTime - (timeTakenSec || 0)) / maxTime);
+            const speedBonus = Math.round(500 * speedFactor);
+            pointsEarned = Math.round((basePoints + speedBonus) * streakMultiplier);
+          } else {
+            participant.streak = 0;
+          }
+
+          participant.totalScore += pointsEarned;
+          participant.responseHistory.push({
+            roundIndex: rIdx,
+            questionId: question.id,
+            selectedOption: question.options[selectedOptionIndex] || '',
+            isCorrect,
+            timeTakenSec: timeTakenSec || 0,
+            pointsEarned
+          });
+
+          // Update current rank
+          competition.participants.sort((a, b) => b.totalScore - a.totalScore);
+          competition.participants.forEach((p, idx) => {
+            p.currentRank = idx + 1;
+          });
+
+          await competition.save();
+        }
+
+        // Prepare live progress list for tutor & room
+        const participantsProgress = competition.participants.map(p => {
+          const roundsCompleted = p.responseHistory ? p.responseHistory.length : 0;
+          const totalTimeSec = p.responseHistory ? p.responseHistory.reduce((sum, r) => sum + (r.timeTakenSec || 0), 0) : 0;
+          const avgSpeedSec = roundsCompleted > 0 ? parseFloat((totalTimeSec / roundsCompleted).toFixed(1)) : 0;
+          const totalRounds = competition.questions.length;
+          const progressPct = totalRounds > 0 ? parseFloat((roundsCompleted / totalRounds).toFixed(2)) : 0;
+
+          return {
+            userId: p.userId,
+            name: p.name,
+            avatar: p.avatar,
+            totalScore: p.totalScore,
+            streak: p.streak,
+            currentRank: p.currentRank,
+            roundsCompleted,
+            totalRounds,
+            progressPct,
+            totalTimeSec,
+            avgSpeedSec,
+            isFinished: roundsCompleted >= totalRounds
+          };
+        });
+
+        const isAllFinished = competition.participants.length > 0 &&
+          competition.participants.every(p => p.responseHistory.length >= competition.questions.length);
+
+        if (isAllFinished) {
+          competition.status = 'COMPLETED';
+          competition.completedAt = new Date();
+          await competition.save();
+        }
+
+        const payload = {
+          roomCode: code,
+          userId: uId,
+          participants: participantsProgress,
+          isAllFinished,
+          status: competition.status
+        };
+
+        io.to(code).emit('competition:player_progress', payload);
+        socket.emit('competition:player_progress', payload);
+
+        if (isAllFinished) {
+          io.to(code).emit('competition:game_over', {
+            roomCode: code,
+            leaderboard: participantsProgress,
+            finalPodium: participantsProgress.slice(0, 3)
+          });
+        }
+      } catch (err) {
+        console.error('Error handling competition:submit_answer', err);
+      }
+    });
+
+    socket.on('competition:end_round', async ({ roomCode }) => {
+      try {
+        const code = roomCode.toUpperCase();
+        const competition = await Competition.findOne({ roomCode: code });
+        if (!competition) return;
+
+        competition.status = 'ROUND_RESULT';
+
+        // Update live rankings
+        competition.participants.sort((a, b) => b.totalScore - a.totalScore);
+        competition.participants.forEach((p, idx) => {
+          p.currentRank = idx + 1;
+        });
+
+        await competition.save();
+
+        const currentQ = competition.questions[competition.currentRoundIndex];
+        const isLastRound = competition.currentRoundIndex >= (competition.questions.length - 1);
+
+        io.to(code).emit('competition:round_ended', {
+          roomCode: code,
+          roundIndex: competition.currentRoundIndex,
+          correctOptionIndex: currentQ ? currentQ.correctOptionIndex : 0,
+          explanation: currentQ ? currentQ.explanation : '',
+          isLastRound,
+          leaderboard: competition.participants.map(p => ({
+            userId: p.userId,
+            name: p.name,
+            avatar: p.avatar,
+            totalScore: p.totalScore,
+            rank: p.currentRank,
+            streak: p.streak
+          }))
+        });
+      } catch (err) {
+        console.error('Error handling competition:end_round', err);
+      }
+    });
+
+    socket.on('competition:next_round', async ({ roomCode }) => {
+      try {
+        const code = roomCode.toUpperCase();
+        const competition = await Competition.findOne({ roomCode: code });
+        if (!competition) return;
+
+        const nextRound = competition.currentRoundIndex + 1;
+        if (nextRound >= competition.questions.length) return;
+
+        competition.currentRoundIndex = nextRound;
+        competition.status = 'IN_PROGRESS';
+        await competition.save();
+
+        const q = competition.questions[nextRound];
+        io.to(code).emit('competition:round_started', {
+          roomCode: code,
+          roundIndex: nextRound,
+          totalRounds: competition.questions.length,
+          timePerQuestion: competition.timePerQuestion,
+          question: {
+            id: q.id || `q_${nextRound}`,
+            text: q.text,
+            options: q.options,
+            category: q.category,
+            subtopic: q.subtopic
+          }
+        });
+      } catch (err) {
+        console.error('Error handling competition:next_round', err);
+      }
+    });
+
+    socket.on('competition:end_game', async ({ roomCode }) => {
+      try {
+        const code = roomCode.toUpperCase();
+        const competition = await Competition.findOne({ roomCode: code });
+        if (!competition) return;
+
+        competition.status = 'COMPLETED';
+        competition.completedAt = new Date();
+
+        // Compute final ranks
+        competition.participants.sort((a, b) => b.totalScore - a.totalScore);
+        competition.participants.forEach((p, idx) => {
+          p.currentRank = idx + 1;
+        });
+
+        await competition.save();
+
+        io.to(code).emit('competition:game_over', {
+          roomCode: code,
+          competitionId: competition._id,
+          finalPodium: competition.participants.slice(0, 3),
+          leaderboard: competition.participants
+        });
+      } catch (err) {
+        console.error('Error handling competition:end_game', err);
+      }
     });
 
     // Handle new message

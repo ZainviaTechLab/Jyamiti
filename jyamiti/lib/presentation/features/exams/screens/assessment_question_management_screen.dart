@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -230,7 +231,7 @@ class _AssessmentQuestionManagementScreenState extends State<AssessmentQuestionM
         // List body
         Expanded(
           child: _isLoadingQuestions
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+              ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
               : RefreshIndicator(
                   onRefresh: _fetchQuestions,
                   color: const Color(0xFF6366F1),
@@ -410,7 +411,7 @@ class _AssessmentQuestionManagementScreenState extends State<AssessmentQuestionM
   // Tab 2: Submissions log
   Widget _buildSubmissionsTab() {
     return _isLoadingSubmissions
-        ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+        ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
         : RefreshIndicator(
             onRefresh: _fetchSubmissions,
             color: const Color(0xFF6366F1),

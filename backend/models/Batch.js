@@ -10,6 +10,8 @@ const batchSchema = new mongoose.Schema({
   daysOfWeek: { type: String, required: true }, // comma-separated e.g. "Monday,Wednesday,Friday"
   timePeriod: { type: String, required: true }, // e.g. "04:00 PM - 06:00 PM"
   classLink: { type: String, default: '' },
+  meetType: { type: String, enum: ['CUSTOM', 'GOOGLE_MEET', 'JITSI_MEET'], default: 'CUSTOM' },
+  jitsiServer: { type: String, default: 'meet.jit.si' },
   startDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 

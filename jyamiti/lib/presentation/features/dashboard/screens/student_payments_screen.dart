@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -31,7 +32,7 @@ class _StudentPaymentsScreenState extends State<StudentPaymentsScreen> {
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (ctx) => Center(child: CircularProgressIndicator(color: Color(0xFF6366F1))),
+        builder: (ctx) => Center(child: JyamitiLoader(color: Color(0xFF6366F1))),
       );
       
       final response = await ApiService.post('/payments/$paymentId/pay', {});
@@ -94,7 +95,7 @@ class _StudentPaymentsScreenState extends State<StudentPaymentsScreen> {
             child: BlocBuilder<StudentPaymentsBloc, StudentPaymentsState>(
               builder: (context, state) {
                 if (state is StudentPaymentsLoading || state is StudentPaymentsInitial) {
-                  return Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)));
+                  return Center(child: JyamitiLoader(color: Color(0xFF6366F1)));
                 } else if (state is StudentPaymentsError) {
                   return Center(
                     child: Column(

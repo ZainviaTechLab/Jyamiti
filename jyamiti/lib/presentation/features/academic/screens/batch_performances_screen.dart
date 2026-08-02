@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -115,7 +116,7 @@ class _BatchPerformancesScreenState extends State<BatchPerformancesScreen> {
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFFF59E0B)))
+          ? const Center(child: JyamitiLoader(color: Color(0xFFF59E0B)))
           : Padding(
               padding: const EdgeInsets.all(24.0),
               child: Column(

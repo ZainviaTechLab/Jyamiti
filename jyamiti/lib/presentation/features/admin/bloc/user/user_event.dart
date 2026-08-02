@@ -46,16 +46,18 @@ class UpdateUser extends UserEvent {
   final String name;
   final String email;
   final String phone;
+  final bool isActive;
 
   const UpdateUser({
     required this.id,
     required this.name,
     required this.email,
     required this.phone,
+    required this.isActive,
   });
 
   @override
-  List<Object?> get props => [id, name, email, phone];
+  List<Object?> get props => [id, name, email, phone, isActive];
 }
 
 class DeleteUser extends UserEvent {

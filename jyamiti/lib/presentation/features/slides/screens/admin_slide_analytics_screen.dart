@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../../domain/models/slide_deck_models.dart';
@@ -44,7 +45,7 @@ class _AdminSlideAnalyticsScreenState extends State<AdminSlideAnalyticsScreen> {
     if (_isLoading) {
       return Scaffold(
         appBar: AppBar(title: const Text('Slide Analytics Dashboard')),
-        body: const Center(child: CircularProgressIndicator()),
+        body: const Center(child: JyamitiLoader()),
       );
     }
 

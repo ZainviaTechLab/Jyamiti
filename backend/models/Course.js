@@ -59,14 +59,38 @@ const practiceQuestionSchema = new mongoose.Schema({
   shortAnswerPrefix: { type: String, default: '' },
   shortAnswerSuffix: { type: String, default: '' },
   shortAnswerHint: { type: String, default: '' },
-  svgLabels: [svgLabelSchema]
+  svgLabels: [svgLabelSchema],
+  isClasswork: { type: Boolean, default: false },
+  forTutorOnly: { type: Boolean, default: false },
+  isTutorOnly: { type: Boolean, default: false },
+  category: { type: String, default: 'practice' },
+  tag: { type: String, default: '' },
+  explanation: { type: String, default: '' },
+  explanationSteps: [{
+    stepNumber: { type: Number, default: 1 },
+    title: { type: String, default: '' },
+    text: { type: String, default: '' },
+    imageUrl: { type: String, default: '' },
+    isSvg: { type: Boolean, default: false },
+    blocks: [{
+      type: { type: String, enum: ['TEXT', 'IMAGE'], default: 'TEXT' },
+      content: { type: String, default: '' },
+      isSvg: { type: Boolean, default: false }
+    }]
+  }]
+});
+
+const practiceSetSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  questions: { type: [practiceQuestionSchema], default: [] }
 });
 
 const subTopicSchema = new mongoose.Schema({
   title: { type: String, required: true },
   videos: [videoSchema],
   slides: [slideSchema],
-  practiceQuestions: [practiceQuestionSchema]
+  practiceQuestions: [practiceQuestionSchema],
+  practiceSets: [practiceSetSchema]
 });
 
 const topicSchema = new mongoose.Schema({
@@ -74,7 +98,8 @@ const topicSchema = new mongoose.Schema({
   subTopics: [subTopicSchema],
   videos: [videoSchema],
   slides: [slideSchema],
-  practiceQuestions: [practiceQuestionSchema]
+  practiceQuestions: [practiceQuestionSchema],
+  practiceSets: [practiceSetSchema]
 });
 
 const courseSchema = new mongoose.Schema({
@@ -88,7 +113,8 @@ const courseSchema = new mongoose.Schema({
       topics: [topicSchema],
       videos: [videoSchema],
       slides: [slideSchema],
-      practiceQuestions: [practiceQuestionSchema]
+      practiceQuestions: [practiceQuestionSchema],
+      practiceSets: [practiceSetSchema]
     }
   ]
 }, { timestamps: true });

@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -14,6 +15,7 @@ import '../bloc/schedules/schedules_state.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:file_picker/file_picker.dart';
+import 'live_meet_screen.dart';
 
 class SchedulesScreen extends StatefulWidget {
   final bool isInline;
@@ -893,10 +895,11 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                           SizedBox(height: 8),
                         ],
                         if (isToday &&
-                            schedule['batch']['classLink'] != null &&
-                            schedule['batch']['classLink']
-                                .toString()
-                                .isNotEmpty) ...[
+                            ((schedule['batch']['classLink'] != null &&
+                                    schedule['batch']['classLink']
+                                        .toString()
+                                        .isNotEmpty) ||
+                                schedule['batch']['meetType'] == 'JITSI_MEET')) ...[
                           Divider(color: context.glassBorder, height: 24),
                           ElevatedButton.icon(
                                 style: ElevatedButton.styleFrom(
@@ -925,8 +928,35 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                                onPressed: () =>
-                                    _launchUrl(schedule['batch']['classLink']),
+                                onPressed: () {
+                                  final batch = schedule['batch'];
+                                  final meetType = batch['meetType'] ?? 'CUSTOM';
+                                  if (meetType == 'JITSI_MEET') {
+                                    var domain = (batch['jitsiServer'] ?? 'meet.jit.si').toString().trim();
+                                    domain = domain.replaceAll(RegExp(r'^https?://'), '');
+                                    if (domain.endsWith('/')) {
+                                      domain = domain.substring(0, domain.length - 1);
+                                    }
+                                    if (domain.isEmpty) domain = 'meet.jit.si';
+                                    
+                                    final batchName = batch['name'] ?? 'Class';
+                                    final batchId = batch['id'] ?? batch['_id'] ?? 'meet';
+                                    final cleanRoomName = 'jyamiti_$batchId';
+                                    final meetUrl = 'https://$domain/$cleanRoomName';
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => LiveMeetScreen(
+                                          meetingUrl: meetUrl,
+                                          batchName: batchName,
+                                        ),
+                                      ),
+                                    );
+                                  } else {
+                                    _launchUrl(batch['classLink'] ?? '');
+                                  }
+                                },
                               )
                               .animate(
                                 onPlay: (controller) =>
@@ -1156,10 +1186,11 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                                     allLeaveRequests,
                                   ),
                                 ),
-                              if (!isPast &&
+                              if (isToday &&
                                   (role == 'TUTOR' ||
                                       role == 'MENTOR' ||
-                                      role == 'ADMIN'))
+                                      role == 'ADMIN') &&
+                                  schedule['batch']['meetType'] != 'JITSI_MEET')
                                 ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(
@@ -1229,7 +1260,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
           return Scaffold(
             backgroundColor: widget.isInline ? Colors.transparent : (context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9)),
             body: Center(
-              child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+              child: JyamitiLoader(color: Color(0xFF6366F1)),
             ),
           );
         } else if (state is SchedulesError) {

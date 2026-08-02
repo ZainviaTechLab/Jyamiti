@@ -9,6 +9,9 @@ set(BINARY_NAME "jyamiti")
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
 cmake_policy(VERSION 3.14...3.25)
+if(POLICY CMP0175)
+  cmake_policy(SET CMP0175 OLD)
+endif()
 
 # Define build configuration option.
 get_property(IS_MULTICONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -30,7 +33,7 @@ set(CMAKE_C_FLAGS_PROFILE "${CMAKE_C_FLAGS_RELEASE}")
 set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 
 # Use Unicode for all projects.
-add_definitions(-DUNICODE -D_UNICODE)
+add_definitions(-DUNICODE -D_UNICODE -D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
 # Compilation settings that should be applied to most targets.
 #

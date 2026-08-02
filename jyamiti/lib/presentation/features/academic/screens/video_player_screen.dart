@@ -1,9 +1,13 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:jyamiti/services/api_service.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:jyamiti/presentation/widgets/inline_youtube_player.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   final String videoId;
@@ -27,43 +31,52 @@ class VideoPlayerScreen extends StatefulWidget {
 }
 
 class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
-  late YoutubePlayerController _controller;
+  YoutubePlayerController? _controller;
   bool _showCompletionButton = false;
   bool _isCompleting = false;
   bool _alreadyCompleted = false;
   Timer? _progressTimer;
 
+  bool get _isEmbeddedSupported {
+    if (kIsWeb) return true;
+    return Platform.isAndroid || Platform.isIOS;
+  }
+
   @override
   void initState() {
     super.initState();
-    _controller = YoutubePlayerController.fromVideoId(
-      videoId: widget.videoId,
-      autoPlay: true,
-      params: const YoutubePlayerParams(
-        mute: false,
-        showFullscreenButton: true,
-      ),
-    );
+    if (_isEmbeddedSupported) {
+      _controller = YoutubePlayerController.fromVideoId(
+        videoId: widget.videoId,
+        autoPlay: true,
+        params: const YoutubePlayerParams(
+          mute: false,
+          showFullscreenButton: true,
+        ),
+      );
 
-    // Poll for position updates to detect 80% watch threshold
-    if (widget.assignmentId != null) {
-      _progressTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-        _checkWatchProgress();
-      });
+      // Poll for position updates to detect 80% watch threshold
+      if (widget.assignmentId != null) {
+        _progressTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+          _checkWatchProgress();
+        });
+      }
+    } else {
+      // Auto-unlock watch completion button on unsupported desktop platforms
+      if (widget.assignmentId != null) {
+        _showCompletionButton = true;
+      }
     }
   }
 
   Future<void> _checkWatchProgress() async {
-    if (_alreadyCompleted || _showCompletionButton) {
+    if (_controller == null || _alreadyCompleted || _showCompletionButton) {
       _progressTimer?.cancel();
       return;
     }
     try {
-      // Both currentTime and duration are async in youtube_player_flutter v10.
-      // Using _controller.metadata.duration returns Duration.zero until metadata
-      // loads, so we must use the Future-based _controller.duration instead.
-      final positionSeconds = await _controller.currentTime;
-      final durationSeconds = await _controller.duration;
+      final positionSeconds = await _controller!.currentTime;
+      final durationSeconds = await _controller!.duration;
       if (durationSeconds > 0 && positionSeconds > 0) {
         final progress = positionSeconds / durationSeconds;
         if (progress >= 0.8) {
@@ -124,7 +137,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void dispose() {
     _progressTimer?.cancel();
-    _controller.close();
+    _controller?.close();
     super.dispose();
   }
 
@@ -153,9 +166,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                YoutubePlayer(
-                  controller: _controller,
-                ),
+                if (_isEmbeddedSupported && _controller != null)
+                  YoutubePlayer(
+                    controller: _controller!,
+                  )
+                else
+                  Container(
+                    height: 450,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: InlineYoutubePlayer(
+                      videoId: widget.videoId,
+                      videoUrl: 'https://www.youtube.com/watch?v=${widget.videoId}',
+                    ),
+                  ),
                 // 80% completion button (only for assignments)
                 if (widget.assignmentId != null) ...[
                   const SizedBox(height: 32),
@@ -193,7 +220,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                           const SizedBox(
                                             width: 22,
                                             height: 22,
-                                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                                            child: JyamitiLoader(color: Colors.white, strokeWidth: 2.5),
                                           )
                                         else
                                           const Icon(Icons.check_circle_rounded, color: Colors.white, size: 24),

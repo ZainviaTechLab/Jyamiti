@@ -22,6 +22,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'services/api_service.dart';
 import 'services/offline_sync_service.dart';
+import 'presentation/widgets/theme_reveal.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -61,6 +62,9 @@ class LearningPlatformApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: themeProvider.themeMode,
+      builder: (context, child) {
+        return ThemeReveal(child: child ?? const SizedBox.shrink());
+      },
       home: const AuthWrapper(),
     );
   }

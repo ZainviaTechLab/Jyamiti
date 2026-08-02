@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -206,13 +207,15 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
                               borderRadius: BorderRadius.circular(14),
                             ),
                           ),
-                          icon: Icon(
+                          icon: const Icon(
                             Icons.upload_rounded,
-                            color: context.textColor,
+                            color: Colors.white,
                           ),
-                          label: Text(
+                          label: const Text(
                             'Upload Tutorial',
-                            style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
                               fontSize: 16,
                             ),
                           ),
@@ -289,7 +292,7 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
       decoration: InputDecoration(
         labelText: label,
         labelStyle: TextStyle(color: context.textColor54),
-        prefixIcon: Icon(icon, color: Colors.white38, size: 20),
+        prefixIcon: Icon(icon, color: context.textColor54, size: 20),
         filled: true,
         fillColor: context.glassBg,
         border: OutlineInputBorder(
@@ -322,7 +325,7 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
       decoration: InputDecoration(
         labelText: label,
         labelStyle: TextStyle(color: context.textColor54),
-        prefixIcon: Icon(icon, color: Colors.white38, size: 20),
+        prefixIcon: Icon(icon, color: context.textColor54, size: 20),
         filled: true,
         fillColor: context.glassBg,
         border: OutlineInputBorder(
@@ -340,7 +343,7 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
       ),
       hint: Text(
         'Select $label',
-        style: const TextStyle(color: Colors.white38),
+        style: TextStyle(color: context.textColor54),
       ),
       items: items
           .map((item) => DropdownMenuItem(value: item, child: Text(item)))
@@ -382,23 +385,25 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: const Color(0xFF6366F1),
         onPressed: _showAddTutorialSheet,
-        icon: Icon(Icons.add_rounded, color: context.textColor),
-        label: Text(
+        icon: const Icon(Icons.add_rounded, color: Colors.white),
+        label: const Text(
           'Add Tutorial',
-          style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ).animate().scale(delay: 400.ms),
       body: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF0F172A), Color(0xFF1E1B4B), Color(0xFF0F172A)],
+            colors: context.isDark
+                ? const [Color(0xFF0F172A), Color(0xFF1E1B4B), Color(0xFF0F172A)]
+                : const [Color(0xFFF1F5F9), Color(0xFFE2E8F0), Color(0xFFF1F5F9)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
         ),
         child: _isLoading
             ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+                child: JyamitiLoader(color: Color(0xFF6366F1)),
               )
             : _tutorials.isEmpty
             ? Center(
@@ -502,9 +507,9 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
                                                 errorBuilder: (_, __, ___) =>
                                                     Container(
                                                       height: 180,
-                                                      color: const Color(
-                                                        0xFF1E293B,
-                                                      ),
+                                                      color: context.isDark
+                                                          ? const Color(0xFF1E293B)
+                                                          : const Color(0xFFE2E8F0),
                                                       child: Icon(
                                                         Icons
                                                             .video_library_rounded,
@@ -526,9 +531,9 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
                                                   color: context.textColor54.withOpacity(0.4),
                                                 ),
                                               ),
-                                              child: Icon(
+                                              child: const Icon(
                                                 Icons.play_arrow_rounded,
-                                                color: context.textColor,
+                                                color: Colors.white,
                                                 size: 36,
                                               ),
                                             ),
@@ -538,7 +543,9 @@ class _TutorTutorialsScreenState extends State<TutorTutorialsScreen> {
                                         Container(
                                           height: 120,
                                           decoration: BoxDecoration(
-                                            color: const Color(0xFF1E1B4B),
+                                            color: context.isDark
+                                                ? const Color(0xFF1E1B4B)
+                                                : const Color(0xFFCBD5E1),
                                             borderRadius:
                                                 const BorderRadius.vertical(
                                                   top: Radius.circular(20),

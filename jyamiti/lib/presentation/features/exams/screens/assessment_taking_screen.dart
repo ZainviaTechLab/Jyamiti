@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:ui';
@@ -18,6 +19,8 @@ import '../../../../providers/theme_provider.dart';
 import 'package:lottie/lottie.dart';
 import 'package:math_expressions/math_expressions.dart';
 
+import 'package:file_picker/file_picker.dart';
+import '../../../../services/deepseek_service.dart';
 import '../../../widgets/writing_pad_widget.dart' show WritingPadWidget;
 
 class AssessmentTakingScreen extends StatefulWidget {
@@ -57,6 +60,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
   bool _isLoading = false;
   bool _isCheckingPhone = false;
   String? _errorMessage;
+  String _practiceViewMode = 'STUDENT'; // 'STUDENT' or 'TUTOR'
 
   // Answers State
   Map<int, List<String>> _selectedAnswers =
@@ -755,6 +759,18 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
       final Iterable<Match> matches = regExp.allMatches(text);
       selectCount += matches.length;
       _selectedAnswers[index] = List.generate(selectCount, (idx) => "");
+    } else if (q['type'] == 'FILL_IN_BLANKS') {
+      final String text = q['text'] ?? '';
+      int blankCount = 0;
+      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+      final Iterable<Match> matches = regExp.allMatches(text);
+      blankCount = matches.length;
+      if (blankCount == 0 && q['correctAnswers'] is List) {
+        blankCount = (q['correctAnswers'] as List).length;
+      }
+      _selectedAnswers[index] = List.generate(blankCount, (idx) => "");
+    } else if (q['type'] == 'DESCRIPTIVE') {
+      _selectedAnswers[index] = ["", "", ""];
     }
   }
 
@@ -827,7 +843,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
   }
 
   // Question Submission Logic
-  void _submitAnswer() {
+  Future<void> _submitAnswer() async {
     if (_questions.isEmpty || _hasSubmittedCurrentQuestion) return;
 
     final q = _questions[_currentQuestionIndex];
@@ -940,7 +956,8 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
     } else if (q['type'] == 'MATRIX_INPUT' ||
         q['type'] == 'EQUATION' ||
         q['type'] == 'STATEMENT_DROPDOWN' ||
-        q['type'] == 'INLINE_SELECT') {
+        q['type'] == 'INLINE_SELECT' ||
+        q['type'] == 'FILL_IN_BLANKS') {
       if (selected.length == correctAnswers.length) {
         correct = true;
         for (int i = 0; i < selected.length; i++) {
@@ -953,6 +970,42 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
           }
         }
       }
+    } else if (q['type'] == 'DESCRIPTIVE') {
+      final List<dynamic> currentAns = _selectedAnswers[_currentQuestionIndex] ?? ["", "", ""];
+      final String typedText = currentAns.isNotEmpty ? currentAns[0].toString() : "";
+      final String imgUrl = currentAns.length > 1 ? currentAns[1].toString() : "";
+      final String presetAns = (q['correctAnswers'] is List && (q['correctAnswers'] as List).isNotEmpty)
+          ? q['correctAnswers'][0].toString()
+          : (q['explanation'] ?? '');
+      final int maxMarks = (q['marks'] as num? ?? 10).toInt();
+
+      final Map<String, dynamic> aiResult = await DeepseekService.evaluateDescriptiveAnswer(
+        questionPrompt: q['text'] ?? '',
+        presetAnswer: presetAns,
+        studentAnswerText: typedText,
+        imageUrl: imgUrl,
+        maxMarks: maxMarks,
+      );
+
+      final bool isPassed = aiResult['isCorrect'] == true;
+      final num awardedScore = aiResult['score'] as num? ?? (isPassed ? maxMarks : 0);
+
+      setState(() {
+        while (_selectedAnswers[_currentQuestionIndex]!.length < 3) {
+          _selectedAnswers[_currentQuestionIndex]!.add("");
+        }
+        _selectedAnswers[_currentQuestionIndex]![2] = jsonEncode(aiResult);
+        _questionFeedback[_currentQuestionIndex] = isPassed;
+        _hasSubmittedCurrentQuestion = true;
+        if (isPassed) {
+          _score += awardedScore.toInt();
+          final random = Random();
+          _selectedCelebrationLottie =
+              _celebrationLotties[random.nextInt(_celebrationLotties.length)];
+        }
+      });
+      _saveProgress();
+      return;
     }
 
     setState(() {
@@ -1429,7 +1482,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
         return _buildResultsScreen();
       default:
         return const Center(
-          child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+          child: JyamitiLoader(color: Color(0xFF6366F1)),
         );
     }
   }
@@ -1753,7 +1806,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                                           ? SizedBox(
                                               width: 20,
                                               height: 20,
-                                              child: CircularProgressIndicator(
+                                              child: JyamitiLoader(
                                                 color: context.textColor,
                                                 strokeWidth: 2,
                                               ),
@@ -1814,14 +1867,157 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
     return '';
   }
 
+  bool _isQuestionClasswork(dynamic q) {
+    if (q == null) return false;
+
+    bool parseBool(dynamic val) {
+      if (val == null) return false;
+      if (val is bool) return val;
+      if (val is num) return val != 0;
+      final str = val.toString().toLowerCase().trim();
+      return str == 'true' || str == '1' || str == 'yes';
+    }
+
+    if (parseBool(q['isClasswork']) ||
+        parseBool(q['forTutorOnly']) ||
+        parseBool(q['isTutorOnly'])) {
+      return true;
+    }
+    final cat = (q['category'] ?? q['tag'] ?? q['targetAudience'] ?? '')
+        .toString()
+        .toLowerCase()
+        .trim();
+    if (cat == 'classwork' ||
+        cat == 'tutor' ||
+        cat == 'tutor_only' ||
+        cat == 'tutoronly' ||
+        cat == 'teacher') {
+      return true;
+    }
+    return false;
+  }
+
   // PHASE 2: Live Test Screen
   Widget _buildTestScreen() {
     if (_questions.isEmpty) return const SizedBox();
 
-    final q = _questions[_currentQuestionIndex];
-    final selected = _selectedAnswers[_currentQuestionIndex] ?? [];
-    final questionNo = _currentQuestionIndex + 1;
-    final total = _questions.length;
+    final bool isPracticeMode =
+        widget.practiceQuestions != null || widget.trySingleQuestion != null;
+
+    // Filter questions based on Mode when in Practice Mode
+    List<dynamic> effectiveQuestions = _questions;
+    if (isPracticeMode) {
+      if (_practiceViewMode == 'TUTOR') {
+        effectiveQuestions =
+            _questions.where((q) => _isQuestionClasswork(q)).toList();
+      } else if (_practiceViewMode == 'STUDENT') {
+        effectiveQuestions =
+            _questions.where((q) => !_isQuestionClasswork(q)).toList();
+      }
+    }
+
+    if (effectiveQuestions.isEmpty) {
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: context.glassBorder),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _practiceViewMode == 'TUTOR'
+                    ? Icons.cast_for_education_rounded
+                    : Icons.school_rounded,
+                color: const Color(0xFF6366F1),
+                size: 48,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                _practiceViewMode == 'TUTOR'
+                    ? 'No Tutor Only (Classwork) Questions'
+                    : 'No Student Practice Questions',
+                style: GoogleFonts.spaceGrotesk(
+                  color: context.textColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _practiceViewMode == 'TUTOR'
+                    ? 'There are no questions flagged for Tutor Classwork in this practice set.'
+                    : 'There are no questions flagged for Student Practice in this practice set.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: context.textColor60, fontSize: 13),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _practiceViewMode =
+                            _practiceViewMode == 'TUTOR' ? 'STUDENT' : 'TUTOR';
+                        _currentQuestionIndex = 0;
+                      });
+                    },
+                    icon: Icon(
+                      _practiceViewMode == 'TUTOR'
+                          ? Icons.school_rounded
+                          : Icons.cast_for_education_rounded,
+                    ),
+                    label: Text(
+                      _practiceViewMode == 'TUTOR'
+                          ? 'Switch to Student Mode'
+                          : 'Switch to Tutor Mode',
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6366F1),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    label: const Text('Exit'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final int currIdx = _currentQuestionIndex < effectiveQuestions.length
+        ? _currentQuestionIndex
+        : 0;
+    final q = effectiveQuestions[currIdx];
+    final selected = _selectedAnswers[currIdx] ?? [];
+    final questionNo = currIdx + 1;
+    final total = effectiveQuestions.length;
     final progress = questionNo / total;
     final isBigScreen = MediaQuery.of(context).size.width > 900;
 
@@ -1834,13 +2030,27 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                if (widget.trySingleQuestion != null)
-                  IconButton(
-                    icon: Icon(
-                      Icons.arrow_back_rounded,
-                      color: context.textColor70,
-                    ),
-                    onPressed: () => Navigator.of(context).pop(),
+                if (isPracticeMode)
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          Icons.arrow_back_rounded,
+                          color: context.textColor,
+                        ),
+                        tooltip: 'Back to practice list',
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Question $questionNo of $total',
+                        style: GoogleFonts.spaceGrotesk(
+                          color: context.textColor70,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   )
                 else
                   Text(
@@ -1849,6 +2059,110 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                       color: context.textColor70,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
+                    ),
+                  ),
+
+                if (isPracticeMode)
+                  Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: context.isDark
+                          ? const Color(0xFF1E293B)
+                          : const Color(0xFFE2E8F0),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: context.glassBorder),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _practiceViewMode = 'STUDENT';
+                              _currentQuestionIndex = 0;
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(7),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _practiceViewMode == 'STUDENT'
+                                  ? const Color(0xFF6366F1)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.school_rounded,
+                                  size: 14,
+                                  color: _practiceViewMode == 'STUDENT'
+                                      ? Colors.white
+                                      : context.textColor60,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'Student Mode',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: _practiceViewMode == 'STUDENT'
+                                        ? Colors.white
+                                        : context.textColor60,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _practiceViewMode = 'TUTOR';
+                              _currentQuestionIndex = 0;
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(7),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _practiceViewMode == 'TUTOR'
+                                  ? const Color(0xFF10B981)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.cast_for_education_rounded,
+                                  size: 14,
+                                  color: _practiceViewMode == 'TUTOR'
+                                      ? Colors.white
+                                      : context.textColor60,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'Tutor Mode (Classwork)',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: _practiceViewMode == 'TUTOR'
+                                        ? Colors.white
+                                        : context.textColor60,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
 
@@ -2200,7 +2514,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                             ? SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(
+                                child: JyamitiLoader(
                                   color: context.textColor,
                                   strokeWidth: 2,
                                 ),
@@ -2393,7 +2707,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                           SizedBox(
                             width: 140,
                             height: 140,
-                            child: CircularProgressIndicator(
+                            child: JyamitiLoader(
                               value: totalQuestions > 0
                                   ? _score / totalQuestions
                                   : 0,
@@ -2676,6 +2990,469 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
           spacing: 4,
           runSpacing: 10,
           children: lineWidgets,
+        ),
+      );
+    }
+
+    if (q['type'] == 'FILL_IN_BLANKS') {
+      final bool showResult = _hasSubmittedCurrentQuestion;
+      final String text = q['text'] ?? '';
+      final List<dynamic> correctAnswers = q['correctAnswers'] ?? [];
+      final List<dynamic> currentSelection =
+          _selectedAnswers[_currentQuestionIndex] ?? [];
+
+      int globalBlankIdx = 0;
+      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+
+      final List<Widget> lineWidgets = [];
+      int currentOffset = 0;
+      final Iterable<Match> matches = regExp.allMatches(text);
+
+      for (var m in matches) {
+        final String beforeText = text.substring(currentOffset, m.start);
+        if (beforeText.isNotEmpty) {
+          lineWidgets.add(
+            LatexRichText(
+              text: beforeText,
+              style: GoogleFonts.spaceGrotesk(
+                color: context.textColor,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          );
+        }
+
+        final int blankIdx = globalBlankIdx++;
+        while (currentSelection.length <= blankIdx) {
+          currentSelection.add("");
+        }
+        final String currentValue = currentSelection[blankIdx];
+
+        String expectedAnswer = (m.group(1) ?? '').trim();
+        if (expectedAnswer.isEmpty && blankIdx < correctAnswers.length) {
+          expectedAnswer = correctAnswers[blankIdx].toString().trim();
+        }
+
+        final bool isCorrect = _areAnswersEquivalent(currentValue, expectedAnswer);
+
+        lineWidgets.add(
+          Container(
+            width: 140,
+            margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+            height: 40,
+            decoration: BoxDecoration(
+              color: showResult
+                  ? (isCorrect
+                        ? Colors.green.withOpacity(0.1)
+                        : Colors.red.withOpacity(0.1))
+                  : (context.isDark ? context.glassBg : Colors.white),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: showResult
+                    ? (isCorrect ? Colors.green : Colors.redAccent)
+                    : (context.isDark
+                          ? const Color(0xFF6366F1).withOpacity(0.4)
+                          : const Color(0xFFCBD5E1)),
+                width: showResult ? 1.5 : 1.0,
+              ),
+            ),
+            child: TextField(
+              enabled: !showResult,
+              controller: TextEditingController(text: currentValue)
+                ..selection = TextSelection.collapsed(offset: currentValue.length),
+              style: GoogleFonts.spaceGrotesk(
+                color: showResult
+                    ? (isCorrect ? Colors.green[700] : Colors.red[700])
+                    : context.textColor,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+              decoration: InputDecoration(
+                hintText: 'fill blank...',
+                hintStyle: TextStyle(
+                  color: context.textColor54.withOpacity(0.4),
+                  fontSize: 13,
+                ),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              onChanged: (val) {
+                while (_selectedAnswers[_currentQuestionIndex]!.length <= blankIdx) {
+                  _selectedAnswers[_currentQuestionIndex]!.add("");
+                }
+                _selectedAnswers[_currentQuestionIndex]![blankIdx] = val.trim();
+                _saveProgress();
+              },
+            ),
+          ),
+        );
+
+        if (showResult && !isCorrect && expectedAnswer.isNotEmpty) {
+          lineWidgets.add(
+            Container(
+              margin: const EdgeInsets.only(right: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '($expectedAnswer)',
+                style: const TextStyle(
+                  color: Colors.green,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          );
+        }
+
+        currentOffset = m.end;
+      }
+
+      final String remainingText = text.substring(currentOffset);
+      if (remainingText.isNotEmpty) {
+        lineWidgets.add(
+          LatexRichText(
+            text: remainingText,
+            style: GoogleFonts.spaceGrotesk(
+              color: context.textColor,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        );
+      }
+
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: context.isDark ? context.glassBg : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: context.isDark
+                ? context.glassBorder
+                : const Color(0xFFE2E8F0),
+          ),
+        ),
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          alignment: WrapAlignment.start,
+          spacing: 4,
+          runSpacing: 10,
+          children: lineWidgets,
+        ),
+      );
+    }
+
+    if (q['type'] == 'DESCRIPTIVE') {
+      final bool showResult = _hasSubmittedCurrentQuestion;
+      final List<dynamic> currentSelection =
+          _selectedAnswers[_currentQuestionIndex] ?? ["", "", ""];
+      while (currentSelection.length < 3) {
+        currentSelection.add("");
+      }
+      final String typedText = currentSelection[0].toString();
+      final String uploadedImgUrl = currentSelection[1].toString();
+      final String aiEvalRaw = currentSelection[2].toString();
+
+      Map<String, dynamic>? aiResult;
+      if (aiEvalRaw.isNotEmpty) {
+        try {
+          aiResult = Map<String, dynamic>.from(jsonDecode(aiEvalRaw));
+        } catch (_) {}
+      }
+
+      final isDark = context.isDark;
+
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: context.glassBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.edit_document,
+                  color: Color(0xFF6366F1),
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Handwritten / Descriptive Response',
+                  style: GoogleFonts.spaceGrotesk(
+                    color: context.textColor,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Write your solution on paper, snap a picture or pick an image, or use the digital drawing pad. DeepSeek AI will evaluate the semantic meaning of your answer.',
+              style: TextStyle(
+                color: context.textColor60,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            if (uploadedImgUrl.isNotEmpty) ...[
+              Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(
+                      uploadedImgUrl.startsWith('http')
+                          ? uploadedImgUrl
+                          : '${ApiService.baseUrl}/$uploadedImgUrl',
+                      height: 200,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  if (!showResult)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            currentSelection[1] = "";
+                          });
+                          _saveProgress();
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: const BoxDecoration(
+                            color: Colors.black54,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            if (!showResult)
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        final result = await FilePicker.pickFiles(
+                          type: FileType.image,
+                          withData: true,
+                        );
+                        if (result != null && result.files.isNotEmpty) {
+                          final file = result.files.first;
+                          if (file.bytes != null) {
+                            final streamedRes = await ApiService.uploadFile(
+                              '/assessment-questions/upload',
+                              file.bytes!,
+                              file.name,
+                              fieldName: 'file',
+                            );
+                            final resBody = await streamedRes.stream.bytesToString();
+                            if (streamedRes.statusCode == 200) {
+                              final data = jsonDecode(resBody);
+                              setState(() {
+                                currentSelection[1] = data['fileUrl'] ?? '';
+                              });
+                              _saveProgress();
+                            }
+                          }
+                        }
+                      },
+                      icon: const Icon(
+                        Icons.cloud_upload_rounded,
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                      label: Text(
+                        uploadedImgUrl.isEmpty
+                            ? 'Upload Handwritten Photo'
+                            : 'Change Photo',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF6366F1),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _showWritingPad = true;
+                        _isWritingPadFullScreen = true;
+                      });
+                    },
+                    icon: const Icon(
+                      Icons.draw_rounded,
+                      size: 18,
+                      color: Colors.white,
+                    ),
+                    label: const Text(
+                      'Open Canvas',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF10B981),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+            const SizedBox(height: 16),
+
+            TextFormField(
+              enabled: !showResult,
+              initialValue: typedText,
+              style: TextStyle(color: context.textColor),
+              maxLines: 4,
+              decoration: InputDecoration(
+                labelText: 'Typed Answer / Solution Steps (Optional)',
+                hintText: 'Enter your typed explanation or notes here...',
+                labelStyle: TextStyle(color: context.textColor70),
+                filled: true,
+                fillColor: isDark
+                    ? const Color(0xFF0F172A)
+                    : const Color(0xFFF8FAFC),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onChanged: (val) {
+                currentSelection[0] = val.trim();
+                _saveProgress();
+              },
+            ),
+
+            if (showResult && aiResult != null) ...[
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? const Color(0xFF0F172A)
+                      : const Color(0xFFF0FDF4),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: const Color(0xFF10B981).withOpacity(0.4),
+                    width: 1.5,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.auto_awesome,
+                            color: Color(0xFF10B981),
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '🤖 Polite AI Evaluation Result',
+                                style: GoogleFonts.spaceGrotesk(
+                                  color: context.textColor,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              Text(
+                                'Score Awarded: ${aiResult['score'] ?? 10} / ${(q['marks'] as num? ?? 10).toInt()} Marks (${aiResult['scorePercentage'] ?? 100}%)',
+                                style: const TextStyle(
+                                  color: Color(0xFF10B981),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      aiResult['politeFeedback'] ??
+                          'Great job submitting your handwritten answer!',
+                      style: TextStyle(
+                        color: context.textColor,
+                        fontSize: 14,
+                        height: 1.4,
+                      ),
+                    ),
+                    if (aiResult['semanticComparison'] != null &&
+                        aiResult['semanticComparison'].toString().isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6366F1).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '💡 Meaning Match: ${aiResult['semanticComparison']}',
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
       );
     }
@@ -4529,11 +5306,202 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
               ],
             ),
           ],
+          _buildStepByStepExplanation(q),
         ],
       ),
     ).animate().slideY(begin: 0.1, end: 0, curve: Curves.easeOut);
 
     return feedbackWidget;
+  }
+
+  Widget _buildStepByStepExplanation(dynamic q) {
+    final String explanationText = q['explanation'] ?? '';
+    final List<dynamic> steps = q['explanationSteps'] ?? [];
+
+    if (explanationText.isEmpty && steps.isEmpty) return const SizedBox();
+
+    final isDark = context.isDark;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: const Color(0xFF3B82F6).withOpacity(0.3),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3B82F6).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.lightbulb_rounded,
+                  color: Color(0xFF3B82F6),
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Step-by-Step Solution Explanation',
+                style: TextStyle(
+                  color: context.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+          if (explanationText.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            LatexRichText(
+              text: explanationText,
+              style: TextStyle(
+                color: context.textColor,
+                fontSize: 14,
+                height: 1.5,
+              ),
+            ),
+          ],
+          if (steps.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            ...List.generate(steps.length, (idx) {
+              final step = steps[idx];
+              final int stepNum = step['stepNumber'] ?? (idx + 1);
+              final List<dynamic> blocks = step['blocks'] ?? [];
+
+              final List<Widget> blockWidgets = [];
+              if (blocks.isNotEmpty) {
+                for (var b in blocks) {
+                  final String bType = b['type'] ?? 'TEXT';
+                  final String content = b['content'] ?? '';
+                  final bool isSvg = b['isSvg'] == true;
+
+                  if (content.isEmpty) continue;
+
+                  if (bType == 'IMAGE') {
+                    blockWidgets.add(
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8.0),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: _renderImageOrSvg(
+                            content,
+                            isSvg: isSvg,
+                            height: 150,
+                          ),
+                        ),
+                      ),
+                    );
+                  } else {
+                    blockWidgets.add(
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6.0),
+                        child: LatexRichText(
+                          text: content,
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontSize: 14,
+                            height: 1.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                }
+              } else {
+                final String stepText = step['text'] ?? '';
+                final String stepImg = step['imageUrl'] ?? '';
+                final bool isSvg = step['isSvg'] == true;
+
+                if (stepText.isNotEmpty) {
+                  blockWidgets.add(
+                    LatexRichText(
+                      text: stepText,
+                      style: TextStyle(
+                        color: context.textColor,
+                        fontSize: 14,
+                        height: 1.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  );
+                }
+                if (stepImg.isNotEmpty) {
+                  blockWidgets.add(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: _renderImageOrSvg(
+                          stepImg,
+                          isSvg: isSvg,
+                          height: 140,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+              }
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 14.0),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Step Badge: e.g., "1 / 3"
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3B82F6).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '$stepNum / ${steps.length}',
+                        style: const TextStyle(
+                          color: Color(0xFF3B82F6),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Step Content Box with left accent line
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.only(left: 12),
+                        decoration: const BoxDecoration(
+                          border: Border(
+                            left: BorderSide(
+                              color: Color(0xFF3B82F6),
+                              width: 2.5,
+                            ),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: blockWidgets,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
   }
 
   // Handle rendering SVG code, SVG url or regular image
@@ -4564,7 +5532,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
           width: 24,
           height: 24,
           child: Center(
-            child: CircularProgressIndicator(
+            child: JyamitiLoader(
               strokeWidth: 1.5,
               color: Color(0xFF6366F1),
             ),
@@ -4588,7 +5556,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
             width: 24,
             height: 24,
             child: Center(
-              child: CircularProgressIndicator(
+              child: JyamitiLoader(
                 strokeWidth: 1.5,
                 color: Color(0xFF6366F1),
               ),

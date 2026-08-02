@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
@@ -178,7 +179,7 @@ class _MentorDashboardState extends State<MentorDashboard> {
 
                   if (profile == null)
                     const Center(
-                      child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+                      child: JyamitiLoader(color: Color(0xFF6366F1)),
                     )
                   else ...[
                     if (profile['batches'] == null ||

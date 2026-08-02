@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
@@ -258,7 +259,7 @@ class _PdfAnnotationScreenState extends State<PdfAnnotationScreen> {
               child: SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(
+                child: JyamitiLoader(
                   color: Color(0xFF6366F1),
                   strokeWidth: 2,
                 ),

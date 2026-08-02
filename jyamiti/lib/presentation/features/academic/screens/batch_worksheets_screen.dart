@@ -1,6 +1,8 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:file_picker/file_picker.dart';
@@ -54,7 +56,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(
-        child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+        child: JyamitiLoader(color: Color(0xFF6366F1)),
       ),
     );
 
@@ -121,12 +123,46 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
                       ),
                       TextFormField(
                         controller: descCtrl,
+                        maxLines: 4,
+                        keyboardType: TextInputType.multiline,
                         style: TextStyle(color: context.textColor),
                         decoration: InputDecoration(
-                          labelText: 'Description',
+                          labelText: 'Worksheet Content / Instructions',
+                          hintText:
+                              'Type or paste worksheet questions/content directly here...',
                           labelStyle: TextStyle(color: context.textColor70),
+                          alignLabelWithHint: true,
                         ),
                         validator: (v) => v!.isEmpty ? 'Required' : null,
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () async {
+                            final data =
+                                await Clipboard.getData(Clipboard.kTextPlain);
+                            if (data != null &&
+                                data.text != null &&
+                                data.text!.isNotEmpty) {
+                              descCtrl.text = descCtrl.text.isEmpty
+                                  ? data.text!
+                                  : '${descCtrl.text}\n${data.text!}';
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Pasted worksheet text from clipboard!'),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.paste_rounded, size: 14),
+                          label: const Text(
+                            '📋 Paste Text from Clipboard',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                        ),
                       ),
                       TextFormField(
                         controller: maxScoreCtrl,
@@ -311,7 +347,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
                       showDialog(
                         context: context,
                         builder: (_) => const Center(
-                          child: CircularProgressIndicator(
+                          child: JyamitiLoader(
                             color: Color(0xFF6366F1),
                           ),
                         ),
@@ -384,7 +420,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(
-        child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+        child: JyamitiLoader(color: Color(0xFF6366F1)),
       ),
     );
 
@@ -631,7 +667,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
                       showDialog(
                         context: context,
                         builder: (_) => const Center(
-                          child: CircularProgressIndicator(
+                          child: JyamitiLoader(
                             color: Color(0xFF6366F1),
                           ),
                         ),
@@ -695,7 +731,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
   void _handleStudentWorksheetTap(Map<String, dynamic> Worksheet) async {
     showDialog(
       context: context,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+      builder: (_) => const Center(child: JyamitiLoader()),
     );
     final res = await ApiService.get(
       '/Worksheets/${Worksheet['_id']}/my-submission',
@@ -922,7 +958,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
   ) async {
     showDialog(
       context: context,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+      builder: (_) => const Center(child: JyamitiLoader()),
     );
     try {
       final res = await ApiService.uploadFile(
@@ -998,7 +1034,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
               ),
         child: _isLoading
             ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+                child: JyamitiLoader(color: Color(0xFF6366F1)),
               )
             : _Worksheets.isEmpty
             ? Center(

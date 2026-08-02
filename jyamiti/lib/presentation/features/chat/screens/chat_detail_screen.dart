@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
@@ -65,7 +66,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               },
               builder: (context, state) {
                 if (state.isLoading && state.activeMessages.isEmpty) {
-                  return const Center(child: CircularProgressIndicator(color: Colors.blueAccent));
+                  return const Center(child: JyamitiLoader(color: Colors.blueAccent));
                 }
 
                 WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());

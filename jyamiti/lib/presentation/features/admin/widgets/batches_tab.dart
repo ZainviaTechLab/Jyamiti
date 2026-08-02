@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import '../bloc/batch/batch_event.dart';
 import '../screens/admin_batch_detail_screen.dart';
 import '../bloc/batch/batch_state.dart';
 import 'batch_categories_tab.dart';
+import '../../competitions/screens/tutor_competition_host_screen.dart';
 
 // ==========================================
 // BATCHES MANAGEMENT TAB
@@ -50,9 +52,15 @@ class _BatchesTabState extends State<BatchesTab> {
   Future<void> _fetchData() async {
     setState(() => _isLoading = true);
     try {
-      final cRes = await ApiService.get('/courses');
-      final uRes = await ApiService.get('/users');
-      final catRes = await ApiService.get('/batch-categories');
+      final responses = await Future.wait([
+        ApiService.get('/courses'),
+        ApiService.get('/users'),
+        ApiService.get('/batch-categories'),
+      ]);
+
+      final cRes = responses[0];
+      final uRes = responses[1];
+      final catRes = responses[2];
 
       if (cRes.statusCode == 200) _courses = jsonDecode(cRes.body);
       if (catRes.statusCode == 200) _categories = jsonDecode(catRes.body);
@@ -84,6 +92,8 @@ class _BatchesTabState extends State<BatchesTab> {
     List<String> days,
     String timePeriod,
     String classLink,
+    String meetType,
+    String jitsiServer,
     String? startDate,
   ) {
     context.read<BatchBloc>().add(
@@ -96,6 +106,8 @@ class _BatchesTabState extends State<BatchesTab> {
         'daysOfWeek': days,
         'timePeriod': timePeriod,
         'classLink': classLink,
+        'meetType': meetType,
+        'jitsiServer': jitsiServer,
         if (startDate != null) 'startDate': startDate,
       }),
     );
@@ -115,7 +127,9 @@ class _BatchesTabState extends State<BatchesTab> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+          backgroundColor: context.isDark
+              ? const Color(0xFF1E293B)
+              : Colors.white,
           title: Text(
             'Delete $itemName?',
             style: TextStyle(color: context.textColor),
@@ -169,10 +183,7 @@ class _BatchesTabState extends State<BatchesTab> {
                   );
                 }
               },
-              child: Text(
-                'Delete',
-                style: TextStyle(color: context.textColor),
-              ),
+              child: Text('Delete', style: TextStyle(color: context.textColor)),
             ),
           ],
         );
@@ -188,6 +199,8 @@ class _BatchesTabState extends State<BatchesTab> {
     List<String> days,
     String timePeriod,
     String classLink,
+    String meetType,
+    String jitsiServer,
     String? startDate,
   ) async {
     try {
@@ -198,6 +211,8 @@ class _BatchesTabState extends State<BatchesTab> {
         'daysOfWeek': days,
         'timePeriod': timePeriod,
         'classLink': classLink,
+        'meetType': meetType,
+        'jitsiServer': jitsiServer,
         if (startDate != null) 'startDate': startDate,
       });
       if (response.statusCode == 200) {
@@ -272,14 +287,23 @@ class _BatchesTabState extends State<BatchesTab> {
     }
   }
 
-  Future<void> _moveStudentToBatch(String sourceBatchId, String targetBatchId, String studentId) async {
+  Future<void> _moveStudentToBatch(
+    String sourceBatchId,
+    String targetBatchId,
+    String studentId,
+  ) async {
     setState(() => _isLoading = true);
     try {
-      final deleteResponse = await ApiService.delete('/batches/$sourceBatchId/students/$studentId');
+      final deleteResponse = await ApiService.delete(
+        '/batches/$sourceBatchId/students/$studentId',
+      );
       if (deleteResponse.statusCode == 200) {
-        final addResponse = await ApiService.post('/batches/$targetBatchId/students', {
-          'studentIds': [studentId],
-        });
+        final addResponse = await ApiService.post(
+          '/batches/$targetBatchId/students',
+          {
+            'studentIds': [studentId],
+          },
+        );
         if (addResponse.statusCode == 200) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -292,7 +316,9 @@ class _BatchesTabState extends State<BatchesTab> {
           final data = jsonDecode(addResponse.body);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(data['message'] ?? 'Error adding student to target batch'),
+              content: Text(
+                data['message'] ?? 'Error adding student to target batch',
+              ),
               backgroundColor: Colors.redAccent,
             ),
           );
@@ -301,7 +327,9 @@ class _BatchesTabState extends State<BatchesTab> {
         final data = jsonDecode(deleteResponse.body);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['message'] ?? 'Error removing student from current batch'),
+            content: Text(
+              data['message'] ?? 'Error removing student from current batch',
+            ),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -313,7 +341,10 @@ class _BatchesTabState extends State<BatchesTab> {
     }
   }
 
-  void _showChangeBatchDialog(Map<String, dynamic> currentBatch, Map<String, dynamic> student) {
+  void _showChangeBatchDialog(
+    Map<String, dynamic> currentBatch,
+    Map<String, dynamic> student,
+  ) {
     final otherBatches = _batches.where((b) {
       final bid = b['id'] ?? b['_id'];
       final curid = currentBatch['id'] ?? currentBatch['_id'];
@@ -336,14 +367,19 @@ class _BatchesTabState extends State<BatchesTab> {
         return BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: AlertDialog(
-            backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+            backgroundColor: context.isDark
+                ? const Color(0xFF1E293B)
+                : Colors.white,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20),
               side: BorderSide(color: Colors.white.withOpacity(0.1)),
             ),
             title: Text(
               'Move ${student['name']}',
-              style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: context.textColor,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             content: Container(
               width: 400,
@@ -365,26 +401,42 @@ class _BatchesTabState extends State<BatchesTab> {
                       itemCount: otherBatches.length,
                       itemBuilder: (c, idx) {
                         final batch = otherBatches[idx];
-                        final categoryName = batch['category']?['name'] ?? 'General';
-                        final courseName = batch['course']?['name'] ?? 'Unknown Course';
-                        
+                        final categoryName =
+                            batch['category']?['name'] ?? 'General';
+                        final courseName =
+                            batch['course']?['name'] ?? 'Unknown Course';
+
                         return Card(
                           margin: const EdgeInsets.only(bottom: 8),
-                          color: context.isDark ? Colors.white.withOpacity(0.02) : Colors.black.withOpacity(0.02),
+                          color: context.isDark
+                              ? Colors.white.withOpacity(0.02)
+                              : Colors.black.withOpacity(0.02),
                           elevation: 0,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: context.textColor.withOpacity(0.05)),
+                            side: BorderSide(
+                              color: context.textColor.withOpacity(0.05),
+                            ),
                           ),
                           child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 4,
+                            ),
                             title: Text(
                               batch['name'] ?? '',
-                              style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold, fontSize: 14),
+                              style: TextStyle(
+                                color: context.textColor,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
                             ),
                             subtitle: Text(
                               '$courseName • $categoryName',
-                              style: TextStyle(color: context.textColor60, fontSize: 12),
+                              style: TextStyle(
+                                color: context.textColor60,
+                                fontSize: 12,
+                              ),
                             ),
                             trailing: const Icon(Icons.chevron_right, size: 18),
                             onTap: () {
@@ -458,6 +510,8 @@ class _BatchesTabState extends State<BatchesTab> {
     String? selectedTutor = _tutors.isNotEmpty ? _tutors[0]['id'] : null;
     List<String> selectedMentors = [];
     List<String> selectedDays = [];
+    String selectedMeetType = 'CUSTOM';
+    final jitsiServerController = TextEditingController(text: 'meet.jit.si');
 
     final weekDays = [
       'Monday',
@@ -475,7 +529,9 @@ class _BatchesTabState extends State<BatchesTab> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              backgroundColor: context.isDark
+                  ? const Color(0xFF1E293B)
+                  : Colors.white,
               title: Text(
                 'Create New Batch',
                 style: TextStyle(color: context.textColor),
@@ -598,9 +654,15 @@ class _BatchesTabState extends State<BatchesTab> {
                             selectedColor: const Color(0xFF6366F1),
                             checkmarkColor: Colors.white,
                             labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : (context.isDark ? Colors.white70 : Colors.black87),
+                              color: isSelected
+                                  ? Colors.white
+                                  : (context.isDark
+                                        ? Colors.white70
+                                        : Colors.black87),
                             ),
-                            backgroundColor: context.isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
+                            backgroundColor: context.isDark
+                                ? Colors.white10
+                                : Colors.black.withOpacity(0.05),
                             onSelected: (val) {
                               setDialogState(() {
                                 if (val) {
@@ -664,7 +726,9 @@ class _BatchesTabState extends State<BatchesTab> {
                           Expanded(
                             child: ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: context.isDark ? const Color(0xFF334155) : Colors.grey[200],
+                                backgroundColor: context.isDark
+                                    ? const Color(0xFF334155)
+                                    : Colors.grey[200],
                               ),
                               icon: Icon(
                                 Icons.access_time,
@@ -691,7 +755,9 @@ class _BatchesTabState extends State<BatchesTab> {
                           Expanded(
                             child: ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: context.isDark ? const Color(0xFF334155) : Colors.grey[200],
+                                backgroundColor: context.isDark
+                                    ? const Color(0xFF334155)
+                                    : Colors.grey[200],
                               ),
                               icon: Icon(
                                 Icons.access_time,
@@ -717,16 +783,57 @@ class _BatchesTabState extends State<BatchesTab> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      TextFormField(
-                        controller: linkController,
+                      DropdownButtonFormField<String>(
+                        value: selectedMeetType,
+                        dropdownColor: const Color(0xFF1E293B),
                         style: TextStyle(color: context.textColor),
                         decoration: InputDecoration(
-                          labelText: 'Class Link (URL)',
+                          labelText: 'Meeting Provider',
                           labelStyle: TextStyle(color: context.textColor70),
                         ),
-                        validator: (v) =>
-                            v == null || v.isEmpty ? 'Required' : null,
+                        items: const [
+                          DropdownMenuItem(value: 'CUSTOM', child: Text('Custom Meeting Link')),
+                          DropdownMenuItem(value: 'GOOGLE_MEET', child: Text('Google Meet')),
+                          DropdownMenuItem(value: 'JITSI_MEET', child: Text('Jitsi Meet (Self-Hosted)')),
+                        ],
+                        onChanged: (v) =>
+                            setDialogState(() => selectedMeetType = v!),
                       ),
+                      const SizedBox(height: 12),
+                      if (selectedMeetType != 'JITSI_MEET') ...[
+                        TextFormField(
+                          controller: linkController,
+                          style: TextStyle(color: context.textColor),
+                          decoration: InputDecoration(
+                            labelText: selectedMeetType == 'GOOGLE_MEET'
+                                ? 'Google Meet Link'
+                                : 'Class Link (URL)',
+                            labelStyle: TextStyle(color: context.textColor70),
+                          ),
+                          validator: (v) =>
+                              v == null || v.isEmpty ? 'Required' : null,
+                        ),
+                      ] else ...[
+                        TextFormField(
+                          controller: jitsiServerController,
+                          style: TextStyle(color: context.textColor),
+                          decoration: InputDecoration(
+                            labelText: 'Jitsi Server Domain (e.g. meet.jit.si)',
+                            labelStyle: TextStyle(color: context.textColor70),
+                          ),
+                          validator: (v) =>
+                              v == null || v.isEmpty ? 'Required' : null,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Meeting Room Name will be automatically and uniquely generated for security.',
+                          style: TextStyle(
+                            color: const Color(0xFF3B82F6),
+                            fontSize: 11,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -757,7 +864,9 @@ class _BatchesTabState extends State<BatchesTab> {
                         selectedMentors,
                         selectedDays,
                         _formatTimePeriod(startTime!, endTime!),
-                        linkController.text.trim(),
+                        selectedMeetType == 'JITSI_MEET' ? '' : linkController.text.trim(),
+                        selectedMeetType,
+                        jitsiServerController.text.trim(),
                         startDate!.toIso8601String(),
                       );
                       Navigator.pop(ctx);
@@ -880,13 +989,20 @@ class _BatchesTabState extends State<BatchesTab> {
       selectedCategory = _categories[0]['id'];
     }
 
+    String selectedMeetType = batch['meetType'] ?? 'CUSTOM';
+    final jitsiServerController = TextEditingController(
+      text: batch['jitsiServer'] ?? 'meet.jit.si',
+    );
+
     showDialog(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              backgroundColor: context.isDark
+                  ? const Color(0xFF1E293B)
+                  : Colors.white,
               title: Text(
                 'Edit Batch Details',
                 style: TextStyle(color: context.textColor),
@@ -982,9 +1098,15 @@ class _BatchesTabState extends State<BatchesTab> {
                             selectedColor: const Color(0xFF6366F1),
                             checkmarkColor: Colors.white,
                             labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : (context.isDark ? Colors.white70 : Colors.black87),
+                              color: isSelected
+                                  ? Colors.white
+                                  : (context.isDark
+                                        ? Colors.white70
+                                        : Colors.black87),
                             ),
-                            backgroundColor: context.isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
+                            backgroundColor: context.isDark
+                                ? Colors.white10
+                                : Colors.black.withOpacity(0.05),
                             onSelected: (val) {
                               setDialogState(() {
                                 if (val) {
@@ -1048,7 +1170,9 @@ class _BatchesTabState extends State<BatchesTab> {
                           Expanded(
                             child: ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: context.isDark ? const Color(0xFF334155) : Colors.grey[200],
+                                backgroundColor: context.isDark
+                                    ? const Color(0xFF334155)
+                                    : Colors.grey[200],
                               ),
                               icon: Icon(
                                 Icons.access_time,
@@ -1075,7 +1199,9 @@ class _BatchesTabState extends State<BatchesTab> {
                           Expanded(
                             child: ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: context.isDark ? const Color(0xFF334155) : Colors.grey[200],
+                                backgroundColor: context.isDark
+                                    ? const Color(0xFF334155)
+                                    : Colors.grey[200],
                               ),
                               icon: Icon(
                                 Icons.access_time,
@@ -1101,16 +1227,57 @@ class _BatchesTabState extends State<BatchesTab> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      TextFormField(
-                        controller: linkController,
+                      DropdownButtonFormField<String>(
+                        value: selectedMeetType,
+                        dropdownColor: const Color(0xFF1E293B),
                         style: TextStyle(color: context.textColor),
                         decoration: InputDecoration(
-                          labelText: 'Class Link (URL)',
+                          labelText: 'Meeting Provider',
                           labelStyle: TextStyle(color: context.textColor70),
                         ),
-                        validator: (v) =>
-                            v == null || v.isEmpty ? 'Required' : null,
+                        items: const [
+                          DropdownMenuItem(value: 'CUSTOM', child: Text('Custom Meeting Link')),
+                          DropdownMenuItem(value: 'GOOGLE_MEET', child: Text('Google Meet')),
+                          DropdownMenuItem(value: 'JITSI_MEET', child: Text('Jitsi Meet (Self-Hosted)')),
+                        ],
+                        onChanged: (v) =>
+                            setDialogState(() => selectedMeetType = v!),
                       ),
+                      const SizedBox(height: 12),
+                      if (selectedMeetType != 'JITSI_MEET') ...[
+                        TextFormField(
+                          controller: linkController,
+                          style: TextStyle(color: context.textColor),
+                          decoration: InputDecoration(
+                            labelText: selectedMeetType == 'GOOGLE_MEET'
+                                ? 'Google Meet Link'
+                                : 'Class Link (URL)',
+                            labelStyle: TextStyle(color: context.textColor70),
+                          ),
+                          validator: (v) =>
+                              v == null || v.isEmpty ? 'Required' : null,
+                        ),
+                      ] else ...[
+                        TextFormField(
+                          controller: jitsiServerController,
+                          style: TextStyle(color: context.textColor),
+                          decoration: InputDecoration(
+                            labelText: 'Jitsi Server Domain (e.g. meet.jit.si)',
+                            labelStyle: TextStyle(color: context.textColor70),
+                          ),
+                          validator: (v) =>
+                              v == null || v.isEmpty ? 'Required' : null,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Meeting Room Name will be automatically and uniquely generated for security.',
+                          style: TextStyle(
+                            color: const Color(0xFF3B82F6),
+                            fontSize: 11,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1142,7 +1309,9 @@ class _BatchesTabState extends State<BatchesTab> {
                         selectedMentors,
                         selectedDays,
                         _formatTimePeriod(startTime!, endTime!),
-                        linkController.text.trim(),
+                        selectedMeetType == 'JITSI_MEET' ? '' : linkController.text.trim(),
+                        selectedMeetType,
+                        jitsiServerController.text.trim(),
                         startDate!.toIso8601String(),
                       );
                       Navigator.pop(ctx);
@@ -1219,7 +1388,9 @@ class _BatchesTabState extends State<BatchesTab> {
             }).toList();
 
             return AlertDialog(
-              backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              backgroundColor: context.isDark
+                  ? const Color(0xFF1E293B)
+                  : Colors.white,
               title: Text(
                 'Enroll in ${batch['name']}',
                 style: TextStyle(color: context.textColor),
@@ -1235,7 +1406,10 @@ class _BatchesTabState extends State<BatchesTab> {
                       decoration: InputDecoration(
                         labelText: 'Search Students',
                         labelStyle: TextStyle(color: context.textColor70),
-                        prefixIcon: Icon(Icons.search, color: context.textColor70),
+                        prefixIcon: Icon(
+                          Icons.search,
+                          color: context.textColor70,
+                        ),
                         enabledBorder: OutlineInputBorder(
                           borderSide: BorderSide(color: context.glassBorder),
                         ),
@@ -1332,15 +1506,16 @@ class _BatchesTabState extends State<BatchesTab> {
             children: [
               Text(
                 batch['name'],
-                style: TextStyle(color: context.textColor, fontSize: 22, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: context.textColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               if (batch['category'] != null) ...[
                 const SizedBox(height: 4),
                 Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(10),
@@ -1391,7 +1566,11 @@ class _BatchesTabState extends State<BatchesTab> {
                 children: [
                   Text(
                     'Enrolled Students (${enrolledStudents.length})',
-                    style: TextStyle(color: context.textColor, fontSize: 16, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: context.textColor,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
@@ -1430,7 +1609,9 @@ class _BatchesTabState extends State<BatchesTab> {
                           return ListTile(
                             contentPadding: EdgeInsets.zero,
                             leading: CircleAvatar(
-                              backgroundColor: context.isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
+                              backgroundColor: context.isDark
+                                  ? Colors.white10
+                                  : Colors.black.withOpacity(0.05),
                               child: Icon(
                                 Icons.person_rounded,
                                 color: context.textColor,
@@ -1521,9 +1702,7 @@ class _BatchesTabState extends State<BatchesTab> {
         }
 
         if (_isLoading || isBlocLoading) {
-          return const Center(
-            child: CircularProgressIndicator(color: Color(0xFF6366F1)),
-          );
+          return const Center(child: JyamitiLoader(color: Color(0xFF6366F1)));
         }
 
         final filteredBatches = _searchQuery.isEmpty
@@ -1607,186 +1786,256 @@ class _BatchesTabState extends State<BatchesTab> {
                               ),
                             ],
                           ),
-                          child: ClipRRect(
+                          child: Material(
+                            color: Colors.transparent,
                             borderRadius: BorderRadius.circular(16),
-                            child: BackdropFilter(
-                              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                              child: ListTile(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 12,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(
+                                  sigmaX: 10,
+                                  sigmaY: 10,
                                 ),
-                                onTap: () => _showBatchDetails(batch),
-                                onLongPress: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          AdminBatchDetailScreen(batch: batch),
-                                    ),
-                                  );
-                                },
-                                title: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        batch['name'],
-                                        style: TextStyle(
-                                          color: context.textColor,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 18,
+                                child: ListTile(
+                                  contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                    vertical: 12,
+                                  ),
+                                  onTap: () => _showBatchDetails(batch),
+                                  onLongPress: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => AdminBatchDetailScreen(
+                                          batch: batch,
                                         ),
-                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                    ),
-                                    if (batch['category'] != null)
-                                      Container(
-                                        padding: EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(
-                                            0xFF6366F1,
-                                          ).withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
+                                    );
+                                  },
+                                  title: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          batch['name'],
+                                          style: TextStyle(
+                                            color: context.textColor,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 18,
                                           ),
-                                          border: Border.all(
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      if (batch['category'] != null)
+                                        Container(
+                                          padding: EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
                                             color: const Color(
                                               0xFF6366F1,
-                                            ).withValues(alpha: 0.3),
+                                            ).withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            border: Border.all(
+                                              color: const Color(
+                                                0xFF6366F1,
+                                              ).withValues(alpha: 0.3),
+                                            ),
+                                          ),
+                                          child: Text(
+                                            batch['category']['name'] ??
+                                                'Category',
+                                            style: const TextStyle(
+                                              color: Color(0xFF8B5CF6),
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
                                           ),
                                         ),
-                                        child: Text(
-                                          batch['category']['name'] ??
-                                              'Category',
+                                    ],
+                                  ),
+                                  subtitle: Padding(
+                                    padding: EdgeInsets.only(top: 8.0),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Course: ${batch['course']['name']}',
                                           style: const TextStyle(
-                                            color: Color(0xFF8B5CF6),
-                                            fontSize: 10,
+                                            color: Color(0xFF10B981),
+                                            fontSize: 13,
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
-                                      ),
-                                  ],
-                                ),
-                                subtitle: Padding(
-                                  padding: EdgeInsets.only(top: 8.0),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Course: ${batch['course']['name']}',
-                                        style: const TextStyle(
-                                          color: Color(0xFF10B981),
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'Days: ${batch['daysOfWeek']}',
-                                        style: TextStyle(color: context.textColor70,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                      Text(
-                                        'Time: ${batch['timePeriod']}',
-                                        style: TextStyle(color: context.textColor70,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                isThreeLine: true,
-                                trailing: PopupMenuButton<String>(
-                                  icon: Icon(
-                                    Icons.more_vert,
-                                    color: context.textColor70,
-                                  ),
-                                  color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(
-                                      color: context.glassBorder,
-                                    ),
-                                  ),
-                                  elevation: 8,
-                                  onSelected: (value) {
-                                    if (value == 'edit') {
-                                      _showEditBatchDetailsDialog(batch);
-                                    } else if (value == 'add') {
-                                      _showAddStudentsDialog(batch);
-                                    } else if (value == 'delete') {
-                                      _confirmDelete(
-                                        context,
-                                        batch['name'],
-                                        () => _deleteBatch(batch['id']),
-                                      );
-                                    }
-                                  },
-                                  itemBuilder: (BuildContext context) =>
-                                      <PopupMenuEntry<String>>[
-                                        const PopupMenuItem<String>(
-                                          value: 'edit',
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                Icons.edit,
-                                                color: Colors.blueAccent,
-                                                size: 20,
-                                              ),
-                                              SizedBox(width: 12),
-                                              Text(
-                                                'Edit Details',
-                                                style: TextStyle(
-                                                  color: Colors.white,
-                                                ),
-                                              ),
-                                            ],
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Days: ${batch['daysOfWeek']}',
+                                          style: TextStyle(
+                                            color: context.textColor70,
+                                            fontSize: 12,
                                           ),
                                         ),
-                                        const PopupMenuItem<String>(
-                                          value: 'add',
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                Icons.person_add_rounded,
-                                                color: Color(0xFF818CF8),
-                                                size: 20,
-                                              ),
-                                              SizedBox(width: 12),
-                                              Text(
-                                                'Add Students',
-                                                style: TextStyle(
-                                                  color: Colors.white,
-                                                ),
-                                              ),
-                                            ],
+                                        Text(
+                                          'Time: ${batch['timePeriod']}',
+                                          style: TextStyle(
+                                            color: context.textColor70,
+                                            fontSize: 12,
                                           ),
                                         ),
-                                        const PopupMenuItem<String>(
-                                          value: 'delete',
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                Icons.delete_outline_rounded,
-                                                color: Colors.redAccent,
-                                                size: 20,
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Text(
+                                              'Syllabus Completion: ',
+                                              style: TextStyle(
+                                                color: context.textColor60,
+                                                fontSize: 11.5,
+                                                fontWeight: FontWeight.w500,
                                               ),
-                                              SizedBox(width: 12),
-                                              Text(
-                                                'Delete Batch',
-                                                style: TextStyle(
-                                                  color: Colors.redAccent,
-                                                ),
+                                            ),
+                                            Text(
+                                              '${_calcBatchProgress(batch)}%',
+                                              style: const TextStyle(
+                                                color: Color(0xFF10B981),
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
                                               ),
-                                            ],
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(4),
+                                          child: LinearProgressIndicator(
+                                            value: _calcBatchProgress(batch) / 100.0,
+                                            minHeight: 5,
+                                            backgroundColor: context.textColor54.withValues(alpha: 0.15),
+                                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
                                           ),
                                         ),
                                       ],
+                                    ),
+                                  ),
+                                  isThreeLine: true,
+                                  trailing: PopupMenuButton<String>(
+                                    icon: Icon(
+                                      Icons.more_vert,
+                                      color: context.textColor70,
+                                    ),
+                                    color: context.isDark
+                                        ? const Color(0xFF1E293B)
+                                        : Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(
+                                        color: context.glassBorder,
+                                      ),
+                                    ),
+                                    elevation: 8,
+                                    onSelected: (value) {
+                                      if (value == 'arena') {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => TutorCompetitionHostScreen(batch: batch),
+                                          ),
+                                        );
+                                      } else if (value == 'edit') {
+                                        _showEditBatchDetailsDialog(batch);
+                                      } else if (value == 'add') {
+                                        _showAddStudentsDialog(batch);
+                                      } else if (value == 'delete') {
+                                        _confirmDelete(
+                                          context,
+                                          batch['name'],
+                                          () => _deleteBatch(batch['id']),
+                                        );
+                                      }
+                                    },
+                                    itemBuilder: (BuildContext context) =>
+                                        <PopupMenuEntry<String>>[
+                                          const PopupMenuItem<String>(
+                                            value: 'arena',
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.sports_esports_rounded,
+                                                  color: Color(0xFF10B981),
+                                                  size: 20,
+                                                ),
+                                                SizedBox(width: 12),
+                                                Text(
+                                                  'Launch Arena Competition',
+                                                  style: TextStyle(
+                                                    color: Color(0xFF10B981),
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const PopupMenuItem<String>(
+                                            value: 'edit',
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.edit,
+                                                  color: Colors.blueAccent,
+                                                  size: 20,
+                                                ),
+                                                SizedBox(width: 12),
+                                                Text(
+                                                  'Edit Details',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const PopupMenuItem<String>(
+                                            value: 'add',
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.person_add_rounded,
+                                                  color: Color(0xFF818CF8),
+                                                  size: 20,
+                                                ),
+                                                SizedBox(width: 12),
+                                                Text(
+                                                  'Add Students',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const PopupMenuItem<String>(
+                                            value: 'delete',
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.delete_outline_rounded,
+                                                  color: Colors.redAccent,
+                                                  size: 20,
+                                                ),
+                                                SizedBox(width: 12),
+                                                Text(
+                                                  'Delete Batch',
+                                                  style: TextStyle(
+                                                    color: Colors.redAccent,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -1827,69 +2076,73 @@ class _BatchesTabState extends State<BatchesTab> {
                 Expanded(
                   child:
                       BackdropFilter(
-                        filter: ImageFilter.blur(
-                          sigmaX: 12,
-                          sigmaY: 12,
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                          ),
-                          child: TextField(
-                            controller: _searchController,
-                            style: TextStyle(
-                              color: context.textColor,
-                              fontSize: 15,
-                              letterSpacing: 1.0,
-                              fontWeight: FontWeight.w500,
+                            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              child: TextField(
+                                controller: _searchController,
+                                style: TextStyle(
+                                  color: context.textColor,
+                                  fontSize: 15,
+                                  letterSpacing: 1.0,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                cursorColor: const Color(0xFF8B5CF6),
+                                textAlignVertical: TextAlignVertical.center,
+                                decoration: InputDecoration(
+                                  hintText: 'Type to search...',
+                                  hintStyle: TextStyle(
+                                    color: context.textColor54,
+                                    fontSize: 14,
+                                    letterSpacing: 1.0,
+                                  ),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    vertical: 18,
+                                  ),
+                                  prefixIcon: Icon(
+                                    Icons.search_rounded,
+                                    color: context.isDark
+                                        ? const Color(0xFF8B5CF6)
+                                        : Colors.grey[600],
+                                    size: 20,
+                                  ),
+                                  suffixIcon: _searchQuery.isNotEmpty
+                                      ? IconButton(
+                                          icon: Icon(
+                                            Icons.clear_rounded,
+                                            color: context.isDark
+                                                ? Colors.white60
+                                                : Colors.grey[600],
+                                            size: 18,
+                                          ),
+                                          onPressed: () {
+                                            _searchController.clear();
+                                            setState(() {
+                                              _searchQuery = '';
+                                            });
+                                          },
+                                        )
+                                      : null,
+                                ),
+                                onChanged: (val) {
+                                  setState(() {
+                                    _searchQuery = val.toLowerCase();
+                                  });
+                                },
+                              ),
                             ),
-                            cursorColor: const Color(0xFF8B5CF6),
-                            textAlignVertical: TextAlignVertical.center,
-                            decoration: InputDecoration(
-                              hintText: 'Type to search...',
-                              hintStyle: TextStyle(
-                                color: context.textColor54,
-                                fontSize: 14,
-                                letterSpacing: 1.0,
-                              ),
-                              border: InputBorder.none,
-                              isDense: true,
-                              contentPadding: const EdgeInsets.symmetric(
-                                vertical: 18,
-                              ),
-                              prefixIcon: Icon(
-                                Icons.search_rounded,
-                                color: context.isDark ? const Color(0xFF8B5CF6) : Colors.grey[600],
-                                size: 20,
-                              ),
-                              suffixIcon: _searchQuery.isNotEmpty
-                                  ? IconButton(
-                                      icon: Icon(
-                                        Icons.clear_rounded,
-                                        color: context.isDark ? Colors.white60 : Colors.grey[600],
-                                        size: 18,
-                                      ),
-                                      onPressed: () {
-                                        _searchController.clear();
-                                        setState(() {
-                                          _searchQuery = '';
-                                        });
-                                      },
-                                    )
-                                  : null,
-                            ),
-                            onChanged: (val) {
-                              setState(() {
-                                _searchQuery = val.toLowerCase();
-                              });
-                            },
-                          ),
-                        ),
-                      )
+                          )
                           .animate()
                           .fade(duration: 600.ms, delay: 500.ms)
                           .slideY(begin: 0.2, end: 0)
-                          .shimmer(duration: 2000.ms, color: context.glassBorder),
+                          .shimmer(
+                            duration: 2000.ms,
+                            color: context.glassBorder,
+                          ),
                 ),
                 const SizedBox(width: 12),
                 FloatingActionButton(
@@ -1904,5 +2157,29 @@ class _BatchesTabState extends State<BatchesTab> {
         );
       },
     );
+  }
+
+  int _calcBatchProgress(dynamic b) {
+    if (b is! Map) return 0;
+    int total = 0, completed = 0;
+    void inspect(dynamic node) {
+      if (node is! Map) return;
+      total++;
+      if ((node['status'] ?? '').toString() == 'completed') completed++;
+      if (node['topics'] is List) {
+        for (var t in node['topics']) inspect(t);
+      }
+      if (node['subTopics'] is List) {
+        for (var s in node['subTopics']) inspect(s);
+      }
+    }
+
+    final s = b['syllabus'] ?? b['course']?['syllabus'];
+    if (s is List) {
+      for (var c in s) inspect(c);
+    } else if (s is Map && s['chapters'] is List) {
+      for (var c in s['chapters']) inspect(c);
+    }
+    return total > 0 ? ((completed / total) * 100).round() : 0;
   }
 }

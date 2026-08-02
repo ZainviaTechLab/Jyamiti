@@ -29,23 +29,13 @@ subprojects {
 }
 
 subprojects {
-    tasks.withType<JavaCompile> {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
-    }
-}
-
-subprojects {
-    plugins.withId("kotlin-android") {
-        tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-            compilerOptions {
-                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-            }
-        }
-    }
-    plugins.withId("org.jetbrains.kotlin.android") {
-        tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-            compilerOptions {
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            val target = project.extensions.findByType(com.android.build.gradle.BaseExtension::class.java)
+                ?.compileOptions?.targetCompatibility
+            if (target == JavaVersion.VERSION_11 || target == JavaVersion.VERSION_1_8) {
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+            } else {
                 jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
             }
         }

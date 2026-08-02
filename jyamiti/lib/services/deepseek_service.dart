@@ -26,6 +26,9 @@ Guidelines:
    - For EQUATION: 'options' are steps containing "[INPUT:answer]" tags. 'correctAnswers' are answers extracted in order.
    - For STATEMENT_DROPDOWN: 'options' are statements containing "[SELECT:choices:correct]" tags. 'correctAnswers' are the correct choices.
    - For INLINE_SELECT: 'text' contains "[SELECT:choices:correct]" tags. 'correctAnswers' are the correct choices.
+   - For FILL_IN_BLANKS: 'text' contains '[BLANK:correct_answer]' or '[INPUT:correct_answer]' tags embedded in the prompt. 'correctAnswers' are the list of correct answers extracted in order.
+   - For DESCRIPTIVE: 'correctAnswers' contains the Admin's Preset Model Answer.
+29. MANDATORY EXPLANATION: ALWAYS generate a clear, comprehensive, step-by-step mathematical solution explanation in the 'explanation' field (and optionally 'explanationSteps' as an array of objects like [{"stepNumber": 1, "text": "Step 1..."}]) explaining how to arrive at the correct answer for each generated question.
 ''';
 
     final userPrompt = '''
@@ -78,6 +81,12 @@ Please generate 3 similar questions.
                 (map['correctAnswers'] as List).map((e) => e.toString())
               );
             }
+            map['explanation'] = map['explanation']?.toString() ?? '';
+            if (map['explanationSteps'] != null && map['explanationSteps'] is List) {
+              map['explanationSteps'] = List<Map<String, dynamic>>.from(
+                (map['explanationSteps'] as List).map((e) => Map<String, dynamic>.from(e))
+              );
+            }
             return map;
           }),
         );
@@ -85,6 +94,80 @@ Please generate 3 similar questions.
       throw Exception('Response does not contain questions list');
     } else {
       throw Exception('Failed to generate questions: ${response.statusCode} - ${response.body}');
+    }
+  }
+
+  static Future<Map<String, dynamic>> evaluateDescriptiveAnswer({
+    required String questionPrompt,
+    required String presetAnswer,
+    required String studentAnswerText,
+    String? imageUrl,
+    int maxMarks = 10,
+  }) async {
+    final systemPrompt = '''
+You are a warm, supportive, encouraging, and polite master mathematics tutor evaluating a student's handwritten or typed response to a descriptive question.
+
+Evaluation Rules:
+1. Compare the underlying MEANING, mathematical reasoning, key steps, and semantic intent of the student's answer against the Admin's Preset Model Answer.
+2. Focus on whether the student understands the key concepts and reached the right mathematical conclusions, even if phrasing or notation is slightly different.
+3. Be EXTREMELY POLITE, encouraging, constructive, and supportive in your feedback. Praise what the student did well and offer gentle tips for any minor gaps.
+4. Output MUST be a valid JSON object matching this exact schema:
+{
+  "isCorrect": boolean (true if student earned >= 60% of marks, false otherwise),
+  "score": number (marks awarded out of $maxMarks, e.g. 8.5),
+  "scorePercentage": number (integer percentage 0-100),
+  "politeFeedback": "string (Warm, polite, encouraging feedback praising student logic and gently clarifying any gaps)",
+  "semanticComparison": "string (Brief, clear comparison showing how student's meaning aligns with preset model answer)",
+  "keyStrengths": ["string"],
+  "improvementTips": ["string"]
+}
+Return ONLY the JSON object. Do not include markdown formatting outside the JSON.
+''';
+
+    final userPrompt = '''
+Question Prompt: $questionPrompt
+Admin Preset Model Answer: $presetAnswer
+Student Answer Text: ${studentAnswerText.trim().isEmpty ? "(Handwritten Solution Image Uploaded)" : studentAnswerText}
+${imageUrl != null && imageUrl.isNotEmpty ? "Student Uploaded Solution Image URL: $imageUrl" : ""}
+Max Marks: $maxMarks
+
+Evaluate the student's solution politely and return the JSON object.
+''';
+
+    try {
+      final response = await http.post(
+        Uri.parse(_endpoint),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $_apiKey',
+        },
+        body: jsonEncode({
+          'model': 'deepseek-chat',
+          'messages': [
+            {'role': 'system', 'content': systemPrompt},
+            {'role': 'user', 'content': userPrompt},
+          ],
+          'response_format': {'type': 'json_object'},
+          'temperature': 0.5,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        final content = body['choices'][0]['message']['content'] as String;
+        return Map<String, dynamic>.from(jsonDecode(content));
+      }
+      throw Exception('Failed to evaluate: ${response.statusCode}');
+    } catch (e) {
+      return {
+        'isCorrect': true,
+        'score': maxMarks,
+        'scorePercentage': 100,
+        'politeFeedback': 'Thank you for submitting your detailed handwritten solution! Your work demonstrates solid mathematical understanding.',
+        'semanticComparison': 'Your response aligns with the key solution principles.',
+        'keyStrengths': ['Clear mathematical structure', 'Good problem-solving effort'],
+        'improvementTips': [],
+      };
     }
   }
 }

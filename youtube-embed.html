@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Player</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: black;
+      overflow: hidden;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="player-container" style="width: 100%; height: 100%;"></div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const videoId = params.get('v');
+    if (videoId) {
+      const iframe = document.createElement('iframe');
+      // Use no-cookie embed for better privacy and compatibility
+      iframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&showinfo=0&iv_load_policy=3`;
+      iframe.setAttribute('referrerpolicy', 'no-referrer-when-downgrade');
+      iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture');
+      iframe.setAttribute('allowfullscreen', 'true');
+      document.getElementById('player-container').appendChild(iframe);
+    } else {
+      document.body.innerHTML = '<div style="color: white; text-align: center; padding-top: 20%; font-family: sans-serif;">No Video ID Provided</div>';
+    }
+  </script>
+</body>
+</html>

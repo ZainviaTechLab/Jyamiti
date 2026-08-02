@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../providers/theme_provider.dart';
@@ -384,7 +385,7 @@ class _BulkQuestionUploadScreenState extends State<BulkQuestionUploadScreen> {
               const SizedBox(height: 12),
               ElevatedButton.icon(
                 onPressed: _isSaving ? null : _submitQuestions,
-                icon: _isSaving ?  SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: context.textColor)) : const Icon(Icons.cloud_upload),
+                icon: _isSaving ?  SizedBox(width: 20, height: 20, child: JyamitiLoader(strokeWidth: 2, color: context.textColor)) : const Icon(Icons.cloud_upload),
                 label: Text(_isSaving ? 'Uploading...' : 'Save All to Question Bank'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF10B981),

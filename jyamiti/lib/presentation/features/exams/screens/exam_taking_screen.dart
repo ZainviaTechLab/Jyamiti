@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
@@ -48,7 +49,7 @@ class _ExamTakingScreenState extends State<ExamTakingScreen> {
     if (_isLoading) {
       return Scaffold(
         backgroundColor: context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-        body: const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1))),
+        body: const Center(child: JyamitiLoader(color: Color(0xFF6366F1))),
       );
     }
     if (_error != null) {
@@ -941,7 +942,7 @@ class _ExamFooter extends StatelessWidget {
             icon: isSubmitting
                 ? SizedBox(
                     width: 16, height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: context.textColor),
+                    child: JyamitiLoader(strokeWidth: 2, color: context.textColor),
                   )
                 : Transform.rotate(
                     angle: -90 * 3.1415927 / 180,

@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -79,7 +80,7 @@ class _StudentPerformanceScreenState extends State<StudentPerformanceScreen> {
             child: BlocBuilder<StudentPerformanceBloc, StudentPerformanceState>(
               builder: (context, state) {
                 if (state is StudentPerformanceLoading || state is StudentPerformanceInitial) {
-                  return Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)));
+                  return Center(child: JyamitiLoader(color: Color(0xFF6366F1)));
                 } else if (state is StudentPerformanceError) {
                   return Center(
                     child: Column(

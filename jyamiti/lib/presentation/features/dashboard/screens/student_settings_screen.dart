@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../../../../providers/auth_provider.dart';
 import '../../../../providers/theme_provider.dart';
+import '../../../widgets/theme_reveal.dart';
 
 class StudentSettingsScreen extends StatefulWidget {
   final bool isInline;
@@ -81,12 +82,16 @@ class _StudentSettingsScreenState extends State<StudentSettingsScreen> {
                   _buildSettingCard(
                     icon: Icons.dark_mode_rounded,
                     title: 'Dark Mode',
-                    trailing: Switch(
-                      value: themeProvider.isDarkMode,
-                      onChanged: (value) {
-                        themeProvider.toggleTheme(value);
-                      },
-                      activeColor: const Color(0xFF6366F1),
+                    trailing: Builder(
+                      builder: (switchContext) => Switch(
+                        value: themeProvider.isDarkMode,
+                        onChanged: (value) {
+                          ThemeReveal.animate(switchContext, () {
+                            themeProvider.toggleTheme(value);
+                          });
+                        },
+                        activeColor: const Color(0xFF6366F1),
+                      ),
                     ),
                   ).animate().fade(delay: 200.ms),
                   _buildSettingCard(

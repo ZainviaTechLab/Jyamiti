@@ -1,5 +1,7 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
@@ -88,7 +90,7 @@ class _SessionNotesScreenState extends State<SessionNotesScreen> {
         context: context,
         barrierDismissible: false,
         builder: (_) => const Center(
-          child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+          child: JyamitiLoader(color: Color(0xFF6366F1)),
         ),
       );
 
@@ -164,12 +166,46 @@ class _SessionNotesScreenState extends State<SessionNotesScreen> {
                       ),
                       TextFormField(
                         controller: descCtrl,
+                        maxLines: 4,
+                        keyboardType: TextInputType.multiline,
                         style: TextStyle(color: context.textColor),
                         decoration: InputDecoration(
-                          labelText: 'Description',
+                          labelText: 'Session Notes / Content',
+                          hintText:
+                              'Type or paste session notes directly here...',
                           labelStyle: TextStyle(color: context.textColor70),
+                          alignLabelWithHint: true,
                         ),
                         validator: (v) => v!.isEmpty ? 'Required' : null,
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () async {
+                            final data =
+                                await Clipboard.getData(Clipboard.kTextPlain);
+                            if (data != null &&
+                                data.text != null &&
+                                data.text!.isNotEmpty) {
+                              descCtrl.text = descCtrl.text.isEmpty
+                                  ? data.text!
+                                  : '${descCtrl.text}\n${data.text!}';
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Pasted notes text from clipboard!'),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.paste_rounded, size: 14),
+                          label: const Text(
+                            '📋 Paste Text from Clipboard',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                        ),
                       ),
                       const SizedBox(height: 16),
                       Row(
@@ -264,7 +300,7 @@ class _SessionNotesScreenState extends State<SessionNotesScreen> {
                       showDialog(
                         context: context,
                         builder: (_) => const Center(
-                          child: CircularProgressIndicator(
+                          child: JyamitiLoader(
                             color: Color(0xFF6366F1),
                           ),
                         ),
@@ -447,7 +483,7 @@ class _SessionNotesScreenState extends State<SessionNotesScreen> {
                       showDialog(
                         context: context,
                         builder: (_) => const Center(
-                          child: CircularProgressIndicator(
+                          child: JyamitiLoader(
                             color: Color(0xFF6366F1),
                           ),
                         ),

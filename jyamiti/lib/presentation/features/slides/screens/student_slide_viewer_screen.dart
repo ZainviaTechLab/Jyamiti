@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
@@ -197,7 +198,7 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
   Widget build(BuildContext context) {
     final isDark = context.isDark;
     if (_isLoadingProgress || widget.deck.slides.isEmpty) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: Center(child: JyamitiLoader()));
     }
 
     final totalSlides = widget.deck.slides.length;

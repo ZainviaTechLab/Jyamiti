@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -390,11 +391,26 @@ class _CoursesTabState extends State<CoursesTab> {
     int slidesCount = 0;
     int questionsCount = 0;
 
+    int getQuestionsCount(Map<dynamic, dynamic> it) {
+      int count = 0;
+      final sets = it['practiceSets'] as List?;
+      if (sets != null && sets.isNotEmpty) {
+        for (var s in sets) {
+          if (s is Map) {
+            count += (s['questions'] as List?)?.length ?? 0;
+          }
+        }
+      } else {
+        count += (it['practiceQuestions'] as List?)?.length ?? 0;
+      }
+      return count;
+    }
+
     if (course['syllabus'] != null) {
       for (var ch in course['syllabus']) {
         videosCount += (ch['videos'] as List?)?.length ?? 0;
         slidesCount += (ch['slides'] as List?)?.length ?? 0;
-        questionsCount += (ch['practiceQuestions'] as List?)?.length ?? 0;
+        questionsCount += getQuestionsCount(ch);
         
         final topics = ch['topics'] as List?;
         if (topics != null) {
@@ -402,7 +418,7 @@ class _CoursesTabState extends State<CoursesTab> {
           for (var tp in topics) {
             videosCount += (tp['videos'] as List?)?.length ?? 0;
             slidesCount += (tp['slides'] as List?)?.length ?? 0;
-            questionsCount += (tp['practiceQuestions'] as List?)?.length ?? 0;
+            questionsCount += getQuestionsCount(tp);
             
             final subTopics = tp['subTopics'] as List?;
             if (subTopics != null) {
@@ -410,7 +426,7 @@ class _CoursesTabState extends State<CoursesTab> {
               for (var stp in subTopics) {
                 videosCount += (stp['videos'] as List?)?.length ?? 0;
                 slidesCount += (stp['slides'] as List?)?.length ?? 0;
-                questionsCount += (stp['practiceQuestions'] as List?)?.length ?? 0;
+                questionsCount += getQuestionsCount(stp);
               }
             }
           }
@@ -754,8 +770,18 @@ class _CoursesTabState extends State<CoursesTab> {
   Widget _buildInlineResourceBadges(Map<String, dynamic> item) {
     final int videos = (item['videos'] as List?)?.length ?? 0;
     final int slides = (item['slides'] as List?)?.length ?? 0;
-    final int practice = (item['practiceQuestions'] as List?)?.length ?? 0;
-
+    int practice = 0;
+    final List? sets = item['practiceSets'] as List?;
+    if (sets != null && sets.isNotEmpty) {
+      for (var s in sets) {
+        if (s is Map) {
+          practice += (s['questions'] as List?)?.length ?? 0;
+        }
+      }
+    } else {
+      practice = (item['practiceQuestions'] as List?)?.length ?? 0;
+    }
+ 
     if (videos == 0 && slides == 0 && practice == 0) return const SizedBox.shrink();
 
     return Row(
@@ -884,7 +910,7 @@ class _CoursesTabState extends State<CoursesTab> {
 
         if (isLoading) {
           return const Center(
-            child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+            child: JyamitiLoader(color: Color(0xFF6366F1)),
           );
         }
 

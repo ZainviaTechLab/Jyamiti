@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../services/api_service.dart';
@@ -75,7 +76,7 @@ class SvgLabelOverlay extends StatelessWidget {
           child: SizedBox(
             width: 24,
             height: 24,
-            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6366F1)),
+            child: JyamitiLoader(strokeWidth: 1.5, color: Color(0xFF6366F1)),
           ),
         ),
         errorBuilder: (context, error, stackTrace) => const Icon(
@@ -94,7 +95,7 @@ class SvgLabelOverlay extends StatelessWidget {
             child: SizedBox(
               width: 24,
               height: 24,
-              child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6366F1)),
+              child: JyamitiLoader(strokeWidth: 1.5, color: Color(0xFF6366F1)),
             ),
           );
         },

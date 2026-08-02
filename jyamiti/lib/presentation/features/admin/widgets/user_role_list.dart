@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
@@ -71,7 +72,7 @@ class _UserRoleListState extends State<UserRoleList> {
       child: BlocBuilder<UserBloc, UserState>(
         builder: (context, state) {
           if (state is UserInitial || (state is UserLoading && state.isFirstFetch)) {
-            return const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)));
+            return const Center(child: JyamitiLoader(color: Color(0xFF6366F1)));
           }
 
           if (state is UserError) {
@@ -101,7 +102,7 @@ class _UserRoleListState extends State<UserRoleList> {
               if (idx == users.length) {
                 return const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Center(child: CircularProgressIndicator(color: Color(0xFF6366F1))),
+                  child: Center(child: JyamitiLoader(color: Color(0xFF6366F1))),
                 );
               }
 
@@ -163,11 +164,43 @@ class _UserRoleListState extends State<UserRoleList> {
                           ),
                           title: Text(user['name'], style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold, fontSize: 16)),
                           subtitle: Padding(
-                            padding: EdgeInsets.only(top: 8.0),
+                            padding: const EdgeInsets.only(top: 8.0),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(user['phone']?.toString() ?? 'No phone number', style: TextStyle(color: context.textColor70, fontSize: 13)),    
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        user['phone']?.toString() ?? 'No phone number',
+                                        style: TextStyle(color: context.textColor70, fontSize: 13),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: (user['isActive'] == false || user['status'] == 'INACTIVE' || user['status'] == 'SUSPENDED')
+                                            ? Colors.redAccent.withOpacity(0.15)
+                                            : Colors.green.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Text(
+                                        (user['isActive'] == false || user['status'] == 'INACTIVE' || user['status'] == 'SUSPENDED')
+                                            ? 'INACTIVE'
+                                            : 'ACTIVE',
+                                        style: TextStyle(
+                                          color: (user['isActive'] == false || user['status'] == 'INACTIVE' || user['status'] == 'SUSPENDED')
+                                              ? Colors.redAccent
+                                              : Colors.green,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),    
                               ],
                             ),
                           ),

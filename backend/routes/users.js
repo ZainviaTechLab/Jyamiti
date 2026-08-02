@@ -29,7 +29,7 @@ router.get('/', async (req, res) => {
       const skip = (pageNum - 1) * limitNum;
       
       const users = await query.skip(skip).limit(limitNum);
-      const mappedUsers = users.map(u => ({ id: u._id, email: u.email, name: u.name, phone: u.phone, role: u.role, createdAt: u.createdAt }));
+      const mappedUsers = users.map(u => ({ id: u._id, email: u.email, name: u.name, phone: u.phone, role: u.role, isActive: u.isActive !== false, status: u.status || 'ACTIVE', createdAt: u.createdAt }));
       
       const totalCount = await User.countDocuments(filter);
       
@@ -40,7 +40,7 @@ router.get('/', async (req, res) => {
     }
 
     const users = await query;
-    res.json(users.map(u => ({ id: u._id, email: u.email, name: u.name, phone: u.phone, role: u.role, createdAt: u.createdAt })));
+    res.json(users.map(u => ({ id: u._id, email: u.email, name: u.name, phone: u.phone, role: u.role, isActive: u.isActive !== false, status: u.status || 'ACTIVE', createdAt: u.createdAt })));
   } catch (error) {
     console.error('Fetch users error:', error);
     res.status(500).json({ message: 'Internal server error' });
@@ -72,6 +72,8 @@ router.post('/', async (req, res) => {
       phone,
       role: normalizedRole,
       password: hashedPassword,
+      isActive: true,
+      status: 'ACTIVE',
     });
 
     sendWelcomeEmail(newUser.email, newUser.name, tempPassword, newUser.role)
@@ -79,7 +81,7 @@ router.post('/', async (req, res) => {
         console.error('Failed to send welcome email (async):', emailError);
       });
 
-    res.status(201).json({ id: newUser._id, email: newUser.email, name: newUser.name, phone: newUser.phone, role: newUser.role, createdAt: newUser.createdAt });
+    res.status(201).json({ id: newUser._id, email: newUser.email, name: newUser.name, phone: newUser.phone, role: newUser.role, isActive: newUser.isActive !== false, status: newUser.status || 'ACTIVE', createdAt: newUser.createdAt });
   } catch (error) {
     console.error('Create user error:', error);
     res.status(500).json({ message: 'Internal server error' });
@@ -89,7 +91,7 @@ router.post('/', async (req, res) => {
 // PUT /api/users/:id
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { email, name, phone } = req.body;
+  const { email, name, phone, isActive, status } = req.body;
   try {
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -103,9 +105,11 @@ router.put('/:id', async (req, res) => {
     user.name = name || user.name;
     user.email = email ? email.toLowerCase() : user.email;
     if (phone !== undefined) user.phone = phone;
+    if (isActive !== undefined) user.isActive = isActive;
+    if (status !== undefined) user.status = status;
     await user.save();
 
-    res.json({ id: user._id, email: user.email, name: user.name, phone: user.phone, role: user.role });
+    res.json({ id: user._id, email: user.email, name: user.name, phone: user.phone, role: user.role, isActive: user.isActive !== false, status: user.status || 'ACTIVE' });
   } catch (error) {
     console.error('Update user error:', error);
     res.status(500).json({ message: 'Internal server error' });

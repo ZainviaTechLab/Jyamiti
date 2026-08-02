@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:archive/archive.dart';
@@ -22,9 +23,9 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
 
   bool _isFetchingCurrent = false;
   bool _isUploading = false;
-  
+
   Map<String, dynamic>? _currentVersionData;
-  
+
   String? _selectedFileName;
   List<int>? _selectedFileBytes;
   int _selectedFileSize = 0;
@@ -69,7 +70,9 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
       for (final file in archive) {
         if (file.name == 'AppxManifest.xml') {
           final content = String.fromCharCodes(file.content);
-          final match = RegExp(r'Version="(\d+)\.(\d+)\.(\d+)\.(\d+)"').firstMatch(content);
+          final match = RegExp(
+            r'Version="(\d+)\.(\d+)\.(\d+)\.(\d+)"',
+          ).firstMatch(content);
           if (match != null) {
             final major = match.group(1);
             final minor = match.group(2);
@@ -165,16 +168,18 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
           final name = result.files.single.name;
           final bytes = result.files.single.bytes;
           final size = result.files.single.size;
-          
+
           setState(() {
             _selectedFileName = name;
             _selectedFileBytes = bytes;
             _selectedFileSize = size;
-            
+
             String? detectedVersion;
             String? detectedBuildCode;
-            
-            final fullMatch = RegExp(r'v?(\d+\.\d+\.\d+)\+(\d+)').firstMatch(name);
+
+            final fullMatch = RegExp(
+              r'v?(\d+\.\d+\.\d+)\+(\d+)',
+            ).firstMatch(name);
             if (fullMatch != null) {
               detectedVersion = fullMatch.group(1);
               detectedBuildCode = fullMatch.group(2);
@@ -184,7 +189,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                 detectedVersion = verMatch.group(1);
               }
             }
-            
+
             if (name.toLowerCase().endsWith('.msix')) {
               final manifest = _parseMsixManifest(bytes!);
               if (manifest != null) {
@@ -192,7 +197,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                 detectedBuildCode = manifest['buildCode'];
               }
             }
-            
+
             if (detectedVersion != null) {
               _versionCtrl.text = detectedVersion;
             }
@@ -242,10 +247,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
               _selectedFileName != null
                   ? '${(_selectedFileSize / (1024 * 1024)).toStringAsFixed(2)} MB'
                   : 'Supports .exe, .msi, .msix, .zip, .dmg, .appx',
-              style: TextStyle(
-                color: context.textColor70,
-                fontSize: 13,
-              ),
+              style: TextStyle(color: context.textColor70, fontSize: 13),
             ),
           ],
         ),
@@ -256,7 +258,8 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
   @override
   Widget build(BuildContext context) {
     final activeVersion = _currentVersionData?['latestVersion'] ?? 'None';
-    final activeBuild = _currentVersionData?['latestBuildCode']?.toString() ?? 'None';
+    final activeBuild =
+        _currentVersionData?['latestBuildCode']?.toString() ?? 'None';
     final notes = _currentVersionData?['releaseNotes'] ?? '';
     final downloadUrl = _currentVersionData?['downloadUrl'] ?? '';
 
@@ -280,7 +283,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
               style: TextStyle(color: context.textColor70, fontSize: 14),
             ),
             const SizedBox(height: 24),
-            
+
             // Current Active Version Details
             Container(
               padding: const EdgeInsets.all(20),
@@ -325,7 +328,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                                 child: SizedBox(
                                   width: 20,
                                   height: 20,
-                                  child: CircularProgressIndicator(
+                                  child: JyamitiLoader(
                                     strokeWidth: 2,
                                     color: Color(0xFF6366F1),
                                   ),
@@ -338,7 +341,10 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                                     children: [
                                       Text(
                                         'Version: ',
-                                        style: TextStyle(color: context.textColor70, fontSize: 15),
+                                        style: TextStyle(
+                                          color: context.textColor70,
+                                          fontSize: 15,
+                                        ),
                                       ),
                                       Text(
                                         activeVersion,
@@ -351,7 +357,10 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                                       const SizedBox(width: 16),
                                       Text(
                                         'Build Code: ',
-                                        style: TextStyle(color: context.textColor70, fontSize: 15),
+                                        style: TextStyle(
+                                          color: context.textColor70,
+                                          fontSize: 15,
+                                        ),
                                       ),
                                       Text(
                                         activeBuild,
@@ -376,7 +385,10 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                                     const SizedBox(height: 2),
                                     Text(
                                       notes,
-                                      style: TextStyle(color: context.textColor60, fontSize: 13),
+                                      style: TextStyle(
+                                        color: context.textColor60,
+                                        fontSize: 13,
+                                      ),
                                     ),
                                   ],
                                   if (downloadUrl.isNotEmpty) ...[
@@ -407,9 +419,9 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                 ],
               ),
             ).animate().fade(duration: 400.ms),
-            
+
             const SizedBox(height: 32),
-            
+
             // Upload New Build Section
             Text(
               'Publish New Build',
@@ -420,7 +432,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
               ),
             ),
             const SizedBox(height: 16),
-            
+
             _isUploading
                 ? Center(
                     child: Padding(
@@ -428,16 +440,22 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const CircularProgressIndicator(color: Color(0xFF6366F1)),
+                          JyamitiLoader(color: Color(0xFF6366F1)),
                           const SizedBox(height: 16),
                           Text(
                             'Uploading package and updating version settings...',
-                            style: TextStyle(color: context.textColor70, fontSize: 14),
+                            style: TextStyle(
+                              color: context.textColor70,
+                              fontSize: 14,
+                            ),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             'Please do not refresh or close this tab.',
-                            style: TextStyle(color: context.textColor60, fontSize: 12),
+                            style: TextStyle(
+                              color: context.textColor60,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
@@ -450,7 +468,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                       children: [
                         _buildFilePickerZone(),
                         const SizedBox(height: 24),
-                        
+
                         Row(
                           children: [
                             Expanded(
@@ -459,12 +477,19 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                                 style: TextStyle(color: context.textColor),
                                 decoration: InputDecoration(
                                   labelText: 'Release Version',
-                                  labelStyle: TextStyle(color: context.textColor70),
+                                  labelStyle: TextStyle(
+                                    color: context.textColor70,
+                                  ),
                                   hintText: 'e.g. 1.0.6',
-                                  hintStyle: TextStyle(color: context.textColor54),
-                                  prefixIcon: const Icon(Icons.label_outline_rounded),
+                                  hintStyle: TextStyle(
+                                    color: context.textColor54,
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.label_outline_rounded,
+                                  ),
                                 ),
-                                validator: (v) => v!.isEmpty ? 'Version is required' : null,
+                                validator: (v) =>
+                                    v!.isEmpty ? 'Version is required' : null,
                               ),
                             ),
                             const SizedBox(width: 16),
@@ -475,14 +500,20 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                                 keyboardType: TextInputType.number,
                                 decoration: InputDecoration(
                                   labelText: 'Build Code',
-                                  labelStyle: TextStyle(color: context.textColor70),
+                                  labelStyle: TextStyle(
+                                    color: context.textColor70,
+                                  ),
                                   hintText: 'e.g. 7',
-                                  hintStyle: TextStyle(color: context.textColor54),
+                                  hintStyle: TextStyle(
+                                    color: context.textColor54,
+                                  ),
                                   prefixIcon: const Icon(Icons.code_rounded),
                                 ),
                                 validator: (v) {
-                                  if (v!.isEmpty) return 'Build Code is required';
-                                  if (int.tryParse(v) == null) return 'Must be a number';
+                                  if (v!.isEmpty)
+                                    return 'Build Code is required';
+                                  if (int.tryParse(v) == null)
+                                    return 'Must be a number';
                                   return null;
                                 },
                               ),
@@ -497,13 +528,15 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                           decoration: InputDecoration(
                             labelText: 'Release Notes / Changelog',
                             labelStyle: TextStyle(color: context.textColor70),
-                            hintText: 'Describe new features, adjustments, or bug fixes...',
+                            hintText:
+                                'Describe new features, adjustments, or bug fixes...',
                             hintStyle: TextStyle(color: context.textColor54),
                           ),
-                          validator: (v) => v!.isEmpty ? 'Changelog is required' : null,
+                          validator: (v) =>
+                              v!.isEmpty ? 'Changelog is required' : null,
                         ),
                         const SizedBox(height: 28),
-                        
+
                         ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF6366F1),
@@ -527,7 +560,7 @@ class _DesktopUploadTabState extends State<DesktopUploadTab> {
                       ],
                     ),
                   ).animate().fade(duration: 400.ms, delay: 100.ms),
-            
+
             const SizedBox(height: 60),
           ],
         ),

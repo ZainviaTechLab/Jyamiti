@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -10,6 +11,9 @@ import 'package:jyamiti/providers/auth_provider.dart';
 import '../../../../services/api_service.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../slides/screens/student_slide_viewer_screen.dart' deferred as slide_viewer;
+import 'syllabus_explorer_screen.dart';
+import '../../admin/screens/course_syllabus_screen.dart';
+import '../../competitions/screens/student_competition_game_screen.dart';
 
 class StudentLearningPathScreen extends StatefulWidget {
   final Map<String, dynamic> batch;
@@ -172,32 +176,133 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
         auth.userRole?.toUpperCase() == 'TUTOR' ||
         auth.userRole?.toUpperCase() == 'ADMIN' ||
         auth.userRole?.toUpperCase() == 'MENTOR';
-    final List<dynamic> rawQuestions = item['practiceQuestions'] ?? [];
-    final List<dynamic> questions = isTeacher
-        ? rawQuestions
-        : rawQuestions
-              .where(
-                (q) => q['isClasswork'] != true && q['category'] != 'classwork',
-              )
-              .toList();
 
-    if (questions.isEmpty) {
+    final List<dynamic> sets = item['practiceSets'] ?? [];
+    List<Map<String, dynamic>> resolvedSets = [];
+
+    if (sets.isNotEmpty) {
+      for (var s in sets) {
+        final List<dynamic> rawQuestions = s['questions'] ?? [];
+        if (rawQuestions.isNotEmpty) {
+          resolvedSets.add({
+            'title': s['title'] ?? 'Level 0',
+            'questions': rawQuestions,
+          });
+        }
+      }
+    } else {
+      final List<dynamic> rawQuestions = item['practiceQuestions'] ?? [];
+      if (rawQuestions.isNotEmpty) {
+        resolvedSets.add({
+          'title': 'Practice Quiz',
+          'questions': rawQuestions,
+        });
+      }
+    }
+
+    if (resolvedSets.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'No public practice questions available for this topic.',
-          ),
+          content: Text('No public practice questions available for this topic.'),
           backgroundColor: Colors.orange,
         ),
       );
       return;
     }
 
+    if (resolvedSets.length == 1) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => AssessmentTakingScreen(
+            practiceQuestions: resolvedSets.first['questions']!,
+          ),
+        ),
+      );
+    } else {
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              border: Border.all(color: context.glassBorder),
+            ),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: context.textColor54.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Select Practice Set',
+                  style: TextStyle(
+                    color: context.textColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: resolvedSets.length,
+                    itemBuilder: (context, idx) {
+                      final s = resolvedSets[idx];
+                      return ListTile(
+                        leading: const Icon(Icons.assignment_turned_in_rounded, color: Color(0xFF10B981)),
+                        title: Text(
+                          s['title']!,
+                          style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text('${s['questions']!.length} questions', style: TextStyle(color: context.textColor60)),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => AssessmentTakingScreen(
+                                practiceQuestions: s['questions']!,
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  void _navigateToExplorer(Map<String, dynamic> item, String type, String pathText) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            AssessmentTakingScreen(practiceQuestions: questions),
+        builder: (_) => SyllabusExplorerScreen(
+          batch: widget.batch,
+          categoryItem: item,
+          itemType: type,
+          breadcrumbText: pathText,
+        ),
       ),
     );
   }
@@ -236,6 +341,38 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
         iconTheme: IconThemeData(color: context.textColor),
         actions: [
           IconButton(
+            icon: const Icon(Icons.sports_esports_rounded, color: Color(0xFF6366F1)),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const StudentCompetitionGameScreen(),
+                ),
+              );
+            },
+            tooltip: 'Join Live Arena Competition',
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_note_rounded, color: Color(0xFF10B981)),
+            onPressed: () {
+              final courseId = (widget.batch['course'] != null)
+                  ? (widget.batch['course']['id'] ?? widget.batch['course']['_id'] ?? widget.batch['courseId'])
+                  : (widget.batch['courseId'] ?? widget.batch['id'] ?? widget.batch['_id']);
+              final courseName = widget.batch['name'] ?? widget.batch['title'] ?? 'Course';
+              if (courseId != null) {
+                Navigator.push(
+                  context,
+                  CourseSyllabusScreen.route(
+                    context: context,
+                    courseId: courseId.toString(),
+                    courseName: courseName.toString(),
+                  ),
+                );
+              }
+            },
+            tooltip: 'Manage Course / Edit Syllabus',
+          ),
+          IconButton(
             icon: Icon(
               _showResourcesAsList
                   ? Icons.grid_view_rounded
@@ -272,7 +409,7 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
               ),
         child: _isLoading
             ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+                child: JyamitiLoader(color: Color(0xFF6366F1)),
               )
             : _syllabus.isEmpty
             ? Center(
@@ -288,8 +425,13 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                   right: 16,
                   bottom: 80,
                 ),
-                itemCount: _syllabus.length,
-                itemBuilder: (context, cIndex) {
+                itemCount: _syllabus.length + 1,
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return _buildSyllabusProgressHeader();
+                  }
+                  final cIndex = index - 1;
+                  final isTutor = Provider.of<AuthProvider>(context, listen: false).userRole?.toUpperCase() == 'TUTOR';
                   final chapter = _syllabus[cIndex];
                   final topics = chapter['topics'] ?? [];
                   final animationDelay = (cIndex % 10) * 50;
@@ -323,28 +465,37 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                               child: ExpansionTile(
                               iconColor: context.textColor,
                               collapsedIconColor: context.textColor70,
-                              title: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.menu_book,
-                                    color: Color(0xFF8B5CF6),
-                                    size: 20,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      chapter['title'] ?? '',
-                                      style: TextStyle(
-                                        color: context.textColor,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 15,
+                              title: GestureDetector(
+                                onDoubleTap: () {
+                                  _navigateToExplorer(
+                                    chapter,
+                                    'Chapter',
+                                    '${widget.batch['name']} > ${chapter['title']}',
+                                  );
+                                },
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.menu_book,
+                                      color: Color(0xFF8B5CF6),
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        chapter['title'] ?? '',
+                                        style: TextStyle(
+                                          color: context.textColor,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  _showResourcesAsList
-                                      ? const SizedBox.shrink()
-                                      : _buildItemActions(chapter),
-                                ],
+                                    _showResourcesAsList
+                                        ? (isTutor ? _buildAssignButtonOnly(chapter) : const SizedBox.shrink())
+                                        : _buildItemActions(chapter),
+                                  ],
+                                ),
                               ),
                               children: [
                                 if (_showResourcesAsList)
@@ -359,27 +510,36 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                                     child: ExpansionTile(
                                       iconColor: context.textColor70,
                                       collapsedIconColor: context.textColor60,
-                                      title: Row(
-                                        children: [
-                                          const Icon(
-                                            Icons.topic,
-                                            color: Color(0xFF3B82F6),
-                                            size: 18,
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              topics[tIndex]['title'] ?? '',
-                                              style: TextStyle(
-                                                color: context.textColor,
-                                                fontSize: 14,
+                                      title: GestureDetector(
+                                        onDoubleTap: () {
+                                          _navigateToExplorer(
+                                            topics[tIndex],
+                                            'Topic',
+                                            '${widget.batch['name']} > ${chapter['title']} > ${topics[tIndex]['title']}',
+                                          );
+                                        },
+                                        child: Row(
+                                          children: [
+                                            const Icon(
+                                              Icons.topic,
+                                              color: Color(0xFF3B82F6),
+                                              size: 18,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                topics[tIndex]['title'] ?? '',
+                                                style: TextStyle(
+                                                  color: context.textColor,
+                                                  fontSize: 14,
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
                                       trailing: _showResourcesAsList
-                                          ? const SizedBox.shrink()
+                                          ? (isTutor ? _buildAssignButtonOnly(topics[tIndex]) : const SizedBox.shrink())
                                           : _buildItemActions(topics[tIndex]),
                                       children: [
                                         if (_showResourcesAsList)
@@ -409,16 +569,25 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                                                       .withOpacity(0.5),
                                                   size: 16,
                                                 ),
-                                                title: Text(
-                                                  topics[tIndex]['subTopics'][sIndex]['title'] ??
-                                                      '',
-                                                  style: TextStyle(
-                                                    color: context.textColor70,
-                                                    fontSize: 13,
+                                                title: GestureDetector(
+                                                  onDoubleTap: () {
+                                                    _navigateToExplorer(
+                                                      topics[tIndex]['subTopics'][sIndex],
+                                                      'Sub-topic',
+                                                      '${widget.batch['name']} > ${chapter['title']} > ${topics[tIndex]['title']} > ${topics[tIndex]['subTopics'][sIndex]['title']}',
+                                                    );
+                                                  },
+                                                  child: Text(
+                                                    topics[tIndex]['subTopics'][sIndex]['title'] ??
+                                                        '',
+                                                    style: TextStyle(
+                                                      color: context.textColor70,
+                                                      fontSize: 13,
+                                                    ),
                                                   ),
                                                 ),
                                                 trailing: _showResourcesAsList
-                                                    ? const SizedBox.shrink()
+                                                    ? (isTutor ? _buildAssignButtonOnly(topics[tIndex]['subTopics'][sIndex]) : const SizedBox.shrink())
                                                     : _buildItemActions(
                                                         topics[tIndex]['subTopics'][sIndex],
                                                       ),
@@ -460,8 +629,10 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
     final List<dynamic> videos = item['videos'] ?? [];
     final List<dynamic> slides = item['slides'] ?? [];
     final List<dynamic> questions = item['practiceQuestions'] ?? [];
+    final List<dynamic> sets = item['practiceSets'] ?? [];
+    final hasPractice = questions.isNotEmpty || sets.isNotEmpty;
 
-    if (videos.isEmpty && slides.isEmpty && questions.isEmpty && !isTutor) {
+    if (videos.isEmpty && slides.isEmpty && !hasPractice && !isTutor) {
       return const SizedBox.shrink();
     }
 
@@ -500,7 +671,7 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
               ),
               onTap: () => _viewSlides(item),
             ),
-          if (questions.isNotEmpty)
+          if (hasPractice)
             ListTile(
               dense: true,
               visualDensity: VisualDensity.compact,
@@ -510,28 +681,27 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                 size: 20,
               ),
               title: Text(
-                'Practice Quiz (${questions.length} Qs)',
+                sets.isNotEmpty
+                    ? 'Practice Sets (${sets.length})'
+                    : 'Practice Quiz (${questions.length} Qs)',
                 style: TextStyle(color: context.textColor70, fontSize: 13),
               ),
               onTap: () => _takePracticeTest(item),
             ),
-          if (isTutor)
-            ListTile(
-              dense: true,
-              visualDensity: VisualDensity.compact,
-              leading: const Icon(
-                Icons.add_task_rounded,
-                color: Color(0xFF3B82F6),
-                size: 20,
-              ),
-              title: Text(
-                'Assign Resource',
-                style: TextStyle(color: context.textColor70, fontSize: 13),
-              ),
-              onTap: () => _openAssignDialog(item),
-            ),
         ],
       ),
+    );
+  }
+
+  Widget _buildAssignButtonOnly(Map<String, dynamic> item) {
+    return IconButton(
+      icon: const Icon(
+        Icons.add_task_rounded,
+        color: Color(0xFF3B82F6),
+        size: 20,
+      ),
+      onPressed: () => _openAssignDialog(item),
+      tooltip: 'Assign Resource',
     );
   }
 
@@ -542,10 +712,14 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
     final List<dynamic> videos = item['videos'] ?? [];
     final List<dynamic> slides = item['slides'] ?? [];
     final List<dynamic> questions = item['practiceQuestions'] ?? [];
+    final List<dynamic> sets = item['practiceSets'] ?? [];
+    final hasPractice = questions.isNotEmpty || sets.isNotEmpty;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        _buildStatusBadge(item, compact: true),
+        const SizedBox(width: 4),
         if (videos.isNotEmpty)
           IconButton(
             icon: const Icon(
@@ -566,7 +740,7 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
             onPressed: () => _viewSlides(item),
             tooltip: 'View Slides',
           ),
-        if (questions.isNotEmpty)
+        if (hasPractice)
           IconButton(
             icon: const Icon(
               Icons.assignment_turned_in_rounded,
@@ -590,6 +764,270 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
     );
   }
 
+  Map<String, int> _calculateSyllabusProgress() {
+    int total = 0;
+    int completed = 0;
+    int inProgress = 0;
+
+    void inspectNode(dynamic rawNode) {
+      if (rawNode is! Map) return;
+      total++;
+      final status = (rawNode['status'] ?? 'not_started').toString();
+      if (status == 'completed') {
+        completed++;
+      } else if (status == 'in_progress') {
+        inProgress++;
+      }
+
+      if (rawNode['topics'] is List) {
+        for (var t in rawNode['topics']) inspectNode(t);
+      }
+      if (rawNode['subTopics'] is List) {
+        for (var s in rawNode['subTopics']) inspectNode(s);
+      }
+    }
+
+    for (var chapter in _syllabus) inspectNode(chapter);
+
+    final percentage = total > 0 ? ((completed / total) * 100).round() : 0;
+    return {
+      'total': total,
+      'completed': completed,
+      'inProgress': inProgress,
+      'notStarted': total - completed - inProgress,
+      'percentage': percentage,
+    };
+  }
+
+  void _cycleNodeStatus(dynamic node) {
+    if (node is! Map) return;
+    final isTutor = Provider.of<AuthProvider>(context, listen: false)
+            .userRole
+            ?.toUpperCase() ==
+        'TUTOR';
+    if (!isTutor) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Syllabus progress is live-tracked and updated by your assigned Tutor.',
+          ),
+          backgroundColor: Colors.blueAccent,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final current = (node['status'] ?? 'not_started').toString();
+    String nextStatus;
+    if (current == 'not_started') {
+      nextStatus = 'in_progress';
+    } else if (current == 'in_progress') {
+      nextStatus = 'completed';
+    } else {
+      nextStatus = 'not_started';
+    }
+
+    setState(() {
+      node['status'] = nextStatus;
+      if (nextStatus == 'completed') {
+        node['completedAt'] = DateTime.now().toIso8601String();
+      } else {
+        node.remove('completedAt');
+      }
+    });
+
+    final batchId = widget.batch['id'] ?? widget.batch['_id'];
+    if (batchId != null) {
+      ApiService.put('/batches/$batchId/syllabus', {'syllabus': _syllabus});
+    }
+  }
+
+  Widget _buildStatusBadge(dynamic node, {bool compact = false}) {
+    final status = (node['status'] ?? 'not_started').toString();
+    Color bgColor;
+    Color fgColor;
+    String label;
+    IconData icon;
+
+    if (status == 'completed') {
+      bgColor = const Color(0xFF10B981).withValues(alpha: 0.18);
+      fgColor = const Color(0xFF10B981);
+      label = compact ? 'Completed' : '✓ Completed';
+      icon = Icons.check_circle_rounded;
+    } else if (status == 'in_progress') {
+      bgColor = const Color(0xFFF59E0B).withValues(alpha: 0.18);
+      fgColor = const Color(0xFFF59E0B);
+      label = compact ? 'In Progress' : '⏳ In Progress';
+      icon = Icons.hourglass_top_rounded;
+    } else {
+      bgColor = context.textColor54.withValues(alpha: 0.12);
+      fgColor = context.textColor54;
+      label = compact ? 'Not Started' : '⚪ Not Started';
+      icon = Icons.radio_button_unchecked_rounded;
+    }
+
+    return InkWell(
+      onTap: () => _cycleNodeStatus(node),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 8 : 10,
+          vertical: compact ? 3 : 5,
+        ),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: fgColor.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: compact ? 12 : 14, color: fgColor),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: fgColor,
+                fontSize: compact ? 11 : 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSyllabusProgressHeader() {
+    if (_syllabus.isEmpty) return const SizedBox.shrink();
+
+    final stats = _calculateSyllabusProgress();
+    final percentage = stats['percentage'] ?? 0;
+    final completed = stats['completed'] ?? 0;
+    final total = stats['total'] ?? 0;
+    final inProgress = stats['inProgress'] ?? 0;
+    final isTutor = Provider.of<AuthProvider>(context, listen: false)
+            .userRole
+            ?.toUpperCase() ==
+        'TUTOR';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: context.isDark
+            ? const Color(0xFF0F172A).withValues(alpha: 0.6)
+            : Colors.white.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: const Color(0xFF10B981).withValues(alpha: 0.35),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF10B981).withValues(alpha: 0.08),
+            blurRadius: 12,
+            spreadRadius: 0,
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.auto_graph_rounded,
+                  color: Color(0xFF10B981),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Syllabus Completion Progress',
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF6366F1)
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            isTutor ? 'Tutor Mode' : 'Live Tracker',
+                            style: const TextStyle(
+                              color: Color(0xFF6366F1),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$completed of $total syllabus units completed ($inProgress in progress)',
+                      style: TextStyle(
+                        color: context.textColor60,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF10B981)),
+                ),
+                child: Text(
+                  '$percentage%',
+                  style: const TextStyle(
+                    color: Color(0xFF10B981),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: total > 0 ? (completed / total) : 0.0,
+              minHeight: 8,
+              backgroundColor: context.textColor54.withValues(alpha: 0.2),
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openAssignDialog(Map<String, dynamic> item) {
     String? selectedType;
     String? selectedStudent;
@@ -602,7 +1040,8 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
       availableTypes['video'] = 'Video';
     if ((item['slides'] as List?)?.isNotEmpty ?? false)
       availableTypes['slide'] = 'Slides';
-    if ((item['practiceQuestions'] as List?)?.isNotEmpty ?? false)
+    if (((item['practiceQuestions'] as List?)?.isNotEmpty ?? false) ||
+        ((item['practiceSets'] as List?)?.isNotEmpty ?? false))
       availableTypes['practice_question'] = 'Practice Questions';
 
     // Always can assign the topic itself
@@ -837,7 +1276,7 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                           ? const SizedBox(
                               width: 24,
                               height: 24,
-                              child: CircularProgressIndicator(
+                              child: JyamitiLoader(
                                 color: Colors.white,
                                 strokeWidth: 2,
                               ),

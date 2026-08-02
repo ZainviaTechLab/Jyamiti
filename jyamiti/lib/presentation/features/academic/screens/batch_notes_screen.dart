@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -121,7 +122,7 @@ class _BatchNotesScreenState extends State<BatchNotesScreen> {
           ),
           SafeArea(
             child: _isLoading 
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+              ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
               : _sessionDates.isEmpty
                 ? Center(child: Text('No sessions with notes found', style: TextStyle(color: context.textColor70)))
                 : ListView.builder(

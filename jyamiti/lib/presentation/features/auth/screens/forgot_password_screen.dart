@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../../../../providers/theme_provider.dart';
@@ -215,7 +216,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                                     ? const SizedBox(
                                         height: 20,
                                         width: 20,
-                                        child: CircularProgressIndicator(
+                                        child: JyamitiLoader(
                                           strokeWidth: 2,
                                           color: Colors.white,
                                         ),

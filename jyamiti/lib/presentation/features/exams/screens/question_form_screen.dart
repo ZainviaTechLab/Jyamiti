@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../../../services/api_service.dart';
@@ -148,7 +149,7 @@ class _QuestionFormScreenState extends State<QuestionFormScreen> {
         iconTheme: IconThemeData(color: context.textColor),
         actions: [
           if (_isLoading)
-            Center(child: Padding(padding: const EdgeInsets.all(16.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: context.textColor, strokeWidth: 2))))
+            Center(child: Padding(padding: const EdgeInsets.all(16.0), child: SizedBox(width: 20, height: 20, child: JyamitiLoader(color: context.textColor, strokeWidth: 2))))
           else
             TextButton(
               onPressed: _saveQuestion,

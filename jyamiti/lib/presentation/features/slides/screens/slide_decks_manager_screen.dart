@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../providers/theme_provider.dart';
@@ -8,8 +9,13 @@ import 'student_slide_viewer_screen.dart';
 
 class SlideDecksManagerScreen extends StatefulWidget {
   final bool isAdmin;
+  final bool isTutor;
 
-  const SlideDecksManagerScreen({super.key, this.isAdmin = false});
+  const SlideDecksManagerScreen({
+    super.key,
+    this.isAdmin = false,
+    this.isTutor = false,
+  });
 
   @override
   State<SlideDecksManagerScreen> createState() =>
@@ -71,7 +77,7 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: JyamitiLoader())
           : _decks.isEmpty
           ? _buildEmptyState(isDark)
           : ListView.builder(
@@ -204,7 +210,7 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
                     foregroundColor: Colors.white,
                   ),
                 ),
-                if (widget.isAdmin) ...[
+                if (widget.isAdmin || widget.isTutor) ...[
                   const SizedBox(width: 8),
                   IconButton(
                     icon: const Icon(
@@ -221,6 +227,8 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
                       );
                     },
                   ),
+                ],
+                if (widget.isAdmin) ...[
                   IconButton(
                     icon: const Icon(Icons.edit_rounded, color: Colors.amber),
                     tooltip: 'Edit CMS',

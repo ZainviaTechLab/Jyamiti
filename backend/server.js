@@ -24,6 +24,8 @@ import assessmentQuestionsRouter from './routes/assessmentQuestions.js';
 import assessmentSubmissionsRouter from './routes/assessmentSubmissions.js';
 import assignmentsRouter from './routes/assignments.js';
 import slideRouter from './routes/slideRoutes.js';
+import competitionsRouter from './routes/competitions.js';
+import parentMeetingsRouter from './routes/parentMeetings.js';
 import { initScheduleCron } from './services/scheduleGenerator.js';
 import { initPaymentCron } from './services/paymentGenerator.js';
 import { initSocket } from './socket.js';
@@ -90,6 +92,8 @@ app.use('/api/assessment-questions', assessmentQuestionsRouter);
 app.use('/api/assessment-submissions', assessmentSubmissionsRouter);
 app.use('/api/assignments', assignmentsRouter);
 app.use('/api/slide-decks', slideRouter);
+app.use('/api/competitions', competitionsRouter);
+app.use('/api/parent-meetings', parentMeetingsRouter);
 
 // Serve uploads statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -267,7 +268,7 @@ class _TutorManageAssignmentsScreenState extends State<TutorManageAssignmentsScr
   @override
   Widget build(BuildContext context) {
     Widget content = _isLoading
-        ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+        ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
         : _assignments.isEmpty
             ? Center(
                 child: Column(

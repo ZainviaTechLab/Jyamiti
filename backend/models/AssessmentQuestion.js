@@ -9,7 +9,7 @@ const assessmentQuestionSchema = new mongoose.Schema({
   },
   type: { 
     type: String, 
-    enum: ['MCQ_SINGLE', 'MCQ_MULTI', 'SHORT_ANSWER', 'ORDERING', 'MATCHING', 'GEOMETRIC', 'MATRIX_MCQ', 'MATRIX_INPUT', 'EQUATION', 'STATEMENT_DROPDOWN', 'INLINE_SELECT'],
+    enum: ['MCQ_SINGLE', 'MCQ_MULTI', 'SHORT_ANSWER', 'ORDERING', 'MATCHING', 'GEOMETRIC', 'MATRIX_MCQ', 'MATRIX_INPUT', 'EQUATION', 'STATEMENT_DROPDOWN', 'INLINE_SELECT', 'FILL_IN_BLANKS', 'DESCRIPTIVE'],
     required: true 
   },
   descriptiveText: {
@@ -82,7 +82,28 @@ const assessmentQuestionSchema = new mongoose.Schema({
     fontWeight: { type: String, default: 'normal' },
     alignment: { type: String, default: 'center' },
     isVisible: { type: Boolean, default: true }
-  }]
+  }],
+  explanation: {
+    type: String,
+    default: ''
+  },
+  explanationSteps: [{
+    stepNumber: { type: Number, default: 1 },
+    title: { type: String, default: '' },
+    text: { type: String, default: '' },
+    imageUrl: { type: String, default: '' },
+    isSvg: { type: Boolean, default: false },
+    blocks: [{
+      type: { type: String, enum: ['TEXT', 'IMAGE'], default: 'TEXT' },
+      content: { type: String, default: '' },
+      isSvg: { type: Boolean, default: false }
+    }]
+  }],
+  isClasswork: { type: Boolean, default: false },
+  forTutorOnly: { type: Boolean, default: false },
+  isTutorOnly: { type: Boolean, default: false },
+  category: { type: String, default: 'practice' },
+  tag: { type: String, default: '' }
 }, { timestamps: true });
 
 export default mongoose.model('AssessmentQuestion', assessmentQuestionSchema);

@@ -3,6 +3,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../providers/theme_provider.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class StrokePoint {
   Offset offset;
@@ -134,6 +136,10 @@ class WritingPadWidget extends StatefulWidget {
   final bool isFullScreen;
   final VoidCallback? onToggleFullScreen;
   final bool isTransparentBg;
+  final List<DrawnLine>? initialLines;
+  final bool enableSaveNotes;
+  final String? noteId;
+  final String? noteTitle;
 
   const WritingPadWidget({
     super.key,
@@ -143,6 +149,10 @@ class WritingPadWidget extends StatefulWidget {
     this.isFullScreen = false,
     this.onToggleFullScreen,
     this.isTransparentBg = false,
+    this.initialLines,
+    this.enableSaveNotes = false,
+    this.noteId,
+    this.noteTitle,
   });
 
   @override
@@ -178,10 +188,13 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
   AnimationController? _frictionController;
   Animation<Offset>? _frictionAnimation;
 
-  // ── 120 FPS Zero-Rebuild Pan & Zoom via ValueNotifiers ──────────────────
-  // These bypass setState so panning NEVER triggers a widget tree rebuild.
+  // ── 120 FPS Dual-Layer Repaint Boundaries ──────────────────────────────
+  // Layer 1: Finished Strokes & Background (Repaints ONLY when lines list changes)
+  // Layer 2: Active Drawing Overlay (Repaints ONLY active line being drawn)
   late final ValueNotifier<Offset> _panNotifier;
   late final ValueNotifier<double> _scaleNotifier;
+  late final ValueNotifier<int> _finishedStrokesNotifier;
+  late final ValueNotifier<int> _activeDrawingNotifier;
 
   // Active Pointers tracking for Chrome Web Multi-Touch Panning
   final Map<int, Offset> _activePointers = {};
@@ -236,11 +249,19 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
   @override
   void initState() {
     super.initState();
+    if (widget.initialLines != null) {
+      _lines.addAll(widget.initialLines!);
+      for (final line in _lines) {
+        _buildAndCachePath(line);
+      }
+    }
     if (widget.isTransparentBg) {
       _bgMode = CanvasBgMode.blank;
     }
     _panNotifier = ValueNotifier<Offset>(_panOffset);
     _scaleNotifier = ValueNotifier<double>(_scale);
+    _finishedStrokesNotifier = ValueNotifier<int>(0);
+    _activeDrawingNotifier = ValueNotifier<int>(0);
     _frictionController = AnimationController(vsync: this);
   }
 
@@ -249,6 +270,8 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     _canvasFocusNode.dispose();
     _panNotifier.dispose();
     _scaleNotifier.dispose();
+    _finishedStrokesNotifier.dispose();
+    _activeDrawingNotifier.dispose();
     _frictionController?.dispose();
     super.dispose();
   }
@@ -635,12 +658,10 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
           strokeWidth: activeWidth,
           isEraser: isEraserStroke,
         );
-        setState(() {
-          _currentLine = newLine;
-          _lines.add(newLine);
-          _undoHistory.clear();
-          _selectedLines.clear();
-        });
+        _currentLine = newLine;
+        _undoHistory.clear();
+        _selectedLines.clear();
+        _activeDrawingNotifier.value++;
       }
     }
   }
@@ -668,9 +689,8 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       return;
     } else if (_activeShapeTool != null && _shapeDragStartPos != null) {
       final worldPos = _screenToWorld(details.localFocalPoint);
-      setState(() {
-        _shapeDragCurrentPos = worldPos;
-      });
+      _shapeDragCurrentPos = worldPos;
+      _activeDrawingNotifier.value++;
       return;
     } else if (_activeHandle != SelectionHandleType.none &&
         _transformStartPos != null) {
@@ -679,15 +699,15 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
 
       if (_activeHandle == SelectionHandleType.move) {
         final delta = worldPos - _transformStartPos!;
-        setState(() {
-          for (final line in _selectedLines) {
-            for (int i = 0; i < line.points.length; i++) {
-              line.points[i].offset += delta;
-            }
-            line.invalidateCache();
+        for (final line in _selectedLines) {
+          for (int i = 0; i < line.points.length; i++) {
+            line.points[i].offset += delta;
           }
-          _transformStartPos = worldPos;
-        });
+          line.invalidateCache();
+        }
+        _transformStartPos = worldPos;
+        _finishedStrokesNotifier.value++;
+        _activeDrawingNotifier.value++;
       } else if (_activeHandle == SelectionHandleType.rotate &&
           _transformCenter != null) {
         final double currentAngle = atan2(
@@ -700,32 +720,32 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         final double cosA = cos(angleDelta);
         final double sinA = sin(angleDelta);
 
-        setState(() {
-          for (final line in _selectedLines) {
-            if (line.points.isEmpty) continue;
+        for (final line in _selectedLines) {
+          if (line.points.isEmpty) continue;
 
-            // Calculate individual stroke center (centroid of this line's points)
-            double sumX = 0;
-            double sumY = 0;
-            for (final p in line.points) {
-              sumX += p.offset.dx;
-              sumY += p.offset.dy;
-            }
-            final Offset lineCenter = Offset(
-              sumX / line.points.length,
-              sumY / line.points.length,
-            );
-
-            // Rotate each stroke around its OWN individual center!
-            for (int i = 0; i < line.points.length; i++) {
-              final loc = line.points[i].offset - lineCenter;
-              final rotX = loc.dx * cosA - loc.dy * sinA;
-              final rotY = loc.dx * sinA + loc.dy * cosA;
-              line.points[i].offset = lineCenter + Offset(rotX, rotY);
-            }
-            line.invalidateCache();
+          // Calculate individual stroke center (centroid of this line's points)
+          double sumX = 0;
+          double sumY = 0;
+          for (final p in line.points) {
+            sumX += p.offset.dx;
+            sumY += p.offset.dy;
           }
-        });
+          final Offset lineCenter = Offset(
+            sumX / line.points.length,
+            sumY / line.points.length,
+          );
+
+          // Rotate each stroke around its OWN individual center!
+          for (int i = 0; i < line.points.length; i++) {
+            final loc = line.points[i].offset - lineCenter;
+            final rotX = loc.dx * cosA - loc.dy * sinA;
+            final rotY = loc.dx * sinA + loc.dy * cosA;
+            line.points[i].offset = lineCenter + Offset(rotX, rotY);
+          }
+          line.invalidateCache();
+        }
+        _finishedStrokesNotifier.value++;
+        _activeDrawingNotifier.value++;
       } else {
         // Corner Resize (Scale) Mode
         final selectionBounds = _getSelectionBounds();
@@ -740,15 +760,15 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                   .clamp(0.05, 20.0);
           _initialScaleDist = currentDist;
 
-          setState(() {
-            for (final line in _selectedLines) {
-              for (int i = 0; i < line.points.length; i++) {
-                line.points[i].offset =
-                    anchor + (line.points[i].offset - anchor) * scaleFactor;
-              }
-              line.invalidateCache();
+          for (final line in _selectedLines) {
+            for (int i = 0; i < line.points.length; i++) {
+              line.points[i].offset =
+                  anchor + (line.points[i].offset - anchor) * scaleFactor;
             }
-          });
+            line.invalidateCache();
+          }
+          _finishedStrokesNotifier.value++;
+          _activeDrawingNotifier.value++;
         }
       }
       return;
@@ -758,39 +778,40 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       final worldPos = _screenToWorld(details.localFocalPoint);
       final hitLine = _findLineAt(worldPos);
       if (hitLine != null) {
-        setState(() {
-          _undoHistory.add(hitLine);
-          _lines.remove(hitLine);
-          _selectedLines.remove(hitLine);
-        });
+        _undoHistory.add(hitLine);
+        _lines.remove(hitLine);
+        _selectedLines.remove(hitLine);
+        _finishedStrokesNotifier.value++;
+        _activeDrawingNotifier.value++;
       }
       return;
     } else if (_isDraggingSelection && _lastDragWorldPos != null) {
       // Moving/dragging selected items in real time
       final worldPos = _screenToWorld(details.localFocalPoint);
       final delta = worldPos - _lastDragWorldPos!;
-      setState(() {
-        for (final line in _selectedLines) {
-          for (int i = 0; i < line.points.length; i++) {
-            line.points[i].offset += delta;
-          }
+      for (final line in _selectedLines) {
+        for (int i = 0; i < line.points.length; i++) {
+          line.points[i].offset += delta;
         }
-        _lastDragWorldPos = worldPos;
-      });
+        line.invalidateCache();
+      }
+      _lastDragWorldPos = worldPos;
+      _finishedStrokesNotifier.value++;
+      _activeDrawingNotifier.value++;
     } else if (_toolMode == CanvasToolMode.lasso && _lassoPoints.isNotEmpty) {
       final worldPos = _screenToWorld(details.localFocalPoint);
-      setState(() {
-        _lassoPoints.add(worldPos);
-      });
+      _lassoPoints.add(worldPos);
+      _activeDrawingNotifier.value++;
     } else if (_currentLine != null) {
       // 1-finger drawing stroke update
       final worldPos = _screenToWorld(details.localFocalPoint);
       if (_currentLine!.points.isEmpty ||
           (worldPos - _currentLine!.points.last.offset).distance >= 1.2) {
-        setState(() {
-          _currentLine!.points.add(StrokePoint(worldPos));
-          _currentLine!.invalidateCache();
-        });
+        _currentLine!.points.add(StrokePoint(worldPos));
+        if (_currentLine!.isEraser) {
+          _finishedStrokesNotifier.value++;
+        }
+        _activeDrawingNotifier.value++;
       }
     }
   }
@@ -811,6 +832,10 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
           _penWidth,
         );
 
+        for (final line in newShapeLines) {
+          _buildAndCachePath(line);
+        }
+
         setState(() {
           _lines.addAll(newShapeLines);
           _selectedLines.clear();
@@ -819,6 +844,8 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
           _selectedWidth = _penWidth;
           _activeShapeTool = null;
         });
+        _finishedStrokesNotifier.value++;
+        _activeDrawingNotifier.value++;
       }
       _shapeDragStartPos = null;
       _shapeDragCurrentPos = null;
@@ -832,6 +859,10 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     if (_isDraggingSelection) {
       _isDraggingSelection = false;
       _lastDragWorldPos = null;
+      for (final line in _selectedLines) {
+        _buildAndCachePath(line);
+      }
+      _finishedStrokesNotifier.value++;
       return;
     }
 
@@ -860,6 +891,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         _selectedLines.addAll(selectedContained);
         _lassoPoints = [];
       });
+      _activeDrawingNotifier.value++;
     }
 
     // Trigger smooth inertial gliding velocity physics when flinging 2 fingers or Hand Tool
@@ -867,9 +899,14 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       _startInertialFling(details.velocity.pixelsPerSecond);
     }
 
-    setState(() {
+    if (_currentLine != null) {
+      _currentLine!.invalidateCache();
+      _buildAndCachePath(_currentLine!);
+      _lines.add(_currentLine!);
       _currentLine = null;
-    });
+      _finishedStrokesNotifier.value++;
+      _activeDrawingNotifier.value++;
+    }
   }
 
   void _handleEraserButtonTap() {
@@ -955,7 +992,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     final Offset translation = (targetCenter + stepOffset) - clipboardCenter;
 
     final List<DrawnLine> pasted = _clipboard.map((line) {
-      return DrawnLine(
+      final newLine = DrawnLine(
         points: line.points
             .map((p) => StrokePoint(p.offset + translation))
             .toList(),
@@ -964,6 +1001,8 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         isEraser: line.isEraser,
         isShape: line.isShape,
       );
+      _buildAndCachePath(newLine);
+      return newLine;
     }).toList();
 
     setState(() {
@@ -972,6 +1011,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       _selectedLines.clear();
       _selectedLines.addAll(pasted);
     });
+    _finishedStrokesNotifier.value++;
   }
 
   // Duplicate Selected Strokes
@@ -991,6 +1031,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
       );
+      _buildAndCachePath(newLine);
       duplicatedLines.add(newLine);
     }
 
@@ -1000,6 +1041,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       _selectedLines.clear();
       _selectedLines.addAll(duplicatedLines);
     });
+    _finishedStrokesNotifier.value++;
   }
 
   void _deleteSelectedLines() {
@@ -1009,6 +1051,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         _lines.removeWhere((line) => _selectedLines.contains(line));
         _selectedLines.clear();
       });
+      _finishedStrokesNotifier.value++;
     }
   }
 
@@ -1425,15 +1468,19 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         _undoHistory.add(_lines.removeLast());
         _selectedLines.clear();
       });
+      _finishedStrokesNotifier.value++;
     }
   }
 
   void _redo() {
     if (_undoHistory.isNotEmpty) {
+      final restored = _undoHistory.removeLast();
+      _buildAndCachePath(restored);
       setState(() {
-        _lines.add(_undoHistory.removeLast());
+        _lines.add(restored);
         _selectedLines.clear();
       });
+      _finishedStrokesNotifier.value++;
     }
   }
 
@@ -1444,6 +1491,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       _selectedLines.clear();
       _lassoPoints.clear();
     });
+    _finishedStrokesNotifier.value++;
   }
 
   @override
@@ -1452,8 +1500,8 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     final bgColor = widget.isTransparentBg
         ? Colors.transparent
         : (_bgMode == CanvasBgMode.jyamitiCosmos
-            ? const Color(0xFF0F2B52)
-            : (isDark ? const Color(0xFF0F172A) : const Color(0xFFFCFDFE)));
+              ? const Color(0xFF0F2B52)
+              : (isDark ? const Color(0xFF0F172A) : const Color(0xFFFCFDFE)));
 
     return Focus(
       focusNode: _canvasFocusNode,
@@ -1518,33 +1566,64 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                         onScaleStart: _onScaleStart,
                         onScaleUpdate: _onScaleUpdate,
                         onScaleEnd: _onScaleEnd,
-                        // ValueListenableBuilder – repaints ONLY the canvas on pan/zoom
-                        // without triggering any parent setState → pure 120 FPS panning!
+                        // ValueListenableBuilder Dual-Layer Stack:
+                        // Layer 1 (Finished Strokes): Repaints ONLY when _lines updates (0 repaints during live drag)
+                        // Layer 2 (Active Drawing): Repaints live stroke overlay at 120 FPS
                         child: ValueListenableBuilder<Offset>(
                           valueListenable: _panNotifier,
                           builder: (_, pan, child) {
                             return ValueListenableBuilder<double>(
                               valueListenable: _scaleNotifier,
                               builder: (_, sc, child) {
-                                return RepaintBoundary(
-                                  child: CustomPaint(
-                                    size: Size.infinite,
-                                    painter: _InfiniteWritingCanvasPainter(
-                                      lines: _lines,
-                                      selectedLines: _selectedLines,
-                                      lassoPoints: _lassoPoints,
-                                      bgMode: _bgMode,
-                                      isDark: isDark,
-                                      canvasBgColor: bgColor,
-                                      panOffset: pan,
-                                      scale: sc,
-                                      activeShapeTool: _activeShapeTool,
-                                      shapeDragStartPos: _shapeDragStartPos,
-                                      shapeDragCurrentPos: _shapeDragCurrentPos,
-                                      selectedColor: _selectedColor,
-                                      penWidth: _penWidth,
+                                return Stack(
+                                  children: [
+                                    // Layer 1: Finished Strokes & Background
+                                    ValueListenableBuilder<int>(
+                                      valueListenable: _finishedStrokesNotifier,
+                                      builder: (_, _, child) {
+                                        return RepaintBoundary(
+                                          child: CustomPaint(
+                                            size: Size.infinite,
+                                            painter: _FinishedStrokesPainter(
+                                              lines: _lines,
+                                              bgMode: _bgMode,
+                                              isDark: isDark,
+                                              canvasBgColor: bgColor,
+                                              panOffset: pan,
+                                              scale: sc,
+                                            ),
+                                          ),
+                                        );
+                                      },
                                     ),
-                                  ),
+
+                                    // Layer 2: Active Drawing Overlay & Handles
+                                    ValueListenableBuilder<int>(
+                                      valueListenable: _activeDrawingNotifier,
+                                      builder: (_, _, child) {
+                                        return RepaintBoundary(
+                                          child: CustomPaint(
+                                            size: Size.infinite,
+                                            painter: _ActiveDrawingOverlayPainter(
+                                              currentLine: _currentLine,
+                                              selectedLines: _selectedLines,
+                                              lassoPoints: _lassoPoints,
+                                              panOffset: pan,
+                                              scale: sc,
+                                              activeShapeTool: _activeShapeTool,
+                                              shapeDragStartPos:
+                                                  _shapeDragStartPos,
+                                              shapeDragCurrentPos:
+                                                  _shapeDragCurrentPos,
+                                              selectedColor: _selectedColor,
+                                              penWidth: _penWidth,
+                                              isDark: isDark,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ],
                                 );
                               },
                             );
@@ -1562,8 +1641,8 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                           return const SizedBox();
                         }
 
-                        final String effectiveQText =
-                            widget.questionText!.trim();
+                        final String effectiveQText = widget.questionText!
+                            .trim();
 
                         return Positioned(
                           top: 10,
@@ -2318,6 +2397,50 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
               onTap: _clearCanvas,
             ),
 
+            if (widget.enableSaveNotes) ...[
+              const SizedBox(width: 6),
+              Tooltip(
+                message: 'Save Note to My Notes',
+                child: InkWell(
+                  onTap: _saveNote,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: const Color(0xFF10B981),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.save_rounded,
+                          size: 15,
+                          color: Color(0xFF10B981),
+                        ),
+                        const SizedBox(width: 4),
+                        const Text(
+                          'Save Note',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF10B981),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+
             // Paste Button – visible ONLY when clipboard has copied strokes
             if (_clipboard.isNotEmpty) ...[
               const SizedBox(width: 6),
@@ -2411,119 +2534,293 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       ),
     );
   }
+
+  Future<void> _saveNote() async {
+    final titleController = TextEditingController(text: widget.noteTitle ?? '');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          title: Text(
+            widget.noteId != null
+                ? 'Update Saved Note'
+                : 'Save Note to My Notes',
+            style: TextStyle(
+              color: isDark ? Colors.white : Colors.black,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Enter a label for this note:',
+                style: TextStyle(
+                  color: isDark ? Colors.white70 : Colors.black87,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: titleController,
+                autofocus: true,
+                style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                decoration: InputDecoration(
+                  labelText: 'Note Label',
+                  labelStyle: TextStyle(
+                    color: isDark ? Colors.white60 : Colors.black,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(
+                      color: isDark ? Colors.white70 : Colors.black26,
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(
+                      color: Color(0xFF6366F1),
+                      width: 1.5,
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Colors.redAccent),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (titleController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Please enter a note label')),
+                  );
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6366F1),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text(
+                'Save',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      final label = titleController.text.trim();
+      final prefs = await SharedPreferences.getInstance();
+      final savedNotesStr = prefs.getString('jyamiti_my_notes') ?? '[]';
+      final List<dynamic> savedNotes = jsonDecode(savedNotesStr);
+
+      final serializedLines = _lines.map(_lineToJson).toList();
+      final noteId =
+          widget.noteId ?? DateTime.now().millisecondsSinceEpoch.toString();
+      final newNote = {
+        'id': noteId,
+        'title': label,
+        'timestamp': DateTime.now().toIso8601String(),
+        'lines': serializedLines,
+      };
+
+      if (widget.noteId != null) {
+        final index = savedNotes.indexWhere((n) => n['id'] == widget.noteId);
+        if (index != -1) {
+          savedNotes[index] = newNote;
+        } else {
+          savedNotes.add(newNote);
+        }
+      } else {
+        savedNotes.add(newNote);
+      }
+
+      await prefs.setString('jyamiti_my_notes', jsonEncode(savedNotes));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Note "$label" saved successfully!'),
+            backgroundColor: const Color(0xFF10B981),
+          ),
+        );
+      }
+    }
+  }
+
+  Map<String, dynamic> _lineToJson(DrawnLine line) {
+    return {
+      'points': line.points
+          .map((p) => {'dx': p.offset.dx, 'dy': p.offset.dy})
+          .toList(),
+      'color': line.color.value,
+      'strokeWidth': line.strokeWidth,
+      'isEraser': line.isEraser,
+      'isShape': line.isShape,
+    };
+  }
 }
 
-class _InfiniteWritingCanvasPainter extends CustomPainter {
+// ── Top-Level Helper Utilities for High Performance Curve Smoothing ─────────────
+List<Offset> _chaikinSmooth(List<Offset> pts, {int iterations = 3}) {
+  if (pts.length < 3) return pts;
+
+  List<Offset> filtered = [pts.first];
+  for (int i = 1; i < pts.length - 1; i++) {
+    final prev = pts[i - 1];
+    final curr = pts[i];
+    final next = pts[i + 1];
+    filtered.add(
+      Offset(
+        0.20 * prev.dx + 0.60 * curr.dx + 0.20 * next.dx,
+        0.20 * prev.dy + 0.60 * curr.dy + 0.20 * next.dy,
+      ),
+    );
+  }
+  filtered.add(pts.last);
+
+  List<Offset> current = filtered;
+  for (int it = 0; it < iterations; it++) {
+    if (current.length < 3) break;
+    List<Offset> next = [current.first];
+    for (int i = 0; i < current.length - 1; i++) {
+      final p0 = current[i];
+      final p1 = current[i + 1];
+
+      final q = Offset(
+        0.75 * p0.dx + 0.25 * p1.dx,
+        0.75 * p0.dy + 0.25 * p1.dy,
+      );
+      final r = Offset(
+        0.25 * p0.dx + 0.75 * p1.dx,
+        0.25 * p0.dy + 0.75 * p1.dy,
+      );
+
+      next.add(q);
+      next.add(r);
+    }
+    next.add(current.last);
+    current = next;
+  }
+  return current;
+}
+
+void _buildAndCachePath(DrawnLine line) {
+  if (line.points.isEmpty) return;
+
+  if (line.points.length == 1) {
+    final path = Path();
+    path.addOval(
+      Rect.fromCircle(
+        center: line.points.first.offset,
+        radius: line.strokeWidth / 2,
+      ),
+    );
+    line.cachedPath = path;
+    line.cachedBounds = Rect.fromCircle(
+      center: line.points.first.offset,
+      radius: line.strokeWidth / 2,
+    );
+    return;
+  }
+
+  if (line.isShape || line.points.length <= 2) {
+    final path = Path();
+    path.moveTo(line.points[0].offset.dx, line.points[0].offset.dy);
+    for (int i = 1; i < line.points.length; i++) {
+      path.lineTo(line.points[i].offset.dx, line.points[i].offset.dy);
+    }
+    line.cachedPath = path;
+  } else {
+    final List<Offset> rawOffsets = line.points.map((p) => p.offset).toList();
+    final List<Offset> smoothPts = _chaikinSmooth(rawOffsets, iterations: 3);
+
+    final path = Path();
+    path.moveTo(smoothPts[0].dx, smoothPts[0].dy);
+
+    for (int i = 1; i < smoothPts.length - 1; i++) {
+      final pPrev = smoothPts[i];
+      final pNext = smoothPts[i + 1];
+      final midX = (pPrev.dx + pNext.dx) / 2;
+      final midY = (pPrev.dy + pNext.dy) / 2;
+      path.quadraticBezierTo(pPrev.dx, pPrev.dy, midX, midY);
+    }
+
+    final lastPrev = smoothPts[smoothPts.length - 2];
+    final last = smoothPts.last;
+    path.quadraticBezierTo(lastPrev.dx, lastPrev.dy, last.dx, last.dy);
+
+    line.cachedPath = path;
+  }
+
+  double minX = line.points.first.offset.dx;
+  double maxX = minX;
+  double minY = line.points.first.offset.dy;
+  double maxY = minY;
+  for (int i = 1; i < line.points.length; i++) {
+    final p = line.points[i].offset;
+    if (p.dx < minX) minX = p.dx;
+    if (p.dx > maxX) maxX = p.dx;
+    if (p.dy < minY) minY = p.dy;
+    if (p.dy > maxY) maxY = p.dy;
+  }
+  line.cachedBounds = Rect.fromLTRB(minX, minY, maxX, maxY);
+}
+
+// ── Layer 1: Finished Strokes & Background Painter ─────────────────────────────
+class _FinishedStrokesPainter extends CustomPainter {
   final List<DrawnLine> lines;
-  final Set<DrawnLine> selectedLines;
-  final List<Offset> lassoPoints;
   final CanvasBgMode bgMode;
   final bool isDark;
   final Color canvasBgColor;
   final Offset panOffset;
   final double scale;
-  final BasicShapeType? activeShapeTool;
-  final Offset? shapeDragStartPos;
-  final Offset? shapeDragCurrentPos;
-  final Color selectedColor;
-  final double penWidth;
 
-  _InfiniteWritingCanvasPainter({
+  _FinishedStrokesPainter({
     required this.lines,
-    required this.selectedLines,
-    required this.lassoPoints,
     required this.bgMode,
     required this.isDark,
     required this.canvasBgColor,
     required this.panOffset,
     required this.scale,
-    this.activeShapeTool,
-    this.shapeDragStartPos,
-    this.shapeDragCurrentPos,
-    this.selectedColor = const Color(0xFF6366F1),
-    this.penWidth = 3.0,
   });
-
-  Rect? _getGroupBounds(Set<DrawnLine> selection) {
-    if (selection.isEmpty) return null;
-    double minX = double.infinity;
-    double maxX = -double.infinity;
-    double minY = double.infinity;
-    double maxY = -double.infinity;
-
-    for (final line in selection) {
-      for (final p in line.points) {
-        if (p.offset.dx < minX) minX = p.offset.dx;
-        if (p.offset.dx > maxX) maxX = p.offset.dx;
-        if (p.offset.dy < minY) minY = p.offset.dy;
-        if (p.offset.dy > maxY) maxY = p.offset.dy;
-      }
-    }
-
-    if (minX == double.infinity) return null;
-    return Rect.fromLTRB(minX, minY, maxX, maxY).inflate(16.0);
-  }
-
-  List<Offset> _chaikinSmooth(List<Offset> pts, {int iterations = 3}) {
-    if (pts.length < 3) return pts;
-
-    // 1. 3-Point Gaussian Low-Pass Filter to remove digitizer touch hardware jitter
-    List<Offset> filtered = [pts.first];
-    for (int i = 1; i < pts.length - 1; i++) {
-      final prev = pts[i - 1];
-      final curr = pts[i];
-      final next = pts[i + 1];
-      filtered.add(
-        Offset(
-          0.20 * prev.dx + 0.60 * curr.dx + 0.20 * next.dx,
-          0.20 * prev.dy + 0.60 * curr.dy + 0.20 * next.dy,
-        ),
-      );
-    }
-    filtered.add(pts.last);
-
-    // 2. 3-Pass Chaikin Corner-Cutting Subdivision for silky $C^1$ curve continuity
-    List<Offset> current = filtered;
-    for (int it = 0; it < iterations; it++) {
-      if (current.length < 3) break;
-      List<Offset> next = [current.first];
-      for (int i = 0; i < current.length - 1; i++) {
-        final p0 = current[i];
-        final p1 = current[i + 1];
-
-        final q = Offset(
-          0.75 * p0.dx + 0.25 * p1.dx,
-          0.75 * p0.dy + 0.25 * p1.dy,
-        );
-        final r = Offset(
-          0.25 * p0.dx + 0.75 * p1.dx,
-          0.25 * p0.dy + 0.75 * p1.dy,
-        );
-
-        next.add(q);
-        next.add(r);
-      }
-      next.add(current.last);
-      current = next;
-    }
-    return current;
-  }
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.save();
     try {
-      // 1. Apply Infinite Viewport Transformation (Pan & Zoom)
       canvas.translate(panOffset.dx, panOffset.dy);
       canvas.scale(scale);
 
-      // Calculate visible viewport bounds in World Coordinates
       final double startX = ((-panOffset.dx) / scale);
       final double endX = ((size.width - panOffset.dx) / scale);
       final double startY = ((-panOffset.dy) / scale);
       final double endY = ((size.height - panOffset.dy) / scale);
 
-      // 2. Draw Infinite Background Grid / Lined Paper
+      // 1. Draw Paper Pattern
       final gridPaint = Paint()
         ..color = (isDark ? Colors.white : Colors.indigo).withOpacity(0.07)
         ..strokeWidth = 1.0 / scale;
@@ -2536,38 +2833,24 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
         final double gridEndY = (endY / step).ceil() * step + step;
 
         for (double x = gridStartX; x <= gridEndX; x += step) {
-          canvas.drawLine(
-            Offset(x, gridStartY),
-            Offset(x, gridEndY),
-            gridPaint,
-          );
+          canvas.drawLine(Offset(x, gridStartY), Offset(x, gridEndY), gridPaint);
         }
         for (double y = gridStartY; y <= gridEndY; y += step) {
-          canvas.drawLine(
-            Offset(gridStartX, y),
-            Offset(gridEndX, y),
-            gridPaint,
-          );
+          canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
         }
       } else if (bgMode == CanvasBgMode.ruled) {
         const double lineStep = 32.0;
-        final double gridStartX =
-            (startX / lineStep).floor() * lineStep - lineStep;
+        final double gridStartX = (startX / lineStep).floor() * lineStep - lineStep;
         final double gridEndX = (endX / lineStep).ceil() * lineStep + lineStep;
-        final double lineStartY =
-            (startY / lineStep).floor() * lineStep - lineStep;
+        final double lineStartY = (startY / lineStep).floor() * lineStep - lineStep;
         final double lineEndY = (endY / lineStep).ceil() * lineStep + lineStep;
 
         for (double y = lineStartY; y <= lineEndY; y += lineStep) {
-          canvas.drawLine(
-            Offset(gridStartX, y),
-            Offset(gridEndX, y),
-            gridPaint,
-          );
+          canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
         }
       }
 
-      // 3. Viewport Spatial Culling Optimization using cached stroke bounds
+      // 2. Viewport Spatial Culling Optimization
       final visibleLines = lines.where((line) {
         if (line.points.isEmpty) return false;
         if (line.cachedBounds == null) {
@@ -2591,9 +2874,8 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
             b.top <= endY + 100;
       }).toList();
 
-      // 4. Render visible strokes (Only invoke expensive offscreen saveLayer if pixel eraser stroke is active)
+      // 3. Render Strokes
       final bool hasPixelEraser = visibleLines.any((l) => l.isEraser);
-
       if (hasPixelEraser) {
         final Rect layerBounds = Rect.fromLTRB(
           startX - 100,
@@ -2610,9 +2892,6 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
       } else {
         _drawStrokes(canvas, visibleLines);
       }
-
-      // 5. Draw Highlight Bounding Box & Control Handles around Selection Group
-      _drawSelectionOverlay(canvas);
     } finally {
       canvas.restore();
     }
@@ -2644,45 +2923,11 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
           paint,
         );
       } else {
-        // Compile & cache high-end Chaikin Subdivided Bezier Ink Curve once!
         if (line.cachedPath == null) {
-          if (line.isShape || line.points.length <= 2) {
-            final path = Path();
-            path.moveTo(line.points[0].offset.dx, line.points[0].offset.dy);
-            for (int i = 1; i < line.points.length; i++) {
-              path.lineTo(line.points[i].offset.dx, line.points[i].offset.dy);
-            }
-            line.cachedPath = path;
-          } else {
-            final List<Offset> rawOffsets = line.points
-                .map((p) => p.offset)
-                .toList();
-            final List<Offset> smoothPts = _chaikinSmooth(
-              rawOffsets,
-              iterations: 3,
-            );
-
-            final path = Path();
-            path.moveTo(smoothPts[0].dx, smoothPts[0].dy);
-
-            for (int i = 1; i < smoothPts.length - 1; i++) {
-              final pPrev = smoothPts[i];
-              final pNext = smoothPts[i + 1];
-              final midX = (pPrev.dx + pNext.dx) / 2;
-              final midY = (pPrev.dy + pNext.dy) / 2;
-              path.quadraticBezierTo(pPrev.dx, pPrev.dy, midX, midY);
-            }
-
-            final lastPrev = smoothPts[smoothPts.length - 2];
-            final last = smoothPts.last;
-            path.quadraticBezierTo(lastPrev.dx, lastPrev.dy, last.dx, last.dy);
-
-            line.cachedPath = path;
-          }
+          _buildAndCachePath(line);
         }
 
         if (!line.isEraser) {
-          // Soft dual-layer gel ink halo for ultra-polished, soft digital handwriting
           final softUnderPaint = Paint()
             ..isAntiAlias = true
             ..strokeCap = StrokeCap.round
@@ -2690,13 +2935,206 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
             ..style = PaintingStyle.stroke
             ..color = line.color.withValues(alpha: 0.12)
             ..strokeWidth = line.strokeWidth * 1.35;
-
           canvas.drawPath(line.cachedPath!, softUnderPaint);
         }
 
         canvas.drawPath(line.cachedPath!, paint);
       }
     }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FinishedStrokesPainter oldDelegate) {
+    return true;
+  }
+}
+
+// ── Layer 2: Active Live Drawing & Selection Overlay Painter ────────────────────
+class _ActiveDrawingOverlayPainter extends CustomPainter {
+  final DrawnLine? currentLine;
+  final Set<DrawnLine> selectedLines;
+  final List<Offset> lassoPoints;
+  final Offset panOffset;
+  final double scale;
+  final BasicShapeType? activeShapeTool;
+  final Offset? shapeDragStartPos;
+  final Offset? shapeDragCurrentPos;
+  final Color selectedColor;
+  final double penWidth;
+  final bool isDark;
+
+  _ActiveDrawingOverlayPainter({
+    required this.currentLine,
+    required this.selectedLines,
+    required this.lassoPoints,
+    required this.panOffset,
+    required this.scale,
+    this.activeShapeTool,
+    this.shapeDragStartPos,
+    this.shapeDragCurrentPos,
+    this.selectedColor = const Color(0xFF6366F1),
+    this.penWidth = 3.0,
+    required this.isDark,
+  });
+
+  Rect? _getGroupBounds(Set<DrawnLine> selection) {
+    if (selection.isEmpty) return null;
+    double minX = double.infinity;
+    double maxX = -double.infinity;
+    double minY = double.infinity;
+    double maxY = -double.infinity;
+
+    for (final line in selection) {
+      for (final p in line.points) {
+        if (p.offset.dx < minX) minX = p.offset.dx;
+        if (p.offset.dx > maxX) maxX = p.offset.dx;
+        if (p.offset.dy < minY) minY = p.offset.dy;
+        if (p.offset.dy > maxY) maxY = p.offset.dy;
+      }
+    }
+
+    if (minX == double.infinity) return null;
+    return Rect.fromLTRB(minX, minY, maxX, maxY).inflate(16.0);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    try {
+      canvas.translate(panOffset.dx, panOffset.dy);
+      canvas.scale(scale);
+
+      // 1. Draw Active Stroke Live Path
+      if (currentLine != null && currentLine!.points.isNotEmpty) {
+        final line = currentLine!;
+        final paint = Paint()
+          ..isAntiAlias = true
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..style = PaintingStyle.stroke;
+
+        if (line.isEraser) {
+          paint.blendMode = BlendMode.clear;
+          paint.strokeWidth = line.strokeWidth * 3.5;
+        } else {
+          paint.color = line.color;
+          paint.strokeWidth = line.strokeWidth;
+        }
+
+        if (line.points.length == 1) {
+          paint.style = PaintingStyle.fill;
+          canvas.drawCircle(
+            line.points.first.offset,
+            paint.strokeWidth / 2,
+            paint,
+          );
+        } else {
+          final Path livePath = _buildLivePath(line);
+          if (!line.isEraser) {
+            final softUnderPaint = Paint()
+              ..isAntiAlias = true
+              ..strokeCap = StrokeCap.round
+              ..strokeJoin = StrokeJoin.round
+              ..style = PaintingStyle.stroke
+              ..color = line.color.withValues(alpha: 0.12)
+              ..strokeWidth = line.strokeWidth * 1.35;
+            canvas.drawPath(livePath, softUnderPaint);
+          }
+          canvas.drawPath(livePath, paint);
+        }
+      }
+
+      // 2. Draw Selection Overlay Box & Handles
+      _drawSelectionOverlay(canvas);
+
+      // 3. Draw Lasso Loop
+      if (lassoPoints.length > 1) {
+        final lassoPath = Path();
+        lassoPath.moveTo(lassoPoints.first.dx, lassoPoints.first.dy);
+        for (int i = 1; i < lassoPoints.length; i++) {
+          lassoPath.lineTo(lassoPoints[i].dx, lassoPoints[i].dy);
+        }
+        lassoPath.close();
+
+        final fillPaint = Paint()
+          ..color = const Color(0xFF6366F1).withOpacity(0.18)
+          ..style = PaintingStyle.fill;
+
+        final borderPaint = Paint()
+          ..color = const Color(0xFF6366F1)
+          ..strokeWidth = 2.0 / scale
+          ..style = PaintingStyle.stroke;
+
+        canvas.drawPath(lassoPath, fillPaint);
+        canvas.drawPath(lassoPath, borderPaint);
+      }
+
+      // 4. Draw Active Shape Drag Preview
+      if (activeShapeTool != null &&
+          shapeDragStartPos != null &&
+          shapeDragCurrentPos != null) {
+        final Rect shapeRect = Rect.fromPoints(
+          shapeDragStartPos!,
+          shapeDragCurrentPos!,
+        );
+        final previewLines = _WritingPadWidgetState.generateShapeLinesInRect(
+          activeShapeTool!,
+          shapeRect,
+          selectedColor,
+          penWidth,
+        );
+
+        final previewPaint = Paint()
+          ..color = selectedColor
+          ..strokeWidth = penWidth
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round;
+
+        final fillPreviewPaint = Paint()
+          ..color = selectedColor.withOpacity(0.06)
+          ..style = PaintingStyle.fill;
+
+        canvas.drawRect(shapeRect, fillPreviewPaint);
+
+        for (final line in previewLines) {
+          if (line.points.length > 1) {
+            final path = Path();
+            path.moveTo(
+              line.points.first.offset.dx,
+              line.points.first.offset.dy,
+            );
+            for (int i = 1; i < line.points.length; i++) {
+              path.lineTo(line.points[i].offset.dx, line.points[i].offset.dy);
+            }
+            canvas.drawPath(path, previewPaint);
+          }
+        }
+      }
+    } finally {
+      canvas.restore();
+    }
+  }
+
+  Path _buildLivePath(DrawnLine line) {
+    final path = Path();
+    if (line.points.isEmpty) return path;
+
+    path.moveTo(line.points[0].offset.dx, line.points[0].offset.dy);
+    if (line.points.length == 2) {
+      path.lineTo(line.points[1].offset.dx, line.points[1].offset.dy);
+      return path;
+    }
+
+    for (int i = 1; i < line.points.length - 1; i++) {
+      final pPrev = line.points[i].offset;
+      final pNext = line.points[i + 1].offset;
+      final midX = (pPrev.dx + pNext.dx) / 2;
+      final midY = (pPrev.dy + pNext.dy) / 2;
+      path.quadraticBezierTo(pPrev.dx, pPrev.dy, midX, midY);
+    }
+    path.lineTo(line.points.last.offset.dx, line.points.last.offset.dy);
+    return path;
   }
 
   void _drawSelectionOverlay(Canvas canvas) {
@@ -2719,13 +3157,11 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
         selectBoxPaint,
       );
 
-      // Draw 4 Corner Resize Handles & Top Rotation Control Handle
       final Offset rotHandlePos = Offset(
         selectionBounds.center.dx,
         selectionBounds.top - 28.0 / scale,
       );
 
-      // Stem line for Rotation Handle
       final stemPaint = Paint()
         ..color = const Color(0xFF6366F1)
         ..strokeWidth = 1.8 / scale
@@ -2736,7 +3172,6 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
         stemPaint,
       );
 
-      // Top Rotation Handle Knob (White Circle with Indigo Border)
       final rotBgPaint = Paint()
         ..color = isDark ? const Color(0xFF1E293B) : Colors.white
         ..style = PaintingStyle.fill;
@@ -2752,7 +3187,6 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
       canvas.drawCircle(rotHandlePos, 8.0 / scale, rotBorderPaint);
       canvas.drawCircle(rotHandlePos, 3.0 / scale, rotCenterDotPaint);
 
-      // 4 Corner Resize Control Handles
       final cornerBgPaint = Paint()
         ..color = isDark ? const Color(0xFF1E293B) : Colors.white
         ..style = PaintingStyle.fill;
@@ -2774,85 +3208,47 @@ class _InfiniteWritingCanvasPainter extends CustomPainter {
         canvas.drawCircle(corner, cornerRadius, cornerBorderPaint);
       }
     }
-
-    // Draw Freehand Lasso Selection Loop if active
-    if (lassoPoints.length > 1) {
-      final lassoPath = Path();
-      lassoPath.moveTo(lassoPoints.first.dx, lassoPoints.first.dy);
-      for (int i = 1; i < lassoPoints.length; i++) {
-        lassoPath.lineTo(lassoPoints[i].dx, lassoPoints[i].dy);
-      }
-      lassoPath.close();
-
-      final fillPaint = Paint()
-        ..color = const Color(0xFF6366F1).withOpacity(0.18)
-        ..style = PaintingStyle.fill;
-
-      final borderPaint = Paint()
-        ..color = const Color(0xFF6366F1)
-        ..strokeWidth = 2.0 / scale
-        ..style = PaintingStyle.stroke;
-
-      canvas.drawPath(lassoPath, fillPaint);
-      canvas.drawPath(lassoPath, borderPaint);
-    }
-
-    // Draw Live Preview of Drag-to-Draw Shape Tool if actively dragging on canvas
-    if (activeShapeTool != null &&
-        shapeDragStartPos != null &&
-        shapeDragCurrentPos != null) {
-      final Rect shapeRect = Rect.fromPoints(
-        shapeDragStartPos!,
-        shapeDragCurrentPos!,
-      );
-      final previewLines = _WritingPadWidgetState.generateShapeLinesInRect(
-        activeShapeTool!,
-        shapeRect,
-        selectedColor,
-        penWidth,
-      );
-
-      final previewPaint = Paint()
-        ..color = selectedColor
-        ..strokeWidth = penWidth
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
-
-      final fillPreviewPaint = Paint()
-        ..color = selectedColor.withOpacity(0.06)
-        ..style = PaintingStyle.fill;
-
-      canvas.drawRect(shapeRect, fillPreviewPaint);
-
-      for (final line in previewLines) {
-        if (line.points.length > 1) {
-          final path = Path();
-          path.moveTo(line.points.first.offset.dx, line.points.first.offset.dy);
-          for (int i = 1; i < line.points.length; i++) {
-            path.lineTo(line.points[i].offset.dx, line.points[i].offset.dy);
-          }
-          canvas.drawPath(path, previewPaint);
-        }
-      }
-    }
   }
 
   @override
-  bool shouldRepaint(covariant _InfiniteWritingCanvasPainter oldDelegate) {
+  bool shouldRepaint(covariant _ActiveDrawingOverlayPainter oldDelegate) {
     return true;
   }
 }
 
 class JyamitiPadFullScreenPage extends StatelessWidget {
   final String? questionText;
+  final List<DrawnLine>? initialLines;
+  final bool enableSaveNotes;
+  final String? noteId;
+  final String? noteTitle;
 
-  const JyamitiPadFullScreenPage({super.key, this.questionText});
+  const JyamitiPadFullScreenPage({
+    super.key,
+    this.questionText,
+    this.initialLines,
+    this.enableSaveNotes = false,
+    this.noteId,
+    this.noteTitle,
+  });
 
-  static void open(BuildContext context, {String? questionText}) {
+  static void open(
+    BuildContext context, {
+    String? questionText,
+    List<DrawnLine>? initialLines,
+    bool enableSaveNotes = false,
+    String? noteId,
+    String? noteTitle,
+  }) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => JyamitiPadFullScreenPage(questionText: questionText),
+        builder: (_) => JyamitiPadFullScreenPage(
+          questionText: questionText,
+          initialLines: initialLines,
+          enableSaveNotes: enableSaveNotes,
+          noteId: noteId,
+          noteTitle: noteTitle,
+        ),
       ),
     );
   }
@@ -2867,6 +3263,10 @@ class JyamitiPadFullScreenPage extends StatelessWidget {
         child: WritingPadWidget(
           questionText: questionText,
           isFullScreen: true,
+          initialLines: initialLines,
+          enableSaveNotes: enableSaveNotes,
+          noteId: noteId,
+          noteTitle: noteTitle,
           onClose: () => Navigator.of(context).pop(),
         ),
       ),
@@ -2877,18 +3277,25 @@ class JyamitiPadFullScreenPage extends StatelessWidget {
 class JyamitiPadFab extends StatelessWidget {
   final VoidCallback? onPressed;
   final String heroTag;
+  final bool enableSaveNotes;
 
   const JyamitiPadFab({
     super.key,
     this.onPressed,
     this.heroTag = 'jyamiti_pad_fab',
+    this.enableSaveNotes = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return FloatingActionButton.extended(
       heroTag: heroTag,
-      onPressed: onPressed ?? () => JyamitiPadFullScreenPage.open(context),
+      onPressed:
+          onPressed ??
+          () => JyamitiPadFullScreenPage.open(
+            context,
+            enableSaveNotes: enableSaveNotes,
+          ),
       backgroundColor: const Color(0xFF10B981),
       elevation: 8,
       icon: const Icon(Icons.gesture_rounded, color: Colors.white, size: 22),

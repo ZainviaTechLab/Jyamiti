@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../providers/theme_provider.dart';
@@ -496,7 +497,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                 ? const SizedBox(
                     width: 14,
                     height: 14,
-                    child: CircularProgressIndicator(
+                    child: JyamitiLoader(
                       strokeWidth: 2,
                       color: Colors.white,
                     ),

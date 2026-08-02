@@ -1,3 +1,5 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
+import 'package:jyamiti/presentation/widgets/symbol_picker_toolbar.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
@@ -68,9 +70,15 @@ class _AssessmentQuestionFormScreenState
   // Statement dropdown question state
   List<TextEditingController> _statementStepControllers = [];
 
+  // Explanation and Step-by-Step Solution state
+  TextEditingController _explanationCtrl = TextEditingController();
+  List<Map<String, dynamic>> _explanationSteps = [];
+  bool _isClasswork = false;
+
   bool _isLoading = false;
 
-  // AI similar questions generation state
+  // AI similar questions & Ditto cloned questions generation state
+  List<Map<String, dynamic>> _dittoQuestions = [];
   bool _isGeneratingAI = false;
   List<Map<String, dynamic>> _generatedQuestions = [];
   List<bool> _selectedGeneratedQuestions = [true, true, true];
@@ -91,6 +99,13 @@ class _AssessmentQuestionFormScreenState
     _prefixCtrl = TextEditingController(text: q?['shortAnswerPrefix'] ?? '');
     _suffixCtrl = TextEditingController(text: q?['shortAnswerSuffix'] ?? '');
     _hintCtrl = TextEditingController(text: q?['shortAnswerHint'] ?? '');
+    _explanationCtrl = TextEditingController(text: q?['explanation'] ?? '');
+    if (q != null && q['explanationSteps'] != null && q['explanationSteps'] is List) {
+      _explanationSteps = List<Map<String, dynamic>>.from(
+        (q['explanationSteps'] as List).map((e) => Map<String, dynamic>.from(e)),
+      );
+    }
+    _isClasswork = q?['isClasswork'] == true || q?['forTutorOnly'] == true;
 
     _questionImage = q?['questionImage'] ?? '';
     _isQuestionSvg = q?['isSvg'] ?? false;
@@ -520,6 +535,47 @@ class _AssessmentQuestionFormScreenState
         return;
       }
       correctAnswers = inputs;
+    } else if (_type == 'FILL_IN_BLANKS') {
+      final String textVal = _textCtrl.text.trim();
+      if (textVal.isEmpty) {
+        _showSnackBar('Please write the question text.');
+        return;
+      }
+      final List<String> inputs = [];
+      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+      final Iterable<Match> matches = regExp.allMatches(textVal);
+
+      for (var m in matches) {
+        final String val = (m.group(1) ?? '').trim();
+        inputs.add(val);
+      }
+
+      if (inputs.isEmpty) {
+        _showSnackBar(
+          'Please insert at least one blank using [BLANK:answer] or [INPUT:answer] tag in question text.',
+        );
+        return;
+      }
+
+      if (inputs.any((ans) => ans.isEmpty)) {
+        _showSnackBar(
+          'Please specify the correct answer inside each blank tag e.g. [BLANK:180].',
+        );
+        return;
+      }
+      correctAnswers = inputs;
+    } else if (_type == 'DESCRIPTIVE') {
+      final String textVal = _textCtrl.text.trim();
+      if (textVal.isEmpty) {
+        _showSnackBar('Please write the question prompt.');
+        return;
+      }
+      final String presetAns = _shortAnswerCtrl.text.trim();
+      if (presetAns.isEmpty) {
+        _showSnackBar('Please provide the Admin Preset Model Answer.');
+        return;
+      }
+      correctAnswers = [presetAns];
     } else if (_type == 'STATEMENT_DROPDOWN') {
       if (_options.isEmpty) {
         _showSnackBar('Please add at least one statement.');
@@ -628,6 +684,8 @@ class _AssessmentQuestionFormScreenState
       'shortAnswerSuffix': _suffixCtrl.text.trim(),
       'shortAnswerHint': _hintCtrl.text.trim(),
       'svgLabels': _svgLabels,
+      'isClasswork': _isClasswork,
+      'category': _isClasswork ? 'classwork' : 'practice',
     };
 
     if (widget.isPracticeMode) {
@@ -636,6 +694,18 @@ class _AssessmentQuestionFormScreenState
           widget.existingQuestion?['_id'] ?? _generateMongoObjectId();
 
       final List<Map<String, dynamic>> questionsToSave = [localQuestion];
+
+      // Append all Ditto questions
+      for (final dq in _dittoQuestions) {
+        final textVal = (dq['text'] ?? '').toString().trim();
+        if (textVal.isNotEmpty) {
+          final clonedDq = Map<String, dynamic>.from(dq);
+          clonedDq['_id'] = _generateMongoObjectId();
+          questionsToSave.add(clonedDq);
+        }
+      }
+
+      // Append AI generated questions
       for (int i = 0; i < _generatedQuestions.length; i++) {
         if (_selectedGeneratedQuestions[i]) {
           final gq = Map<String, dynamic>.from(_generatedQuestions[i]);
@@ -644,26 +714,67 @@ class _AssessmentQuestionFormScreenState
         }
       }
 
-      // If greater than 1 question, randomly pick 1 for classwork (Teacher Only)
       if (questionsToSave.length > 1) {
-        final randomIndex = Random().nextInt(questionsToSave.length);
-        for (int i = 0; i < questionsToSave.length; i++) {
-          if (i == randomIndex) {
-            questionsToSave[i]['isClasswork'] = true;
-            questionsToSave[i]['category'] = 'classwork';
-          } else {
-            questionsToSave[i]['isClasswork'] = false;
-          }
+        // Original base question goes to Classwork (Tutor Only)
+        questionsToSave[0]['isClasswork'] = true;
+        questionsToSave[0]['category'] = 'classwork';
+
+        // All similar / ditto / AI generated variations go to Student Practice
+        for (int i = 1; i < questionsToSave.length; i++) {
+          questionsToSave[i]['isClasswork'] = false;
+          questionsToSave[i]['category'] = 'practice';
         }
       } else if (questionsToSave.isNotEmpty) {
-        questionsToSave[0]['isClasswork'] = false;
+        bool setAsClasswork = _isClasswork;
+        if (!_isClasswork) {
+          final bool? choice = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Row(
+                children: const [
+                  Icon(Icons.help_outline_rounded, color: Color(0xFF6366F1)),
+                  SizedBox(width: 8),
+                  Text('Save Question As'),
+                ],
+              ),
+              content: const Text(
+                'Would you like to add this single question as a Tutor Only (Classwork) question or as a Student Practice question?',
+              ),
+              actions: [
+                TextButton.icon(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  icon: const Icon(Icons.school_rounded, size: 16),
+                  label: const Text('Student Practice'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  icon: const Icon(Icons.cast_for_education_rounded, size: 16),
+                  label: const Text('Tutor Only (Classwork)'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          );
+          if (choice != null) {
+            setAsClasswork = choice;
+          }
+        }
+        questionsToSave[0]['isClasswork'] = setAsClasswork;
+        questionsToSave[0]['category'] =
+            setAsClasswork ? 'classwork' : 'practice';
       }
 
       final String snackMessage = widget.existingQuestion != null
           ? 'Question updated'
           : (questionsToSave.length > 1
-              ? 'Saved ${questionsToSave.length} questions (1 randomly set for Classwork)'
-              : 'Saved 1 practice question');
+                ? 'Saved ${questionsToSave.length} questions (${_dittoQuestions.length} ditto cloned)'
+                : 'Saved 1 practice question');
 
       _showSnackBar(snackMessage, isSuccess: true);
       Navigator.pop(context, questionsToSave);
@@ -672,6 +783,8 @@ class _AssessmentQuestionFormScreenState
 
     try {
       final bool isEdit = widget.existingQuestion != null;
+      int count = 0;
+
       final res = isEdit
           ? await ApiService.put(
               '/assessment-questions/${widget.existingQuestion!['_id']}',
@@ -680,8 +793,17 @@ class _AssessmentQuestionFormScreenState
           : await ApiService.post('/assessment-questions', reqBody);
 
       if (res.statusCode == 200 || res.statusCode == 201) {
+        count++;
+        for (final dq in _dittoQuestions) {
+          final textVal = (dq['text'] ?? '').toString().trim();
+          if (textVal.isNotEmpty) {
+            await ApiService.post('/assessment-questions', dq);
+            count++;
+          }
+        }
+
         _showSnackBar(
-          isEdit ? 'Question updated' : 'Question created',
+          isEdit ? 'Question updated' : 'Saved $count question(s) to database',
           isSuccess: true,
         );
         Navigator.pop(context, true);
@@ -805,6 +927,8 @@ class _AssessmentQuestionFormScreenState
       'shortAnswerSuffix': _suffixCtrl.text.trim(),
       'shortAnswerHint': _hintCtrl.text.trim(),
       'svgLabels': _svgLabels,
+      'explanation': _explanationCtrl.text.trim(),
+      'explanationSteps': _explanationSteps,
     };
   }
 
@@ -854,11 +978,405 @@ class _AssessmentQuestionFormScreenState
     }
   }
 
+  void _addDittoQuestion() {
+    if (!_formKey.currentState!.validate()) {
+      _showSnackBar(
+        'Please fix validation errors in the main question form first.',
+      );
+      return;
+    }
+
+    if (_type == 'SHORT_ANSWER' && _shortAnswerCtrl.text.trim().isEmpty) {
+      _showSnackBar('Please provide correct answer for Short Answer question.');
+      return;
+    }
+    if (_type == 'MCQ_SINGLE' || _type == 'MCQ_MULTI') {
+      bool hasCorrect = _correctAnswerSelection.any((val) => val);
+      if (!hasCorrect) {
+        _showSnackBar('Please mark at least one option as correct.');
+        return;
+      }
+    }
+
+    final baseQuestion = _buildCurrentQuestionPayload();
+    if (baseQuestion == null) return;
+
+    final Map<String, dynamic> ditto = jsonDecode(jsonEncode(baseQuestion));
+    ditto['text'] = '';
+    ditto['explanation'] = _explanationCtrl.text.trim();
+    ditto['explanationSteps'] = List<Map<String, dynamic>>.from(_explanationSteps);
+
+    setState(() {
+      _dittoQuestions.add(ditto);
+    });
+
+    _showSnackBar(
+      'Added Ditto Question #${_dittoQuestions.length}! Scroll down to edit text.',
+      isSuccess: true,
+    );
+  }
+
+  Widget _buildDittoQuestionsSection() {
+    if (_dittoQuestions.isEmpty) return const SizedBox();
+
+    final isDark = context.isDark;
+    return Container(
+      margin: const EdgeInsets.only(top: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.control_point_duplicate_rounded,
+                color: Color(0xFF10B981),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Ditto Cloned Questions (${_dittoQuestions.length})',
+                style: TextStyle(
+                  color: context.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _dittoQuestions.clear();
+                  });
+                },
+                icon: const Icon(
+                  Icons.delete_outline,
+                  size: 16,
+                  color: Colors.redAccent,
+                ),
+                label: const Text(
+                  'Clear All Ditto',
+                  style: TextStyle(color: Colors.redAccent, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...List.generate(_dittoQuestions.length, (idx) {
+            final q = _dittoQuestions[idx];
+            return Card(
+              margin: const EdgeInsets.only(bottom: 16),
+              color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: BorderSide(
+                  color: const Color(0xFF10B981).withOpacity(0.3),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(14.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            'Ditto #${idx + 1}',
+                            style: const TextStyle(
+                              color: Color(0xFF10B981),
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          q['type'] ?? '',
+                          style: TextStyle(
+                            color: context.textColor60,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.redAccent,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _dittoQuestions.removeAt(idx);
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (q['descriptiveText'] != null &&
+                        q['descriptiveText'].toString().isNotEmpty) ...[
+                      TextFormField(
+                        initialValue: q['descriptiveText'],
+                        decoration: InputDecoration(
+                          labelText: 'Descriptive Context Text',
+                          labelStyle: TextStyle(
+                            fontSize: 11,
+                            color: context.textColor70,
+                          ),
+                          border: const OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 13,
+                        ),
+                        maxLines: 2,
+                        onChanged: (val) {
+                          q['descriptiveText'] = val;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    TextFormField(
+                      initialValue: q['text'],
+                      decoration: InputDecoration(
+                        labelText: 'Question Text',
+                        hintText: 'Enter question text for Ditto #${idx + 1}',
+                        labelStyle: TextStyle(
+                          fontSize: 11,
+                          color: context.textColor70,
+                        ),
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      style: TextStyle(color: context.textColor, fontSize: 13),
+                      maxLines: 3,
+                      onChanged: (val) {
+                        q['text'] = val;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    if ((q['type'] == 'MCQ_SINGLE' ||
+                            q['type'] == 'MCQ_MULTI') &&
+                        q['options'] != null &&
+                        q['options'] is List) ...[
+                      Text(
+                        'Options (Check/Uncheck to mark correct):',
+                        style: TextStyle(
+                          color: context.textColor70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      ...List.generate((q['options'] as List).length, (optIdx) {
+                        final opt = q['options'][optIdx];
+                        final List<String> correct = List<String>.from(
+                          q['correctAnswers'] ?? [],
+                        );
+                        final bool isCorrect = correct.contains(
+                          optIdx.toString(),
+                        );
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8.0),
+                          child: Row(
+                            children: [
+                              Checkbox(
+                                activeColor: Colors.green,
+                                value: isCorrect,
+                                onChanged: (val) {
+                                  setState(() {
+                                    final updatedCorrect = List<String>.from(
+                                      q['correctAnswers'] ?? [],
+                                    );
+                                    if (val == true) {
+                                      if (q['type'] == 'MCQ_SINGLE') {
+                                        updatedCorrect.clear();
+                                      }
+                                      if (!updatedCorrect.contains(
+                                        optIdx.toString(),
+                                      )) {
+                                        updatedCorrect.add(optIdx.toString());
+                                      }
+                                    } else {
+                                      updatedCorrect.remove(optIdx.toString());
+                                    }
+                                    q['correctAnswers'] = updatedCorrect;
+                                  });
+                                },
+                              ),
+                              Expanded(
+                                child: TextFormField(
+                                  initialValue: opt['text'] ?? '',
+                                  decoration: InputDecoration(
+                                    labelText: 'Option ${optIdx + 1}',
+                                    labelStyle: const TextStyle(fontSize: 11),
+                                    border: const OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  style: TextStyle(
+                                    color: context.textColor,
+                                    fontSize: 13,
+                                  ),
+                                  onChanged: (val) {
+                                    opt['text'] = val;
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ] else if (q['type'] == 'SHORT_ANSWER') ...[
+                      TextFormField(
+                        initialValue:
+                            (q['correctAnswers'] is List &&
+                                (q['correctAnswers'] as List).isNotEmpty)
+                            ? q['correctAnswers'][0]
+                            : '',
+                        decoration: const InputDecoration(
+                          labelText: 'Correct Answer',
+                          labelStyle: TextStyle(fontSize: 11),
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 13,
+                        ),
+                        onChanged: (val) {
+                          q['correctAnswers'] = [val.trim()];
+                        },
+                      ),
+                    ] else if (q['type'] == 'MATCHING' &&
+                        q['options'] != null &&
+                        q['rightOptions'] != null) ...[
+                      Text(
+                        'Matching Pairs (Left <-> Right):',
+                        style: TextStyle(
+                          color: context.textColor70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      ...List.generate((q['options'] as List).length, (pIdx) {
+                        final leftOpt = q['options'][pIdx];
+                        final rightOpt =
+                            (pIdx < (q['rightOptions'] as List).length)
+                            ? q['rightOptions'][pIdx]
+                            : {'text': ''};
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8.0),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: TextFormField(
+                                  initialValue: leftOpt['text'] ?? '',
+                                  decoration: InputDecoration(
+                                    labelText: 'Left Pair ${pIdx + 1}',
+                                    labelStyle: const TextStyle(fontSize: 11),
+                                    border: const OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  style: TextStyle(
+                                    color: context.textColor,
+                                    fontSize: 13,
+                                  ),
+                                  onChanged: (val) {
+                                    leftOpt['text'] = val;
+                                  },
+                                ),
+                              ),
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 6.0),
+                                child: Icon(
+                                  Icons.arrow_forward,
+                                  size: 14,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              Expanded(
+                                child: TextFormField(
+                                  initialValue: rightOpt['text'] ?? '',
+                                  decoration: InputDecoration(
+                                    labelText: 'Right Pair ${pIdx + 1}',
+                                    labelStyle: const TextStyle(fontSize: 11),
+                                    border: const OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  style: TextStyle(
+                                    color: context.textColor,
+                                    fontSize: 13,
+                                  ),
+                                  onChanged: (val) {
+                                    rightOpt['text'] = val;
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ] else ...[
+                      Text(
+                        'Answers: ${q['correctAnswers']}',
+                        style: TextStyle(
+                          color: context.textColor60,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      initialValue: q['explanation'] ?? '',
+                      decoration: InputDecoration(
+                        labelText: 'Solution Explanation',
+                        hintText: 'Enter step-by-step solution explanation for Ditto #${idx + 1}',
+                        labelStyle: TextStyle(
+                          fontSize: 11,
+                          color: context.textColor70,
+                        ),
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      style: TextStyle(color: context.textColor, fontSize: 13),
+                      maxLines: 3,
+                      onChanged: (val) {
+                        q['explanation'] = val;
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isEdit = widget.existingQuestion != null;
-
     final isDark = context.isDark;
+
     return Scaffold(
       backgroundColor: isDark
           ? const Color(0xFF0F172A)
@@ -866,7 +1384,10 @@ class _AssessmentQuestionFormScreenState
       appBar: AppBar(
         title: Text(
           isEdit ? 'Edit Assessment Question' : 'Add Assessment Question',
-          style: TextStyle(color: context.textColor),
+          style: TextStyle(
+            color: context.textColor,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
         elevation: isDark ? 0 : 1,
@@ -876,11 +1397,11 @@ class _AssessmentQuestionFormScreenState
           if (_isLoading)
             Center(
               child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(
+                  child: JyamitiLoader(
                     color: context.textColor,
                     strokeWidth: 2,
                   ),
@@ -888,299 +1409,1125 @@ class _AssessmentQuestionFormScreenState
               ),
             )
           else
-            TextButton(
-              onPressed: _saveQuestion,
-              child: const Text(
-                'Save',
-                style: TextStyle(
-                  color: Color(0xFF818CF8),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+            Padding(
+              padding: const EdgeInsets.only(right: 12.0),
+              child: ElevatedButton.icon(
+                onPressed: _saveQuestion,
+                icon: const Icon(
+                  Icons.check_circle_rounded,
+                  size: 18,
+                  color: Colors.white,
+                ),
+                label: const Text(
+                  'Save Question(s)',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6366F1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
               ),
             ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final bool isWide = constraints.maxWidth >= 900;
+          final double horizontalPadding = isWide ? 32.0 : 16.0;
+
+          return Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1280),
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(horizontalPadding),
+                child: Form(
+                  key: _formKey,
+                  child: isWide
+                      ? Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Left Column: Metadata, Question Prompt & Media
+                            Expanded(
+                              flex: 5,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildMetadataCard(isDark),
+                                  const SizedBox(height: 20),
+                                  _buildPromptCard(isDark),
+                                  const SizedBox(height: 20),
+                                  _buildExplanationEditorCard(isDark),
+                                  const SizedBox(height: 20),
+                                  _buildQuestionImageUploadSection(),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 24),
+                            // Right Column: Answer Options & Actions
+                            Expanded(
+                              flex: 6,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildAnswerOptionsCard(isDark),
+                                  const SizedBox(height: 20),
+                                  _buildActionButtonsRow(),
+                                  _buildDittoQuestionsSection(),
+                                  if (widget.isPracticeMode) ...[
+                                    const SizedBox(height: 20),
+                                    _buildAIGenerationSection(),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildMetadataCard(isDark),
+                            const SizedBox(height: 20),
+                            _buildPromptCard(isDark),
+                            const SizedBox(height: 20),
+                            _buildExplanationEditorCard(isDark),
+                            const SizedBox(height: 20),
+                            _buildQuestionImageUploadSection(),
+                            const SizedBox(height: 20),
+                            _buildAnswerOptionsCard(isDark),
+                            const SizedBox(height: 20),
+                            _buildActionButtonsRow(),
+                            _buildDittoQuestionsSection(),
+                            if (widget.isPracticeMode) ...[
+                              const SizedBox(height: 20),
+                              _buildAIGenerationSection(),
+                            ],
+                          ],
+                        ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMetadataCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: context.glassBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              // Grade dropdown
-              if (!widget.isPracticeMode) ...[
-                DropdownButtonFormField<int>(
-                  value: _grade,
-                  dropdownColor: context.isDark
-                      ? const Color(0xFF1E293B)
-                      : Colors.white,
-                  style: TextStyle(color: context.textColor),
-                  decoration: InputDecoration(
-                    labelText: 'Grade Level',
-                    labelStyle: TextStyle(color: context.textColor70),
-                    filled: true,
-                    fillColor: context.isDark
-                        ? const Color(0xFF1E293B)
-                        : Colors.white,
-                    border: OutlineInputBorder(),
-                  ),
-                  items: List.generate(12, (index) {
-                    final grade = index + 1;
-                    return DropdownMenuItem<int>(
-                      value: grade,
-                      child: Text(
-                        'Grade $grade',
-                        style: TextStyle(color: context.textColor),
-                      ),
-                    );
-                  }),
-                  onChanged: (val) {
-                    if (val != null) setState(() => _grade = val);
-                  },
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                const SizedBox(height: 16),
-              ],
-
-              // Question Type dropdown
-              DropdownButtonFormField<String>(
-                value: _type,
-                dropdownColor: context.isDark
-                    ? const Color(0xFF1E293B)
-                    : Colors.white,
-                style: TextStyle(color: context.textColor),
-                decoration: InputDecoration(
-                  labelText: 'Question Type',
-                  labelStyle: TextStyle(color: context.textColor70),
-                  filled: true,
-                  fillColor: context.isDark
-                      ? const Color(0xFF1E293B)
-                      : Colors.white,
-                  border: OutlineInputBorder(),
+                child: const Icon(
+                  Icons.tune_rounded,
+                  color: Color(0xFF6366F1),
+                  size: 20,
                 ),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'MCQ_SINGLE',
-                    child: Text('Single Choice MCQ'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'MCQ_MULTI',
-                    child: Text('Multiple Choice MCQ'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'SHORT_ANSWER',
-                    child: Text('Short Answer'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'ORDERING',
-                    child: Text('Ordering / Sequencing'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'MATCHING',
-                    child: Text('Match the Following'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'GEOMETRIC',
-                    child: Text('Geometric Construction'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'MATRIX_MCQ',
-                    child: Text('Grid / Matrix MCQ'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'MATRIX_INPUT',
-                    child: Text('Matrix / Table Input'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'EQUATION',
-                    child: Text('Multi-Step Equation'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'STATEMENT_DROPDOWN',
-                    child: Text('Statement Dropdown'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'INLINE_SELECT',
-                    child: Text('Inline Select'),
-                  ),
-                ],
-                onChanged: (v) {
-                  if (v != null) {
-                    setState(() {
-                      _type = v;
-                      if (_type == 'MATCHING' && _rightOptions.isEmpty) {
-                        _rightOptions = List.generate(
-                          _options.length,
-                          (index) => {
-                            'text': '',
-                            'imageUrl': '',
-                            'isSvg': false,
-                          },
-                        );
-                      }
-                      if (_type == 'MATRIX_MCQ') {
-                        if (_options.isEmpty) {
-                          _options = [
-                            {'text': 'Row 1', 'imageUrl': '', 'isSvg': false},
-                          ];
-                        }
-                        if (_rightOptions.isEmpty) {
-                          _rightOptions = [
-                            {
-                              'text': 'Column 1',
-                              'imageUrl': '',
-                              'isSvg': false,
-                            },
-                          ];
-                        }
-                        _matrixCorrectAnswers = List.generate(
-                          _options.length,
-                          (idx) => "0",
-                        );
-                      }
-                      if (_type == 'MATRIX_INPUT') {
-                        if (_options.isEmpty) {
-                          _options = [
-                            {'text': '', 'imageUrl': '', 'isSvg': false},
-                          ];
-                        }
-                        if (_rightOptions.isEmpty) {
-                          _rightOptions = [
-                            {
-                              'text': 'Header 1',
-                              'imageUrl': '',
-                              'isSvg': false,
-                            },
-                          ];
-                        }
-                        _matrixInputCells = List.generate(
-                          _options.length,
-                          (r) => List.generate(
-                            _rightOptions.length,
-                            (c) => {'value': '', 'isInput': false},
-                          ),
-                        );
-                      }
-                      if (_type == 'EQUATION') {
-                        if (_options.isEmpty) {
-                          _options = [
-                            {'text': '', 'imageUrl': '', 'isSvg': false},
-                          ];
-                        }
-                        _equationStepControllers = List.generate(
-                          _options.length,
-                          (idx) => TextEditingController(
-                            text: _options[idx]['text'] ?? '',
-                          ),
-                        );
-                      }
-                      if (_type == 'STATEMENT_DROPDOWN') {
-                        if (_options.isEmpty) {
-                          _options = [
-                            {'text': '', 'imageUrl': '', 'isSvg': false},
-                          ];
-                        }
-                        _statementStepControllers = List.generate(
-                          _options.length,
-                          (idx) => TextEditingController(
-                            text: _options[idx]['text'] ?? '',
-                          ),
-                        );
-                      }
-                    });
-                  }
-                },
               ),
-              const SizedBox(height: 16),
-
-              // Descriptive Text Field
-              TextFormField(
-                controller: _descriptiveTextCtrl,
-                style: TextStyle(color: context.textColor),
-                decoration: InputDecoration(
-                  labelText: 'Descriptive Text',
-                  labelStyle: TextStyle(color: context.textColor70),
-                  filled: true,
-                  fillColor: context.isDark
-                      ? const Color(0xFF1E293B)
-                      : Colors.white,
-                  border: OutlineInputBorder(),
+              const SizedBox(width: 12),
+              Text(
+                'Question Configuration',
+                style: TextStyle(
+                  color: context.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
                 ),
-                maxLines: 3,
               ),
-              const SizedBox(height: 16),
-
-              // Question Text Field
-              TextFormField(
-                controller: _textCtrl,
-                style: TextStyle(color: context.textColor),
-                decoration: InputDecoration(
-                  labelText: 'Question Text',
-                  labelStyle: TextStyle(color: context.textColor70),
-                  filled: true,
-                  fillColor: context.isDark
-                      ? const Color(0xFF1E293B)
-                      : Colors.white,
-                  border: OutlineInputBorder(),
-                ),
-                maxLines: 3,
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Please enter question text'
-                    : null,
-              ),
-              const SizedBox(height: 16),
-
-              // Marks Field
-              TextFormField(
-                controller: _marksCtrl,
-                style: TextStyle(color: context.textColor),
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: 'Marks / Points',
-                  labelStyle: TextStyle(color: context.textColor70),
-                  filled: true,
-                  fillColor: context.isDark
-                      ? const Color(0xFF1E293B)
-                      : Colors.white,
-                  border: OutlineInputBorder(),
-                ),
-                validator: (v) => (v == null || int.tryParse(v) == null)
-                    ? 'Please enter a valid number'
-                    : null,
-              ),
-              const SizedBox(height: 24),
-
-              // Question SVG/Image Upload Section
-              _buildQuestionImageUploadSection(),
-              const SizedBox(height: 24),
-
-              // Answer Input Sections based on Type
-              if (_type == 'SHORT_ANSWER')
-                _buildShortAnswerInput()
-              else if (_type == 'MATCHING')
-                _buildMatchingPairsInput()
-              else if (_type == 'GEOMETRIC')
-                _buildGeometricEditor()
-              else if (_type == 'MATRIX_MCQ')
-                _buildMatrixMCQEditor()
-              else if (_type == 'MATRIX_INPUT')
-                _buildMatrixInputEditor()
-              else if (_type == 'EQUATION')
-                _buildEquationEditor()
-              else if (_type == 'STATEMENT_DROPDOWN')
-                _buildStatementDropdownEditor()
-              else
-                _buildMCQOptionsInput(),
-
-              // AI generation section for practice questions
-              if (widget.isPracticeMode) ...[
-                const SizedBox(height: 24),
-                _buildAIGenerationSection(),
-              ],
             ],
           ),
-        ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (ctx, constraints) {
+              final bool isRow = constraints.maxWidth > 520;
+              return isRow
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (!widget.isPracticeMode) ...[
+                          Expanded(child: _buildGradeDropdown()),
+                          const SizedBox(width: 12),
+                        ],
+                        Expanded(flex: 2, child: _buildTypeDropdown()),
+                        const SizedBox(width: 12),
+                        Expanded(child: _buildMarksField()),
+                      ],
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (!widget.isPracticeMode) ...[
+                          _buildGradeDropdown(),
+                          const SizedBox(height: 12),
+                        ],
+                        _buildTypeDropdown(),
+                        const SizedBox(height: 12),
+                        _buildMarksField(),
+                      ],
+                    );
+            },
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            title: Text(
+              'Tutor Only (Classwork Question)',
+              style: TextStyle(
+                color: context.textColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+            subtitle: Text(
+              'Visible exclusively in Tutor Mode for classroom teaching & demonstrations.',
+              style: TextStyle(
+                color: context.textColor60,
+                fontSize: 11,
+              ),
+            ),
+            value: _isClasswork,
+            activeColor: const Color(0xFF10B981),
+            contentPadding: EdgeInsets.zero,
+            onChanged: (val) => setState(() => _isClasswork = val),
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _buildGradeDropdown() {
+    return DropdownButtonFormField<int>(
+      value: _grade,
+      dropdownColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+      style: TextStyle(color: context.textColor),
+      decoration: InputDecoration(
+        labelText: 'Grade Level',
+        labelStyle: TextStyle(color: context.textColor70),
+        filled: true,
+        fillColor: context.isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        isDense: true,
+      ),
+      items: List.generate(12, (index) {
+        final grade = index + 1;
+        return DropdownMenuItem<int>(
+          value: grade,
+          child: Text(
+            'Grade $grade',
+            style: TextStyle(color: context.textColor),
+          ),
+        );
+      }),
+      onChanged: (val) {
+        if (val != null) setState(() => _grade = val);
+      },
+    );
+  }
+
+  Widget _buildTypeDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _type,
+      dropdownColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+      style: TextStyle(color: context.textColor),
+      decoration: InputDecoration(
+        labelText: 'Question Type',
+        labelStyle: TextStyle(color: context.textColor70),
+        filled: true,
+        fillColor: context.isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        isDense: true,
+      ),
+      items: const [
+        DropdownMenuItem(
+          value: 'MCQ_SINGLE',
+          child: Text('Single Choice MCQ'),
+        ),
+        DropdownMenuItem(
+          value: 'MCQ_MULTI',
+          child: Text('Multiple Choice MCQ'),
+        ),
+        DropdownMenuItem(
+          value: 'SHORT_ANSWER',
+          child: Text('Short Answer'),
+        ),
+        DropdownMenuItem(
+          value: 'ORDERING',
+          child: Text('Ordering / Sequencing'),
+        ),
+        DropdownMenuItem(
+          value: 'MATCHING',
+          child: Text('Match the Following'),
+        ),
+        DropdownMenuItem(
+          value: 'GEOMETRIC',
+          child: Text('Geometric Construction'),
+        ),
+        DropdownMenuItem(
+          value: 'MATRIX_MCQ',
+          child: Text('Grid / Matrix MCQ'),
+        ),
+        DropdownMenuItem(
+          value: 'MATRIX_INPUT',
+          child: Text('Matrix / Table Input'),
+        ),
+        DropdownMenuItem(
+          value: 'EQUATION',
+          child: Text('Multi-Step Equation'),
+        ),
+        DropdownMenuItem(
+          value: 'STATEMENT_DROPDOWN',
+          child: Text('Statement Dropdown'),
+        ),
+        DropdownMenuItem(
+          value: 'INLINE_SELECT',
+          child: Text('Inline Select'),
+        ),
+        DropdownMenuItem(
+          value: 'FILL_IN_BLANKS',
+          child: Text('Fill in the Blanks ([BLANK:answer])'),
+        ),
+        DropdownMenuItem(
+          value: 'DESCRIPTIVE',
+          child: Text('Descriptive / Handwritten (AI Evaluated)'),
+        ),
+      ],
+      onChanged: (v) {
+        if (v != null) {
+          setState(() {
+            _type = v;
+            if (_type == 'MATCHING' && _rightOptions.isEmpty) {
+              _rightOptions = List.generate(
+                _options.length,
+                (index) => {
+                  'text': '',
+                  'imageUrl': '',
+                  'isSvg': false,
+                },
+              );
+            }
+            if (_type == 'MATRIX_MCQ') {
+              if (_options.isEmpty) {
+                _options = [
+                  {'text': 'Row 1', 'imageUrl': '', 'isSvg': false},
+                ];
+              }
+              if (_rightOptions.isEmpty) {
+                _rightOptions = [
+                  {
+                    'text': 'Column 1',
+                    'imageUrl': '',
+                    'isSvg': false,
+                  },
+                ];
+              }
+              _matrixCorrectAnswers = List.generate(
+                _options.length,
+                (idx) => "0",
+              );
+            }
+            if (_type == 'MATRIX_INPUT') {
+              if (_options.isEmpty) {
+                _options = [
+                  {'text': '', 'imageUrl': '', 'isSvg': false},
+                ];
+              }
+              if (_rightOptions.isEmpty) {
+                _rightOptions = [
+                  {
+                    'text': 'Header 1',
+                    'imageUrl': '',
+                    'isSvg': false,
+                  },
+                ];
+              }
+              _matrixInputCells = List.generate(
+                _options.length,
+                (r) => List.generate(
+                  _rightOptions.length,
+                  (c) => {'value': '', 'isInput': false},
+                ),
+              );
+            }
+            if (_type == 'EQUATION') {
+              if (_options.isEmpty) {
+                _options = [
+                  {'text': '', 'imageUrl': '', 'isSvg': false},
+                ];
+              }
+              _equationStepControllers = List.generate(
+                _options.length,
+                (idx) => TextEditingController(
+                  text: _options[idx]['text'] ?? '',
+                ),
+              );
+            }
+            if (_type == 'STATEMENT_DROPDOWN') {
+              if (_options.isEmpty) {
+                _options = [
+                  {'text': '', 'imageUrl': '', 'isSvg': false},
+                ];
+              }
+              _statementStepControllers = List.generate(
+                _options.length,
+                (idx) => TextEditingController(
+                  text: _options[idx]['text'] ?? '',
+                ),
+              );
+            }
+          });
+        }
+      },
+    );
+  }
+
+  Widget _buildMarksField() {
+    return TextFormField(
+      controller: _marksCtrl,
+      style: TextStyle(color: context.textColor),
+      keyboardType: TextInputType.number,
+      decoration: InputDecoration(
+        labelText: 'Marks / Points',
+        labelStyle: TextStyle(color: context.textColor70),
+        filled: true,
+        fillColor: context.isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        isDense: true,
+      ),
+      validator: (v) => (v == null || int.tryParse(v) == null)
+          ? 'Enter a valid number'
+          : null,
+    );
+  }
+
+  Widget _buildPromptCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: context.glassBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3B82F6).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.edit_note_rounded,
+                  color: Color(0xFF3B82F6),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Question Text & Context',
+                style: TextStyle(
+                  color: context.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SymbolInputFieldWrapper(
+            controller: _descriptiveTextCtrl,
+            child: TextFormField(
+              controller: _descriptiveTextCtrl,
+              style: TextStyle(color: context.textColor),
+              decoration: InputDecoration(
+                labelText: 'Descriptive Context Text (Optional)',
+                hintText: 'e.g., Read the instructions or passage below...',
+                labelStyle: TextStyle(color: context.textColor70),
+                filled: true,
+                fillColor: isDark
+                    ? const Color(0xFF0F172A)
+                    : const Color(0xFFF8FAFC),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              maxLines: 2,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SymbolInputFieldWrapper(
+            controller: _textCtrl,
+            child: TextFormField(
+              controller: _textCtrl,
+              style: TextStyle(color: context.textColor),
+              decoration: InputDecoration(
+                labelText: 'Question Text *',
+                hintText: 'Enter the main question prompt here...',
+                labelStyle: TextStyle(color: context.textColor70),
+                filled: true,
+                fillColor: isDark
+                    ? const Color(0xFF0F172A)
+                    : const Color(0xFFF8FAFC),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              maxLines: 4,
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Please enter question text'
+                  : null,
+            ),
+          ),
+          if (_type == 'FILL_IN_BLANKS') ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Color(0xFF10B981), size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Insert blanks in your text using [BLANK:answer] or [INPUT:answer] or [BLANK] tags.\nExample: "The area of a circle with radius \$r\$ is [BLANK:\\pi r^2] and perimeter is [BLANK:2\\pi r]."',
+                      style: TextStyle(
+                        color: context.textColor,
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (_type == 'DESCRIPTIVE') ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6366F1).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_awesome, color: Color(0xFF6366F1), size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Descriptive / Handwritten Question: Students write on paper or drawing pad and upload an image of their solution. DeepSeek AI will evaluate the semantic meaning of their answer against your Preset Model Answer gently and politely.',
+                      style: TextStyle(
+                        color: context.textColor,
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExplanationEditorCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: context.glassBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3B82F6).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.lightbulb_outline_rounded,
+                  color: Color(0xFF3B82F6),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Step-by-Step Solution & Explanation',
+                style: TextStyle(
+                  color: context.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // General Solution Explanation Text
+          SymbolInputFieldWrapper(
+            controller: _explanationCtrl,
+            child: TextFormField(
+              controller: _explanationCtrl,
+              style: TextStyle(color: context.textColor),
+              decoration: InputDecoration(
+                labelText: 'General Solution Explanation (Optional)',
+                hintText: 'e.g., To round 53 to the nearest ten, look at the ones digit...',
+                labelStyle: TextStyle(color: context.textColor70),
+                filled: true,
+                fillColor: isDark
+                    ? const Color(0xFF0F172A)
+                    : const Color(0xFFF8FAFC),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              maxLines: 3,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Step-by-Step Explanation Items Header
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Numbered Solution Steps (${_explanationSteps.length}):',
+                style: TextStyle(
+                  color: context.textColor70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _explanationSteps.add({
+                      'stepNumber': _explanationSteps.length + 1,
+                      'title': '',
+                      'text': '',
+                      'imageUrl': '',
+                      'isSvg': false,
+                    });
+                  });
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF3B82F6),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: const Icon(Icons.add_rounded, size: 16),
+                label: const Text('Add Step', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          ...List.generate(_explanationSteps.length, (sIdx) {
+            final step = _explanationSteps[sIdx];
+            step['stepNumber'] = sIdx + 1;
+
+            if (step['blocks'] == null) {
+              final List<Map<String, dynamic>> initialBlocks = [];
+              if ((step['text'] ?? '').toString().isNotEmpty) {
+                initialBlocks.add({'type': 'TEXT', 'content': step['text'], 'isSvg': false});
+              }
+              if ((step['imageUrl'] ?? '').toString().isNotEmpty) {
+                initialBlocks.add({'type': 'IMAGE', 'content': step['imageUrl'], 'isSvg': step['isSvg'] == true});
+              }
+              if (initialBlocks.isEmpty) {
+                initialBlocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+              }
+              step['blocks'] = initialBlocks;
+            }
+
+            final List<dynamic> blocks = step['blocks'];
+
+            return Card(
+              margin: const EdgeInsets.only(bottom: 16),
+              color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(
+                  color: const Color(0xFF3B82F6).withOpacity(0.35),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(14.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF3B82F6).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            'Step ${sIdx + 1}',
+                            style: const TextStyle(
+                              color: Color(0xFF3B82F6),
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              blocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+                            });
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            side: const BorderSide(color: Color(0xFF3B82F6)),
+                          ),
+                          icon: const Icon(Icons.add_circle_outline, size: 14, color: Color(0xFF3B82F6)),
+                          label: const Text('+ Text Block', style: TextStyle(fontSize: 11, color: Color(0xFF3B82F6))),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              blocks.add({'type': 'IMAGE', 'content': '', 'isSvg': false});
+                            });
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            side: const BorderSide(color: Color(0xFF10B981)),
+                          ),
+                          icon: const Icon(Icons.add_photo_alternate_outlined, size: 14, color: Color(0xFF10B981)),
+                          label: const Text('+ Image Block', style: TextStyle(fontSize: 11, color: Color(0xFF10B981))),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              _explanationSteps.removeAt(sIdx);
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Block Items Rendering inside Step
+                    ...List.generate(blocks.length, (bIdx) {
+                      final block = blocks[bIdx] as Map<String, dynamic>;
+                      final String bType = block['type'] ?? 'TEXT';
+
+                      if (bType == 'IMAGE') {
+                        final String imgContent = block['content'] ?? '';
+                        final bool isSvg = block['isSvg'] == true;
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.image_rounded, color: Color(0xFF10B981), size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: imgContent.isNotEmpty
+                                    ? Row(
+                                        children: [
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(6),
+                                            child: SizedBox(
+                                              height: 50,
+                                              width: 70,
+                                              child: _renderQuestionImagePreview(imgContent, isSvg: isSvg),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              imgContent,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(fontSize: 11, color: context.textColor70),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : const Text(
+                                        'No diagram uploaded yet',
+                                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                                      ),
+                              ),
+                              ElevatedButton.icon(
+                                onPressed: () async {
+                                  try {
+                                    final result = await FilePicker.pickFiles(type: FileType.image);
+                                    if (result != null && result.files.single.bytes != null) {
+                                      final bytes = result.files.single.bytes!;
+                                      final filename = result.files.single.name;
+                                      final isSvgFile = filename.toLowerCase().endsWith('.svg');
+
+                                      final res = await ApiService.uploadFile(
+                                        '/assessment-questions/upload',
+                                        bytes,
+                                        filename,
+                                        fieldName: 'file',
+                                      );
+
+                                      if (res.statusCode == 200) {
+                                        final resBody = await res.stream.bytesToString();
+                                        final data = jsonDecode(resBody);
+                                        setState(() {
+                                          block['content'] = data['fileUrl'];
+                                          block['isSvg'] = isSvgFile;
+                                        });
+                                      }
+                                    }
+                                  } catch (e) {
+                                    _showSnackBar('Upload error: $e');
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF10B981),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                ),
+                                icon: const Icon(Icons.upload_file_rounded, size: 14),
+                                label: Text(imgContent.isEmpty ? 'Upload Image' : 'Change', style: const TextStyle(fontSize: 11)),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                                onPressed: () {
+                                  setState(() {
+                                    blocks.removeAt(bIdx);
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+
+                      // TEXT Block
+                      final blockTextCtrl = TextEditingController(text: block['content'] ?? '');
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: SymbolInputFieldWrapper(
+                                controller: blockTextCtrl,
+                                onChanged: () {
+                                  block['content'] = blockTextCtrl.text;
+                                },
+                                child: TextFormField(
+                                  controller: blockTextCtrl,
+                                  decoration: InputDecoration(
+                                    labelText: 'Text Block #${bIdx + 1}',
+                                    hintText: 'e.g., 53 is between 50 and 60...',
+                                    labelStyle: TextStyle(fontSize: 11, color: context.textColor70),
+                                    border: const OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  style: TextStyle(color: context.textColor, fontSize: 13),
+                                  maxLines: 2,
+                                  onChanged: (val) {
+                                    block['content'] = val;
+                                  },
+                                ),
+                              ),
+                            ),
+                            if (blocks.length > 1) ...[
+                              const SizedBox(width: 4),
+                              IconButton(
+                                icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                                onPressed: () {
+                                  setState(() {
+                                    blocks.removeAt(bIdx);
+                                  });
+                                },
+                              ),
+                            ],
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _renderQuestionImagePreview(String path, {required bool isSvg}) {
+    if (path.isEmpty) return const SizedBox();
+    final fullUrl = (path.startsWith('http://') || path.startsWith('https://'))
+        ? path
+        : 'https://api.jyamitimath.com${path.startsWith('/') ? path : '/$path'}';
+    if (isSvg) {
+      return SvgPicture.network(
+        fullUrl,
+        fit: BoxFit.contain,
+        placeholderBuilder: (_) => const Icon(Icons.image, size: 20),
+      );
+    }
+    return Image.network(
+      fullUrl,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, size: 20),
+    );
+  }
+
+  Widget _buildAnswerOptionsCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: context.glassBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.task_alt_rounded,
+                  color: Color(0xFF10B981),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Answer Key & Options',
+                style: TextStyle(
+                  color: context.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (_type == 'SHORT_ANSWER')
+            _buildShortAnswerInput()
+          else if (_type == 'MATCHING')
+            _buildMatchingPairsInput()
+          else if (_type == 'GEOMETRIC')
+            _buildGeometricEditor()
+          else if (_type == 'MATRIX_MCQ')
+            _buildMatrixMCQEditor()
+          else if (_type == 'MATRIX_INPUT')
+            _buildMatrixInputEditor()
+          else if (_type == 'EQUATION')
+            _buildEquationEditor()
+          else if (_type == 'STATEMENT_DROPDOWN')
+            _buildStatementDropdownEditor()
+          else
+            _buildMCQOptionsInput(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionButtonsRow() {
+    return LayoutBuilder(
+      builder: (ctx, constraints) {
+        final bool isRow = constraints.maxWidth > 400;
+        return isRow
+            ? Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _addDittoQuestion,
+                      icon: const Icon(
+                        Icons.control_point_duplicate_rounded,
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                      label: const Text(
+                        'Add Ditto Question',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF10B981),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (widget.isPracticeMode) ...[
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _generateSimilarQuestions,
+                        icon: const Icon(
+                          Icons.auto_awesome,
+                          size: 18,
+                          color: Colors.white,
+                        ),
+                        label: const Text(
+                          'Generate 3 (AI)',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF6366F1),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _addDittoQuestion,
+                    icon: const Icon(
+                      Icons.control_point_duplicate_rounded,
+                      size: 18,
+                      color: Colors.white,
+                    ),
+                    label: const Text(
+                      'Add Ditto Question (Same Structure)',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF10B981),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                  if (widget.isPracticeMode) ...[
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: _generateSimilarQuestions,
+                      icon: const Icon(
+                        Icons.auto_awesome,
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                      label: const Text(
+                        'Generate 3 Similar Questions (AI)',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF6366F1),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              );
+      },
     );
   }
 
@@ -1222,7 +2569,7 @@ class _AssessmentQuestionFormScreenState
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const CircularProgressIndicator(color: Color(0xFF6366F1)),
+                  JyamitiLoader(color: Color(0xFF6366F1)),
                   const SizedBox(height: 16),
                   Text(
                     'AI is creating similar questions...',
@@ -1556,6 +2903,25 @@ class _AssessmentQuestionFormScreenState
                                 ),
                               ),
                             ],
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              initialValue: q['explanation'] ?? '',
+                              decoration: InputDecoration(
+                                labelText: 'AI Solution Explanation',
+                                hintText: 'AI generated solution explanation for Variation #${idx + 1}',
+                                labelStyle: TextStyle(
+                                  fontSize: 11,
+                                  color: context.textColor70,
+                                ),
+                                border: const OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                              style: TextStyle(color: context.textColor, fontSize: 13),
+                              maxLines: 3,
+                              onChanged: (val) {
+                                q['explanation'] = val;
+                              },
+                            ),
                           ],
                         ],
                       ),
@@ -2038,7 +3404,7 @@ class _AssessmentQuestionFormScreenState
           child: SizedBox(
             width: 15,
             height: 15,
-            child: CircularProgressIndicator(strokeWidth: 1.5),
+            child: JyamitiLoader(strokeWidth: 1.5),
           ),
         ),
         errorBuilder: (context, error, stackTrace) => Icon(
@@ -2057,7 +3423,7 @@ class _AssessmentQuestionFormScreenState
             child: SizedBox(
               width: 15,
               height: 15,
-              child: CircularProgressIndicator(strokeWidth: 1.5),
+              child: JyamitiLoader(strokeWidth: 1.5),
             ),
           );
         },

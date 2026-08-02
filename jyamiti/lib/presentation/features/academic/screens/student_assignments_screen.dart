@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -210,7 +211,17 @@ class _StudentAssignmentsScreenState extends State<StudentAssignmentsScreen> {
     } else if (type == 'practice_question') {
       final auth = Provider.of<AuthProvider>(context, listen: false);
       final isTeacher = auth.userRole?.toUpperCase() == 'TUTOR' || auth.userRole?.toUpperCase() == 'ADMIN' || auth.userRole?.toUpperCase() == 'MENTOR';
-      final List<dynamic> rawQuestions = itemData['practiceQuestions'] ?? [];
+      
+      final List<dynamic> sets = itemData['practiceSets'] ?? [];
+      final List<dynamic> rawQuestions = [];
+      if (sets.isNotEmpty) {
+        for (var s in sets) {
+          rawQuestions.addAll(s['questions'] ?? []);
+        }
+      } else {
+        rawQuestions.addAll(itemData['practiceQuestions'] ?? []);
+      }
+      
       final List<dynamic> questions = isTeacher
           ? rawQuestions
           : rawQuestions.where((q) => q['isClasswork'] != true && q['category'] != 'classwork').toList();
@@ -362,7 +373,7 @@ class _StudentAssignmentsScreenState extends State<StudentAssignmentsScreen> {
               elevation: 0,
             ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: JyamitiLoader())
           : _assignments.isEmpty
               ? Center(
                   child: Column(

@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -177,7 +178,7 @@ class _BatchCategoriesTabState extends State<BatchCategoriesTab> {
             ),
             child: SafeArea(
               child: isLoading
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+              ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
               : categories.isEmpty
                   ? Center(
                       child: Column(

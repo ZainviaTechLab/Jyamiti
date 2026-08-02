@@ -35,7 +35,7 @@ router.post('/login', async (req, res) => {
 
     res.json({
       token,
-      user: { id: user._id, email: user.email, name: user.name, role: user.role }
+      user: { id: user._id, email: user.email, name: user.name, role: user.role, isActive: user.isActive !== false, status: user.status || 'ACTIVE' }
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -54,6 +54,8 @@ router.get('/profile', authenticateToken, async (req, res) => {
       email: user.email,
       name: user.name,
       role: user.role,
+      isActive: user.isActive !== false,
+      status: user.status || 'ACTIVE',
       createdAt: user.createdAt,
     };
 

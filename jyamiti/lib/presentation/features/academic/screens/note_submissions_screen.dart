@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
@@ -134,7 +135,7 @@ class _NoteSubmissionsScreenState extends State<NoteSubmissionsScreen> {
         iconTheme: IconThemeData(color: context.textColor),
       ),
       body: _isLoading 
-        ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+        ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
         : _submissions.isEmpty
           ? Center(child: Text('No submissions yet', style: TextStyle(color: context.textColor70)))
           : ListView.builder(

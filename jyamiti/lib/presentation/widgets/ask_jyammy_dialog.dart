@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
@@ -464,7 +465,7 @@ class _AskJyammyDialogState extends State<AskJyammyDialog> {
             // Chat Message Stream
             Expanded(
               child: _isLoadingHistory
-                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF6366F1)))
+                  ? const Center(child: JyamitiLoader(color: Color(0xFF6366F1)))
                   : _messages.isEmpty
                       ? _buildEmptyState(studentName)
                       : ListView.builder(
@@ -803,7 +804,7 @@ class _AskJyammyDialogState extends State<AskJyammyDialog> {
                 const SizedBox(
                   width: 14,
                   height: 14,
-                  child: CircularProgressIndicator(
+                  child: JyamitiLoader(
                     strokeWidth: 2,
                     color: Color(0xFF6366F1),
                   ),

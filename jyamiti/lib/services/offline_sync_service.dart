@@ -10,6 +10,7 @@ class OfflineSyncRequest {
   final String method;
   final Map<String, dynamic> payload;
   final DateTime timestamp;
+  final int retries;
 
   OfflineSyncRequest({
     required this.id,
@@ -17,6 +18,7 @@ class OfflineSyncRequest {
     this.method = 'POST',
     required this.payload,
     required this.timestamp,
+    this.retries = 0,
   });
 
   Map<String, dynamic> toMap() {
@@ -26,6 +28,7 @@ class OfflineSyncRequest {
       'method': method,
       'payload': payload,
       'timestamp': timestamp.toIso8601String(),
+      'retries': retries,
     };
   }
 
@@ -36,6 +39,18 @@ class OfflineSyncRequest {
       method: map['method'] ?? 'POST',
       payload: Map<String, dynamic>.from(map['payload'] ?? {}),
       timestamp: DateTime.tryParse(map['timestamp'] ?? '') ?? DateTime.now(),
+      retries: map['retries'] ?? 0,
+    );
+  }
+
+  OfflineSyncRequest copyWithIncrementedRetry() {
+    return OfflineSyncRequest(
+      id: id,
+      endpoint: endpoint,
+      method: method,
+      payload: payload,
+      timestamp: timestamp,
+      retries: retries + 1,
     );
   }
 }
@@ -97,6 +112,7 @@ class OfflineSyncService {
       method: method,
       payload: payload,
       timestamp: DateTime.now(),
+      retries: 0,
     ));
 
     await _saveQueue(queue);
@@ -140,12 +156,32 @@ class OfflineSyncService {
             if (kDebugMode) {
               print('✅ Synced offline request ${req.id} (${req.endpoint}) successfully!');
             }
+          } else if (res != null && res.statusCode >= 400 && res.statusCode < 500) {
+            // Discard client-side errors immediately since retrying won't succeed
+            if (kDebugMode) {
+              print('⚠️ Discarding offline request ${req.id} due to client error ${res.statusCode} (${req.endpoint})');
+            }
           } else {
-            remainingQueue.add(req);
+            // Server error or other issue, increment retry and keep in queue if under limit
+            final updatedReq = req.copyWithIncrementedRetry();
+            if (updatedReq.retries < 10) {
+              remainingQueue.add(updatedReq);
+            } else {
+              if (kDebugMode) {
+                print('❌ Discarding offline request ${req.id} after exceeding max retries (${req.endpoint})');
+              }
+            }
           }
         } catch (e) {
-          // Still offline or server unreachable, retain request in queue
-          remainingQueue.add(req);
+          // Network connection error, increment retry and keep in queue if under limit
+          final updatedReq = req.copyWithIncrementedRetry();
+          if (updatedReq.retries < 10) {
+            remainingQueue.add(updatedReq);
+          } else {
+            if (kDebugMode) {
+              print('❌ Discarding offline request ${req.id} due to network failures and max retries reached: $e');
+            }
+          }
         }
       }
 

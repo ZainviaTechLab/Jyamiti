@@ -19,6 +19,9 @@ import 'student_performance_screen.dart';
 import 'student_payments_screen.dart';
 import 'student_settings_screen.dart';
 import 'student_detailed_attendance_screen.dart';
+import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
+import '../../meetings/screens/parent_meeting_room_screen.dart';
+import '../../../../services/parent_meeting_service.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../bloc/student_dashboard/student_dashboard_bloc.dart';
 import '../bloc/student_dashboard/student_dashboard_event.dart';
@@ -330,6 +333,11 @@ class _StudentDashboardState extends State<StudentDashboard> {
         return StudentLearningPathScreen(batch: batches[0], isInline: true);
       case 7:
         return const StudentAssignmentsScreen(isInline: true);
+      case 9:
+        return ParentMeetingsDashboardScreen(
+          isInline: true,
+          onBack: () => setState(() => _selectedSidebarTab = 0),
+        );
       default:
         return const SizedBox.shrink();
     }
@@ -495,6 +503,11 @@ class _StudentDashboardState extends State<StudentDashboard> {
                           7,
                           'Assignments',
                           Icons.assignment_rounded,
+                        ),
+                        _buildSidebarItem(
+                          9,
+                          'Parent Meetings',
+                          Icons.video_call_rounded,
                         ),
                         _buildSidebarItem(
                           3,
@@ -792,6 +805,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
 
             return Column(
                   children: [
+                    _buildStudentParentMeetingsCard(context),
                     ActiveAssignmentsPreview(
                       onNavigateToAssignments: () {
                         // Force navigation to assignments tab
@@ -1360,6 +1374,138 @@ class _StudentDashboardState extends State<StudentDashboard> {
         );
       }
     }
+  }
+
+  Widget _buildStudentParentMeetingsCard(BuildContext context) {
+    return FutureBuilder<List<dynamic>>(
+      future: ParentMeetingService.getMyMeetings(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final meetings = snapshot.data!;
+        final activeMeetings = meetings
+            .where((m) => m['status'] == 'live' || m['status'] == 'scheduled')
+            .toList();
+
+        if (activeMeetings.isEmpty) return const SizedBox.shrink();
+
+        final m = activeMeetings.first as Map;
+        final title = m['title'] ?? 'Parent Meeting';
+        final status = (m['status'] ?? 'scheduled').toString();
+        final isLive = status == 'live';
+
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 20),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: isLive
+                ? Colors.redAccent.withValues(alpha: 0.12)
+                : const Color(0xFF6366F1).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isLive ? Colors.redAccent : const Color(0xFF6366F1),
+              width: isLive ? 2 : 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: isLive ? Colors.redAccent : const Color(0xFF6366F1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.video_call_rounded,
+                  color: Colors.white,
+                  size: 26,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title.toString(),
+                            style: TextStyle(
+                              color: context.textColor,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: isLive
+                                ? Colors.redAccent
+                                : const Color(0xFF10B981),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            isLive ? '🔴 LIVE NOW' : '📅 SCHEDULED',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Host: ${m['hostName'] ?? 'Tutor'} • ${m['batchName'] ?? 'Batch'}',
+                      style: TextStyle(
+                        color: context.textColor70,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      isLive ? Colors.redAccent : const Color(0xFF6366F1),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: const Icon(Icons.login_rounded, size: 16),
+                label: const Text(
+                  'Join Meeting',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ParentMeetingRoomScreen(
+                        meeting: Map<String, dynamic>.from(m),
+                        isHost: false,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 

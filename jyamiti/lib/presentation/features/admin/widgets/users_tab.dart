@@ -1,3 +1,4 @@
+import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -60,9 +61,9 @@ class _UsersTabState extends State<UsersTab>
     context.read<UserBloc>().add(DeleteUser(id));
   }
 
-  void _updateUser(String id, String name, String email, String phone) {
+  void _updateUser(String id, String name, String email, String phone, bool isActive) {
     context.read<UserBloc>().add(
-      UpdateUser(id: id, name: name, email: email, phone: phone),
+      UpdateUser(id: id, name: name, email: email, phone: phone, isActive: isActive),
     );
   }
 
@@ -150,7 +151,7 @@ class _UsersTabState extends State<UsersTab>
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
+                            child: JyamitiLoader(
                               color: Colors.white,
                               strokeWidth: 2,
                             ),
@@ -171,9 +172,13 @@ class _UsersTabState extends State<UsersTab>
 
   void _showEditUserDialog(Map<String, dynamic> user) {
     final formKey = GlobalKey<FormState>();
-    final nameController = TextEditingController(text: user['name']);
-    final emailController = TextEditingController(text: user['email']);
-    final phoneController = TextEditingController(text: user['phone'] ?? '');
+    final nameController = TextEditingController(text: user['name'] ?? '');
+    final emailController = TextEditingController(text: user['email'] ?? '');
+    final phoneController =
+        TextEditingController(text: user['phone']?.toString() ?? '');
+    bool isActive = !(user['isActive'] == false ||
+        user['status'] == 'INACTIVE' ||
+        user['status'] == 'SUSPENDED');
 
     showDialog(
       context: context,
@@ -238,6 +243,30 @@ class _UsersTabState extends State<UsersTab>
                           return null;
                         },
                       ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Account Status',
+                            style: TextStyle(
+                              color: context.textColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Switch(
+                            value: isActive,
+                            activeThumbColor: Colors.green,
+                            inactiveTrackColor: Colors.redAccent.withOpacity(0.3),
+                            inactiveThumbColor: Colors.redAccent,
+                            onChanged: (val) {
+                              setDialogState(() {
+                                isActive = val;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -261,20 +290,21 @@ class _UsersTabState extends State<UsersTab>
                         : () {
                             if (formKey.currentState!.validate()) {
                               setDialogState(() => isSaving = true);
-                              _updateUser(
-                                user['id'] ?? user['_id'],
-                                nameController.text.trim(),
-                                emailController.text.trim(),
-                                phoneController.text.trim(),
-                              );
-                              Navigator.of(ctx).pop();
-                            }
-                          },
+                             _updateUser(
+                                 user['id'] ?? user['_id'],
+                                 nameController.text.trim(),
+                                 emailController.text.trim(),
+                                 phoneController.text.trim(),
+                                 isActive,
+                               );
+                               Navigator.of(ctx).pop();
+                             }
+                           },
                     child: isSaving
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
+                            child: JyamitiLoader(
                               color: Colors.white,
                               strokeWidth: 2,
                             ),
@@ -398,7 +428,7 @@ class _UsersTabState extends State<UsersTab>
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
+                            child: JyamitiLoader(
                               color: Colors.white,
                               strokeWidth: 2,
                             ),
