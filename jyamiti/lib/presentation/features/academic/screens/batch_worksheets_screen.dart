@@ -9,7 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import '../../../../providers/auth_provider.dart';
 import '../../../../services/api_service.dart';
-import '../../academic/screens/Worksheet_submissions_screen.dart';
+import '../../academic/screens/worksheet_submissions_screen.dart';
 import '../../academic/screens/file_viewer_screen.dart';
 
 class BatchWorksheetsScreen extends StatefulWidget {
