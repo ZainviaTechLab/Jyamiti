@@ -19,8 +19,9 @@ temp_analyze.txt
 backend/logs/
 *.log
 
-# MongoDB local data
+# MongoDB local data (large files - never commit)
 backend/mongodb_data/
+backend/mongodb_data/**
 
 # Flutter/Dart specific
 jyamiti/.dart_tool/
