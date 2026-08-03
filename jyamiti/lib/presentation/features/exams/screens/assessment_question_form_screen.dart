@@ -3140,19 +3140,22 @@ class _AssessmentQuestionFormScreenState
           ),
         ),
         const SizedBox(height: 12),
-        TextFormField(
+        SymbolInputFieldWrapper(
           controller: _shortAnswerCtrl,
-          style: TextStyle(color: context.textColor),
-          decoration: InputDecoration(
-            labelText: 'Correct Answer text',
-            labelStyle: TextStyle(color: context.textColor70),
-            filled: true,
-            fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
-            border: OutlineInputBorder(),
+          child: TextFormField(
+            controller: _shortAnswerCtrl,
+            style: TextStyle(color: context.textColor),
+            decoration: InputDecoration(
+              labelText: 'Correct Answer text',
+              labelStyle: TextStyle(color: context.textColor70),
+              filled: true,
+              fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              border: OutlineInputBorder(),
+            ),
+            validator: (v) => (v == null || v.trim().isEmpty)
+                ? 'Please enter correct answer match'
+                : null,
           ),
-          validator: (v) => (v == null || v.trim().isEmpty)
-              ? 'Please enter correct answer match'
-              : null,
         ),
         const SizedBox(height: 24),
         Text(
@@ -3173,33 +3176,39 @@ class _AssessmentQuestionFormScreenState
         Row(
           children: [
             Expanded(
-              child: TextFormField(
+              child: SymbolInputFieldWrapper(
                 controller: _prefixCtrl,
-                style: TextStyle(color: context.textColor),
-                decoration: InputDecoration(
-                  labelText: 'Prefix (e.g. Area =)',
-                  labelStyle: TextStyle(color: context.textColor70),
-                  filled: true,
-                  fillColor: context.isDark
-                      ? const Color(0xFF1E293B)
-                      : Colors.white,
-                  border: OutlineInputBorder(),
+                child: TextFormField(
+                  controller: _prefixCtrl,
+                  style: TextStyle(color: context.textColor),
+                  decoration: InputDecoration(
+                    labelText: 'Prefix (e.g. Area =)',
+                    labelStyle: TextStyle(color: context.textColor70),
+                    filled: true,
+                    fillColor: context.isDark
+                        ? const Color(0xFF1E293B)
+                        : Colors.white,
+                    border: OutlineInputBorder(),
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 16),
             Expanded(
-              child: TextFormField(
+              child: SymbolInputFieldWrapper(
                 controller: _suffixCtrl,
-                style: TextStyle(color: context.textColor),
-                decoration: InputDecoration(
-                  labelText: 'Suffix (e.g. cm²)',
-                  labelStyle: TextStyle(color: context.textColor70),
-                  filled: true,
-                  fillColor: context.isDark
-                      ? const Color(0xFF1E293B)
-                      : Colors.white,
-                  border: OutlineInputBorder(),
+                child: TextFormField(
+                  controller: _suffixCtrl,
+                  style: TextStyle(color: context.textColor),
+                  decoration: InputDecoration(
+                    labelText: 'Suffix (e.g. cm²)',
+                    labelStyle: TextStyle(color: context.textColor70),
+                    filled: true,
+                    fillColor: context.isDark
+                        ? const Color(0xFF1E293B)
+                        : Colors.white,
+                    border: OutlineInputBorder(),
+                  ),
                 ),
               ),
             ),
@@ -3221,15 +3230,18 @@ class _AssessmentQuestionFormScreenState
             style: TextStyle(color: Colors.white38, fontSize: 12),
           ),
         ),
-        TextFormField(
+        SymbolInputFieldWrapper(
           controller: _hintCtrl,
-          style: TextStyle(color: context.textColor),
-          decoration: InputDecoration(
-            labelText: 'Hint (e.g. Think of a prime number)',
-            labelStyle: TextStyle(color: context.textColor70),
-            filled: true,
-            fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
-            border: OutlineInputBorder(),
+          child: TextFormField(
+            controller: _hintCtrl,
+            style: TextStyle(color: context.textColor),
+            decoration: InputDecoration(
+              labelText: 'Hint (e.g. Think of a prime number)',
+              labelStyle: TextStyle(color: context.textColor70),
+              filled: true,
+              fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              border: OutlineInputBorder(),
+            ),
           ),
         ),
       ],
@@ -3250,11 +3262,11 @@ class _AssessmentQuestionFormScreenState
             fontSize: 15,
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.only(top: 4, bottom: 12),
+        Padding(
+          padding: const EdgeInsets.only(top: 4, bottom: 12),
           child: Text(
             'Write the ideal/model answer here. DeepSeek AI will gently and politely compare the student\'s typed or handwritten (uploaded image) answer against this for semantic meaning, not exact wording.',
-            style: TextStyle(color: Colors.white38, fontSize: 12),
+            style: TextStyle(color: context.textColor60, fontSize: 12),
           ),
         ),
         SymbolInputFieldWrapper(
@@ -3811,23 +3823,27 @@ class _AssessmentQuestionFormScreenState
                       ],
                     ),
                     const SizedBox(height: 8),
-                    TextFormField(
+                    SymbolInputFieldWrapper(
                       controller: ctrl,
-                      style: TextStyle(color: context.textColor, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: 'e.g. = [INPUT:35] + 14',
-                        hintStyle: TextStyle(
-                          color: context.textColor54.withOpacity(0.4),
+                      onChanged: () => _options[idx]['text'] = ctrl.text,
+                      child: TextFormField(
+                        controller: ctrl,
+                        style: TextStyle(color: context.textColor, fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: 'e.g. = [INPUT:35] + 14',
+                          hintStyle: TextStyle(
+                            color: context.textColor54.withOpacity(0.4),
+                          ),
+                          filled: true,
+                          fillColor: context.isDark
+                              ? const Color(0xFF0F172A)
+                              : Colors.white,
+                          border: OutlineInputBorder(),
                         ),
-                        filled: true,
-                        fillColor: context.isDark
-                            ? const Color(0xFF0F172A)
-                            : Colors.white,
-                        border: OutlineInputBorder(),
+                        onChanged: (val) {
+                          _options[idx]['text'] = val;
+                        },
                       ),
-                      onChanged: (val) {
-                        _options[idx]['text'] = val;
-                      },
                     ),
                     const SizedBox(height: 8),
                     Align(
@@ -4001,23 +4017,27 @@ class _AssessmentQuestionFormScreenState
                       ],
                     ),
                     const SizedBox(height: 8),
-                    TextFormField(
+                    SymbolInputFieldWrapper(
                       controller: ctrl,
-                      style: TextStyle(color: context.textColor, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: 'e.g. -4.4 is [SELECT:above,below:below] 1.2',
-                        hintStyle: TextStyle(
-                          color: context.textColor54.withOpacity(0.4),
+                      onChanged: () => _options[idx]['text'] = ctrl.text,
+                      child: TextFormField(
+                        controller: ctrl,
+                        style: TextStyle(color: context.textColor, fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: 'e.g. -4.4 is [SELECT:above,below:below] 1.2',
+                          hintStyle: TextStyle(
+                            color: context.textColor54.withOpacity(0.4),
+                          ),
+                          filled: true,
+                          fillColor: context.isDark
+                              ? const Color(0xFF0F172A)
+                              : Colors.white,
+                          border: OutlineInputBorder(),
                         ),
-                        filled: true,
-                        fillColor: context.isDark
-                            ? const Color(0xFF0F172A)
-                            : Colors.white,
-                        border: OutlineInputBorder(),
+                        onChanged: (val) {
+                          _options[idx]['text'] = val;
+                        },
                       ),
-                      onChanged: (val) {
-                        _options[idx]['text'] = val;
-                      },
                     ),
                     const SizedBox(height: 8),
                     Align(
