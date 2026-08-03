@@ -82,6 +82,14 @@ class _AssessmentQuestionFormScreenState
 
   // AI similar questions & Ditto cloned questions generation state
   List<Map<String, dynamic>> _dittoQuestions = [];
+  // Persistent per-ditto-question controllers (kept in lockstep with
+  // _dittoQuestions by index) so the math symbol toolbar can attach to them.
+  final List<TextEditingController> _dittoDescriptiveTextCtrls = [];
+  final List<TextEditingController> _dittoTextCtrls = [];
+  final List<TextEditingController> _dittoExplanationCtrls = [];
+  final List<TextEditingController> _dittoShortAnswerCtrls = [];
+  final List<List<TextEditingController>> _dittoOptionCtrls = [];
+  final List<List<TextEditingController>> _dittoRightPairCtrls = [];
   bool _isGeneratingAI = false;
   List<Map<String, dynamic>> _generatedQuestions = [];
   List<bool> _selectedGeneratedQuestions = [true, true, true];
@@ -272,6 +280,28 @@ class _AssessmentQuestionFormScreenState
     }
     for (var ctrl in _statementStepControllers) {
       ctrl.dispose();
+    }
+    for (var ctrl in _dittoDescriptiveTextCtrls) {
+      ctrl.dispose();
+    }
+    for (var ctrl in _dittoTextCtrls) {
+      ctrl.dispose();
+    }
+    for (var ctrl in _dittoExplanationCtrls) {
+      ctrl.dispose();
+    }
+    for (var ctrl in _dittoShortAnswerCtrls) {
+      ctrl.dispose();
+    }
+    for (var list in _dittoOptionCtrls) {
+      for (var ctrl in list) {
+        ctrl.dispose();
+      }
+    }
+    for (var list in _dittoRightPairCtrls) {
+      for (var ctrl in list) {
+        ctrl.dispose();
+      }
     }
     super.dispose();
   }
@@ -1030,8 +1060,41 @@ class _AssessmentQuestionFormScreenState
     ditto['explanation'] = _explanationCtrl.text.trim();
     ditto['explanationSteps'] = List<Map<String, dynamic>>.from(_explanationSteps);
 
+    final List optionsList = ditto['options'] is List ? ditto['options'] as List : [];
+    final List rightOptionsList =
+        ditto['rightOptions'] is List ? ditto['rightOptions'] as List : [];
+
     setState(() {
       _dittoQuestions.add(ditto);
+      _dittoDescriptiveTextCtrls.add(
+        TextEditingController(text: ditto['descriptiveText']?.toString() ?? ''),
+      );
+      _dittoTextCtrls.add(TextEditingController(text: ditto['text']?.toString() ?? ''));
+      _dittoExplanationCtrls.add(
+        TextEditingController(text: ditto['explanation']?.toString() ?? ''),
+      );
+      final String initialShortAnswer =
+          (ditto['correctAnswers'] is List &&
+              (ditto['correctAnswers'] as List).isNotEmpty)
+          ? ditto['correctAnswers'][0].toString()
+          : '';
+      _dittoShortAnswerCtrls.add(TextEditingController(text: initialShortAnswer));
+      _dittoOptionCtrls.add(
+        List.generate(
+          optionsList.length,
+          (i) => TextEditingController(text: (optionsList[i]['text'] ?? '').toString()),
+        ),
+      );
+      _dittoRightPairCtrls.add(
+        List.generate(
+          optionsList.length,
+          (i) => TextEditingController(
+            text: i < rightOptionsList.length
+                ? (rightOptionsList[i]['text'] ?? '').toString()
+                : '',
+          ),
+        ),
+      );
     });
 
     _showSnackBar(
@@ -1076,6 +1139,34 @@ class _AssessmentQuestionFormScreenState
                 onPressed: () {
                   setState(() {
                     _dittoQuestions.clear();
+                    for (var ctrl in _dittoDescriptiveTextCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoDescriptiveTextCtrls.clear();
+                    for (var ctrl in _dittoTextCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoTextCtrls.clear();
+                    for (var ctrl in _dittoExplanationCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoExplanationCtrls.clear();
+                    for (var ctrl in _dittoShortAnswerCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoShortAnswerCtrls.clear();
+                    for (var list in _dittoOptionCtrls) {
+                      for (var ctrl in list) {
+                        ctrl.dispose();
+                      }
+                    }
+                    _dittoOptionCtrls.clear();
+                    for (var list in _dittoRightPairCtrls) {
+                      for (var ctrl in list) {
+                        ctrl.dispose();
+                      }
+                    }
+                    _dittoRightPairCtrls.clear();
                   });
                 },
                 icon: const Icon(
@@ -1146,6 +1237,16 @@ class _AssessmentQuestionFormScreenState
                           onPressed: () {
                             setState(() {
                               _dittoQuestions.removeAt(idx);
+                              _dittoDescriptiveTextCtrls.removeAt(idx).dispose();
+                              _dittoTextCtrls.removeAt(idx).dispose();
+                              _dittoExplanationCtrls.removeAt(idx).dispose();
+                              _dittoShortAnswerCtrls.removeAt(idx).dispose();
+                              for (var ctrl in _dittoOptionCtrls.removeAt(idx)) {
+                                ctrl.dispose();
+                              }
+                              for (var ctrl in _dittoRightPairCtrls.removeAt(idx)) {
+                                ctrl.dispose();
+                              }
                             });
                           },
                         ),
@@ -1154,10 +1255,41 @@ class _AssessmentQuestionFormScreenState
                     const SizedBox(height: 10),
                     if (q['descriptiveText'] != null &&
                         q['descriptiveText'].toString().isNotEmpty) ...[
-                      TextFormField(
-                        initialValue: q['descriptiveText'],
+                      SymbolInputFieldWrapper(
+                        controller: _dittoDescriptiveTextCtrls[idx],
+                        onChanged: () => q['descriptiveText'] =
+                            _dittoDescriptiveTextCtrls[idx].text,
+                        child: TextFormField(
+                          controller: _dittoDescriptiveTextCtrls[idx],
+                          decoration: InputDecoration(
+                            labelText: 'Descriptive Context Text',
+                            labelStyle: TextStyle(
+                              fontSize: 11,
+                              color: context.textColor70,
+                            ),
+                            border: const OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontSize: 13,
+                          ),
+                          maxLines: 2,
+                          onChanged: (val) {
+                            q['descriptiveText'] = val;
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    SymbolInputFieldWrapper(
+                      controller: _dittoTextCtrls[idx],
+                      onChanged: () => q['text'] = _dittoTextCtrls[idx].text,
+                      child: TextFormField(
+                        controller: _dittoTextCtrls[idx],
                         decoration: InputDecoration(
-                          labelText: 'Descriptive Context Text',
+                          labelText: 'Question Text',
+                          hintText: 'Enter question text for Ditto #${idx + 1}',
                           labelStyle: TextStyle(
                             fontSize: 11,
                             color: context.textColor70,
@@ -1165,34 +1297,12 @@ class _AssessmentQuestionFormScreenState
                           border: const OutlineInputBorder(),
                           isDense: true,
                         ),
-                        style: TextStyle(
-                          color: context.textColor,
-                          fontSize: 13,
-                        ),
-                        maxLines: 2,
+                        style: TextStyle(color: context.textColor, fontSize: 13),
+                        maxLines: 3,
                         onChanged: (val) {
-                          q['descriptiveText'] = val;
+                          q['text'] = val;
                         },
                       ),
-                      const SizedBox(height: 12),
-                    ],
-                    TextFormField(
-                      initialValue: q['text'],
-                      decoration: InputDecoration(
-                        labelText: 'Question Text',
-                        hintText: 'Enter question text for Ditto #${idx + 1}',
-                        labelStyle: TextStyle(
-                          fontSize: 11,
-                          color: context.textColor70,
-                        ),
-                        border: const OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      style: TextStyle(color: context.textColor, fontSize: 13),
-                      maxLines: 3,
-                      onChanged: (val) {
-                        q['text'] = val;
-                      },
                     ),
                     const SizedBox(height: 12),
                     if ((q['type'] == 'MCQ_SINGLE' ||
@@ -1246,21 +1356,26 @@ class _AssessmentQuestionFormScreenState
                                 },
                               ),
                               Expanded(
-                                child: TextFormField(
-                                  initialValue: opt['text'] ?? '',
-                                  decoration: InputDecoration(
-                                    labelText: 'Option ${optIdx + 1}',
-                                    labelStyle: const TextStyle(fontSize: 11),
-                                    border: const OutlineInputBorder(),
-                                    isDense: true,
+                                child: SymbolInputFieldWrapper(
+                                  controller: _dittoOptionCtrls[idx][optIdx],
+                                  onChanged: () => opt['text'] =
+                                      _dittoOptionCtrls[idx][optIdx].text,
+                                  child: TextFormField(
+                                    controller: _dittoOptionCtrls[idx][optIdx],
+                                    decoration: InputDecoration(
+                                      labelText: 'Option ${optIdx + 1}',
+                                      labelStyle: const TextStyle(fontSize: 11),
+                                      border: const OutlineInputBorder(),
+                                      isDense: true,
+                                    ),
+                                    style: TextStyle(
+                                      color: context.textColor,
+                                      fontSize: 13,
+                                    ),
+                                    onChanged: (val) {
+                                      opt['text'] = val;
+                                    },
                                   ),
-                                  style: TextStyle(
-                                    color: context.textColor,
-                                    fontSize: 13,
-                                  ),
-                                  onChanged: (val) {
-                                    opt['text'] = val;
-                                  },
                                 ),
                               ),
                             ],
@@ -1268,25 +1383,27 @@ class _AssessmentQuestionFormScreenState
                         );
                       }),
                     ] else if (q['type'] == 'SHORT_ANSWER') ...[
-                      TextFormField(
-                        initialValue:
-                            (q['correctAnswers'] is List &&
-                                (q['correctAnswers'] as List).isNotEmpty)
-                            ? q['correctAnswers'][0]
-                            : '',
-                        decoration: const InputDecoration(
-                          labelText: 'Correct Answer',
-                          labelStyle: TextStyle(fontSize: 11),
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                      SymbolInputFieldWrapper(
+                        controller: _dittoShortAnswerCtrls[idx],
+                        onChanged: () => q['correctAnswers'] = [
+                          _dittoShortAnswerCtrls[idx].text.trim(),
+                        ],
+                        child: TextFormField(
+                          controller: _dittoShortAnswerCtrls[idx],
+                          decoration: const InputDecoration(
+                            labelText: 'Correct Answer',
+                            labelStyle: TextStyle(fontSize: 11),
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontSize: 13,
+                          ),
+                          onChanged: (val) {
+                            q['correctAnswers'] = [val.trim()];
+                          },
                         ),
-                        style: TextStyle(
-                          color: context.textColor,
-                          fontSize: 13,
-                        ),
-                        onChanged: (val) {
-                          q['correctAnswers'] = [val.trim()];
-                        },
                       ),
                     ] else if (q['type'] == 'MATCHING' &&
                         q['options'] != null &&
@@ -1311,21 +1428,26 @@ class _AssessmentQuestionFormScreenState
                           child: Row(
                             children: [
                               Expanded(
-                                child: TextFormField(
-                                  initialValue: leftOpt['text'] ?? '',
-                                  decoration: InputDecoration(
-                                    labelText: 'Left Pair ${pIdx + 1}',
-                                    labelStyle: const TextStyle(fontSize: 11),
-                                    border: const OutlineInputBorder(),
-                                    isDense: true,
+                                child: SymbolInputFieldWrapper(
+                                  controller: _dittoOptionCtrls[idx][pIdx],
+                                  onChanged: () => leftOpt['text'] =
+                                      _dittoOptionCtrls[idx][pIdx].text,
+                                  child: TextFormField(
+                                    controller: _dittoOptionCtrls[idx][pIdx],
+                                    decoration: InputDecoration(
+                                      labelText: 'Left Pair ${pIdx + 1}',
+                                      labelStyle: const TextStyle(fontSize: 11),
+                                      border: const OutlineInputBorder(),
+                                      isDense: true,
+                                    ),
+                                    style: TextStyle(
+                                      color: context.textColor,
+                                      fontSize: 13,
+                                    ),
+                                    onChanged: (val) {
+                                      leftOpt['text'] = val;
+                                    },
                                   ),
-                                  style: TextStyle(
-                                    color: context.textColor,
-                                    fontSize: 13,
-                                  ),
-                                  onChanged: (val) {
-                                    leftOpt['text'] = val;
-                                  },
                                 ),
                               ),
                               const Padding(
@@ -1337,21 +1459,26 @@ class _AssessmentQuestionFormScreenState
                                 ),
                               ),
                               Expanded(
-                                child: TextFormField(
-                                  initialValue: rightOpt['text'] ?? '',
-                                  decoration: InputDecoration(
-                                    labelText: 'Right Pair ${pIdx + 1}',
-                                    labelStyle: const TextStyle(fontSize: 11),
-                                    border: const OutlineInputBorder(),
-                                    isDense: true,
+                                child: SymbolInputFieldWrapper(
+                                  controller: _dittoRightPairCtrls[idx][pIdx],
+                                  onChanged: () => rightOpt['text'] =
+                                      _dittoRightPairCtrls[idx][pIdx].text,
+                                  child: TextFormField(
+                                    controller: _dittoRightPairCtrls[idx][pIdx],
+                                    decoration: InputDecoration(
+                                      labelText: 'Right Pair ${pIdx + 1}',
+                                      labelStyle: const TextStyle(fontSize: 11),
+                                      border: const OutlineInputBorder(),
+                                      isDense: true,
+                                    ),
+                                    style: TextStyle(
+                                      color: context.textColor,
+                                      fontSize: 13,
+                                    ),
+                                    onChanged: (val) {
+                                      rightOpt['text'] = val;
+                                    },
                                   ),
-                                  style: TextStyle(
-                                    color: context.textColor,
-                                    fontSize: 13,
-                                  ),
-                                  onChanged: (val) {
-                                    rightOpt['text'] = val;
-                                  },
                                 ),
                               ),
                             ],
@@ -1368,23 +1495,28 @@ class _AssessmentQuestionFormScreenState
                       ),
                     ],
                     const SizedBox(height: 12),
-                    TextFormField(
-                      initialValue: q['explanation'] ?? '',
-                      decoration: InputDecoration(
-                        labelText: 'Solution Explanation',
-                        hintText: 'Enter step-by-step solution explanation for Ditto #${idx + 1}',
-                        labelStyle: TextStyle(
-                          fontSize: 11,
-                          color: context.textColor70,
+                    SymbolInputFieldWrapper(
+                      controller: _dittoExplanationCtrls[idx],
+                      onChanged: () =>
+                          q['explanation'] = _dittoExplanationCtrls[idx].text,
+                      child: TextFormField(
+                        controller: _dittoExplanationCtrls[idx],
+                        decoration: InputDecoration(
+                          labelText: 'Solution Explanation',
+                          hintText: 'Enter step-by-step solution explanation for Ditto #${idx + 1}',
+                          labelStyle: TextStyle(
+                            fontSize: 11,
+                            color: context.textColor70,
+                          ),
+                          border: const OutlineInputBorder(),
+                          isDense: true,
                         ),
-                        border: const OutlineInputBorder(),
-                        isDense: true,
+                        style: TextStyle(color: context.textColor, fontSize: 13),
+                        maxLines: 3,
+                        onChanged: (val) {
+                          q['explanation'] = val;
+                        },
                       ),
-                      style: TextStyle(color: context.textColor, fontSize: 13),
-                      maxLines: 3,
-                      onChanged: (val) {
-                        q['explanation'] = val;
-                      },
                     ),
                   ],
                 ),
