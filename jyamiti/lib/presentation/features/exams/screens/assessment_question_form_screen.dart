@@ -90,6 +90,15 @@ class _AssessmentQuestionFormScreenState
   final List<TextEditingController> _dittoShortAnswerCtrls = [];
   final List<List<TextEditingController>> _dittoOptionCtrls = [];
   final List<List<TextEditingController>> _dittoRightPairCtrls = [];
+  final List<TextEditingController> _dittoPrefixCtrls = [];
+  final List<TextEditingController> _dittoSuffixCtrls = [];
+  final List<TextEditingController> _dittoHintCtrls = [];
+  final List<TextEditingController> _dittoMarksCtrls = [];
+  final List<bool> _dittoTrueFalseAnswers = [];
+  final List<List<TextEditingController>> _dittoEquationStepCtrls = [];
+  final List<List<TextEditingController>> _dittoStatementStepCtrls = [];
+  final List<List<String>> _dittoMatrixCorrectAnswers = [];
+  final List<List<List<Map<String, dynamic>>>> _dittoMatrixInputCells = [];
   bool _isGeneratingAI = false;
   List<Map<String, dynamic>> _generatedQuestions = [];
   List<bool> _selectedGeneratedQuestions = [true, true, true];
@@ -299,6 +308,28 @@ class _AssessmentQuestionFormScreenState
       }
     }
     for (var list in _dittoRightPairCtrls) {
+      for (var ctrl in list) {
+        ctrl.dispose();
+      }
+    }
+    for (var ctrl in _dittoPrefixCtrls) {
+      ctrl.dispose();
+    }
+    for (var ctrl in _dittoSuffixCtrls) {
+      ctrl.dispose();
+    }
+    for (var ctrl in _dittoHintCtrls) {
+      ctrl.dispose();
+    }
+    for (var ctrl in _dittoMarksCtrls) {
+      ctrl.dispose();
+    }
+    for (var list in _dittoEquationStepCtrls) {
+      for (var ctrl in list) {
+        ctrl.dispose();
+      }
+    }
+    for (var list in _dittoStatementStepCtrls) {
       for (var ctrl in list) {
         ctrl.dispose();
       }
@@ -1095,6 +1126,79 @@ class _AssessmentQuestionFormScreenState
           ),
         ),
       );
+      _dittoPrefixCtrls.add(
+        TextEditingController(text: ditto['shortAnswerPrefix']?.toString() ?? ''),
+      );
+      _dittoSuffixCtrls.add(
+        TextEditingController(text: ditto['shortAnswerSuffix']?.toString() ?? ''),
+      );
+      _dittoHintCtrls.add(
+        TextEditingController(text: ditto['shortAnswerHint']?.toString() ?? ''),
+      );
+      _dittoMarksCtrls.add(
+        TextEditingController(text: ditto['marks']?.toString() ?? '1'),
+      );
+
+      final List<dynamic> correctAnswersList =
+          ditto['correctAnswers'] is List ? ditto['correctAnswers'] as List : [];
+      _dittoTrueFalseAnswers.add(
+        correctAnswersList.isEmpty || correctAnswersList.first.toString() == '0',
+      );
+
+      _dittoEquationStepCtrls.add(
+        ditto['type'] == 'EQUATION'
+            ? List.generate(
+                optionsList.length,
+                (i) => TextEditingController(
+                  text: (optionsList[i]['text'] ?? '').toString(),
+                ),
+              )
+            : <TextEditingController>[],
+      );
+      _dittoStatementStepCtrls.add(
+        ditto['type'] == 'STATEMENT_DROPDOWN'
+            ? List.generate(
+                optionsList.length,
+                (i) => TextEditingController(
+                  text: (optionsList[i]['text'] ?? '').toString(),
+                ),
+              )
+            : <TextEditingController>[],
+      );
+
+      _dittoMatrixCorrectAnswers.add(
+        ditto['type'] == 'MATRIX_MCQ'
+            ? List.generate(
+                optionsList.length,
+                (i) => i < correctAnswersList.length
+                    ? correctAnswersList[i].toString()
+                    : '0',
+              )
+            : <String>[],
+      );
+
+      if (ditto['type'] == 'MATRIX_INPUT') {
+        final List<List<Map<String, dynamic>>> cellsForDitto = [];
+        for (int r = 0; r < optionsList.length; r++) {
+          final String jsonStr = optionsList[r]['text']?.toString() ?? '[]';
+          List<dynamic> decoded = [];
+          try {
+            decoded = json.decode(jsonStr);
+          } catch (_) {}
+          final List<Map<String, dynamic>> rowCells = decoded
+              .map<Map<String, dynamic>>(
+                (c) => {'value': c['value'] ?? '', 'isInput': c['isInput'] == true},
+              )
+              .toList();
+          while (rowCells.length < rightOptionsList.length) {
+            rowCells.add({'value': '', 'isInput': false});
+          }
+          cellsForDitto.add(rowCells);
+        }
+        _dittoMatrixInputCells.add(cellsForDitto);
+      } else {
+        _dittoMatrixInputCells.add([]);
+      }
     });
 
     _showSnackBar(
@@ -1167,6 +1271,37 @@ class _AssessmentQuestionFormScreenState
                       }
                     }
                     _dittoRightPairCtrls.clear();
+                    for (var ctrl in _dittoPrefixCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoPrefixCtrls.clear();
+                    for (var ctrl in _dittoSuffixCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoSuffixCtrls.clear();
+                    for (var ctrl in _dittoHintCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoHintCtrls.clear();
+                    for (var ctrl in _dittoMarksCtrls) {
+                      ctrl.dispose();
+                    }
+                    _dittoMarksCtrls.clear();
+                    _dittoTrueFalseAnswers.clear();
+                    for (var list in _dittoEquationStepCtrls) {
+                      for (var ctrl in list) {
+                        ctrl.dispose();
+                      }
+                    }
+                    _dittoEquationStepCtrls.clear();
+                    for (var list in _dittoStatementStepCtrls) {
+                      for (var ctrl in list) {
+                        ctrl.dispose();
+                      }
+                    }
+                    _dittoStatementStepCtrls.clear();
+                    _dittoMatrixCorrectAnswers.clear();
+                    _dittoMatrixInputCells.clear();
                   });
                 },
                 icon: const Icon(
@@ -1247,6 +1382,19 @@ class _AssessmentQuestionFormScreenState
                               for (var ctrl in _dittoRightPairCtrls.removeAt(idx)) {
                                 ctrl.dispose();
                               }
+                              _dittoPrefixCtrls.removeAt(idx).dispose();
+                              _dittoSuffixCtrls.removeAt(idx).dispose();
+                              _dittoHintCtrls.removeAt(idx).dispose();
+                              _dittoMarksCtrls.removeAt(idx).dispose();
+                              _dittoTrueFalseAnswers.removeAt(idx);
+                              for (var ctrl in _dittoEquationStepCtrls.removeAt(idx)) {
+                                ctrl.dispose();
+                              }
+                              for (var ctrl in _dittoStatementStepCtrls.removeAt(idx)) {
+                                ctrl.dispose();
+                              }
+                              _dittoMatrixCorrectAnswers.removeAt(idx);
+                              _dittoMatrixInputCells.removeAt(idx);
                             });
                           },
                         ),
@@ -1284,7 +1432,10 @@ class _AssessmentQuestionFormScreenState
                     ],
                     SymbolInputFieldWrapper(
                       controller: _dittoTextCtrls[idx],
-                      onChanged: () => q['text'] = _dittoTextCtrls[idx].text,
+                      onChanged: () {
+                        q['text'] = _dittoTextCtrls[idx].text;
+                        _syncDittoTextDerivedAnswers(q);
+                      },
                       child: TextFormField(
                         controller: _dittoTextCtrls[idx],
                         decoration: InputDecoration(
@@ -1301,8 +1452,36 @@ class _AssessmentQuestionFormScreenState
                         maxLines: 3,
                         onChanged: (val) {
                           q['text'] = val;
+                          _syncDittoTextDerivedAnswers(q);
                         },
                       ),
+                    ),
+                    if (q['type'] == 'FILL_IN_BLANKS') ...[
+                      const SizedBox(height: 10),
+                      _buildDittoTipBox(
+                        'Insert blanks using [BLANK:answer] or [INPUT:answer] tags. Example: "The area is [BLANK:\\pi r^2]."',
+                      ),
+                    ],
+                    if (q['type'] == 'INLINE_SELECT') ...[
+                      const SizedBox(height: 10),
+                      _buildDittoTipBox(
+                        'Insert dropdowns using [SELECT:choice1,choice2:correctChoice] tags. Example: "\$\\pi\$ is approx [SELECT:3.14,4.13:3.14]."',
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _dittoMarksCtrls[idx],
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Marks',
+                        labelStyle: TextStyle(fontSize: 11),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      style: TextStyle(color: context.textColor, fontSize: 13),
+                      onChanged: (val) {
+                        q['marks'] = int.tryParse(val) ?? 1;
+                      },
                     ),
                     const SizedBox(height: 12),
                     if ((q['type'] == 'MCQ_SINGLE' ||
@@ -1383,28 +1562,19 @@ class _AssessmentQuestionFormScreenState
                         );
                       }),
                     ] else if (q['type'] == 'SHORT_ANSWER') ...[
-                      SymbolInputFieldWrapper(
-                        controller: _dittoShortAnswerCtrls[idx],
-                        onChanged: () => q['correctAnswers'] = [
-                          _dittoShortAnswerCtrls[idx].text.trim(),
-                        ],
-                        child: TextFormField(
-                          controller: _dittoShortAnswerCtrls[idx],
-                          decoration: const InputDecoration(
-                            labelText: 'Correct Answer',
-                            labelStyle: TextStyle(fontSize: 11),
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                          style: TextStyle(
-                            color: context.textColor,
-                            fontSize: 13,
-                          ),
-                          onChanged: (val) {
-                            q['correctAnswers'] = [val.trim()];
-                          },
-                        ),
-                      ),
+                      _buildDittoShortAnswerFields(idx),
+                    ] else if (q['type'] == 'DESCRIPTIVE') ...[
+                      _buildDittoShortAnswerFields(idx),
+                    ] else if (q['type'] == 'TRUE_FALSE') ...[
+                      _buildDittoTrueFalseInput(idx),
+                    ] else if (q['type'] == 'EQUATION') ...[
+                      _buildDittoEquationEditor(idx),
+                    ] else if (q['type'] == 'STATEMENT_DROPDOWN') ...[
+                      _buildDittoStatementDropdownEditor(idx),
+                    ] else if (q['type'] == 'MATRIX_MCQ') ...[
+                      _buildDittoMatrixMCQEditor(idx),
+                    ] else if (q['type'] == 'MATRIX_INPUT') ...[
+                      _buildDittoMatrixInputEditor(idx),
                     ] else if (q['type'] == 'MATCHING' &&
                         q['options'] != null &&
                         q['rightOptions'] != null) ...[
@@ -1525,6 +1695,936 @@ class _AssessmentQuestionFormScreenState
           }),
         ],
       ),
+    );
+  }
+
+  // Small instructional tip box, mirroring the main form's own tip boxes for
+  // FILL_IN_BLANKS / INLINE_SELECT question text tags.
+  Widget _buildDittoTipBox(String message) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF10B981).withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline_rounded, color: Color(0xFF10B981), size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: context.textColor, fontSize: 11, height: 1.3),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // FILL_IN_BLANKS / INLINE_SELECT store their correct answers as tags
+  // embedded directly in the question text (matching the main form's own
+  // _saveQuestion logic) rather than as separate input fields, so recompute
+  // q['correctAnswers'] straight from q['text'] whenever it changes.
+  void _syncDittoTextDerivedAnswers(Map<String, dynamic> q) {
+    final String textVal = (q['text'] ?? '').toString();
+    if (q['type'] == 'INLINE_SELECT') {
+      final regExp = RegExp(r'\[SELECT:(.*?):(.*?)\]');
+      final List<String> inputs = [];
+      for (final m in regExp.allMatches(textVal)) {
+        inputs.add((m.group(2) ?? '').trim());
+      }
+      q['correctAnswers'] = inputs;
+    } else if (q['type'] == 'FILL_IN_BLANKS') {
+      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+      final List<String> inputs = [];
+      for (final m in regExp.allMatches(textVal)) {
+        inputs.add((m.group(1) ?? '').trim());
+      }
+      q['correctAnswers'] = inputs;
+    }
+  }
+
+  // Re-encodes _dittoMatrixInputCells[idx] back into q['options'][r]['text']
+  // (JSON, mirroring the main form's matrixInputOptions construction) and
+  // recomputes the flattened correctAnswers list of every input-flagged cell.
+  void _syncDittoMatrixInputRows(int idx) {
+    final q = _dittoQuestions[idx];
+    final List<List<Map<String, dynamic>>> cells = _dittoMatrixInputCells[idx];
+    final List optionsList = q['options'] is List ? q['options'] as List : [];
+    for (int r = 0; r < optionsList.length && r < cells.length; r++) {
+      optionsList[r]['text'] = json.encode(cells[r]);
+    }
+    final List<String> inputs = [];
+    for (final row in cells) {
+      for (final cell in row) {
+        if (cell['isInput'] == true) {
+          inputs.add((cell['value'] ?? '').toString().trim());
+        }
+      }
+    }
+    q['correctAnswers'] = inputs;
+  }
+
+  // EQUATION stores its answers as [INPUT:x] tags embedded in each step's
+  // text (see _saveQuestion's save-time recompute for the main question);
+  // since Ditto questions are POSTed as-is with no equivalent recompute
+  // step, correctAnswers must be kept in sync here on every step edit.
+  void _syncDittoEquationAnswers(int idx) {
+    final q = _dittoQuestions[idx];
+    final List optionsList = q['options'] is List ? q['options'] as List : [];
+    final regExp = RegExp(r'\[INPUT:(.*?)\]');
+    final List<String> inputs = [];
+    for (final opt in optionsList) {
+      final String stepText = (opt['text'] ?? '').toString();
+      for (final m in regExp.allMatches(stepText)) {
+        inputs.add((m.group(1) ?? '').trim());
+      }
+    }
+    q['correctAnswers'] = inputs;
+  }
+
+  // Same idea as _syncDittoEquationAnswers but for STATEMENT_DROPDOWN's
+  // [SELECT:choices:correct] tags.
+  void _syncDittoStatementDropdownAnswers(int idx) {
+    final q = _dittoQuestions[idx];
+    final List optionsList = q['options'] is List ? q['options'] as List : [];
+    final regExp = RegExp(r'\[SELECT:(.*?):(.*?)\]');
+    final List<String> inputs = [];
+    for (final opt in optionsList) {
+      final String stepText = (opt['text'] ?? '').toString();
+      for (final m in regExp.allMatches(stepText)) {
+        inputs.add((m.group(2) ?? '').trim());
+      }
+    }
+    q['correctAnswers'] = inputs;
+  }
+
+  // SHORT_ANSWER and DESCRIPTIVE both use _dittoShortAnswerCtrls for their
+  // answer text, matching the main form's shared prefill logic; only
+  // SHORT_ANSWER additionally gets Prefix/Suffix/Hint fields (DESCRIPTIVE's
+  // main-form counterpart, _buildDescriptiveAnswerInput, has none).
+  Widget _buildDittoShortAnswerFields(int idx) {
+    final q = _dittoQuestions[idx];
+    final bool isDescriptive = q['type'] == 'DESCRIPTIVE';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SymbolInputFieldWrapper(
+          controller: _dittoShortAnswerCtrls[idx],
+          onChanged: () =>
+              q['correctAnswers'] = [_dittoShortAnswerCtrls[idx].text.trim()],
+          child: TextFormField(
+            controller: _dittoShortAnswerCtrls[idx],
+            maxLines: isDescriptive ? 4 : 1,
+            decoration: InputDecoration(
+              labelText: isDescriptive ? 'Admin Preset Model Answer' : 'Correct Answer',
+              labelStyle: const TextStyle(fontSize: 11),
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            style: TextStyle(color: context.textColor, fontSize: 13),
+            onChanged: (val) {
+              q['correctAnswers'] = [val.trim()];
+            },
+          ),
+        ),
+        if (!isDescriptive) ...[
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: SymbolInputFieldWrapper(
+                  controller: _dittoPrefixCtrls[idx],
+                  onChanged: () =>
+                      q['shortAnswerPrefix'] = _dittoPrefixCtrls[idx].text,
+                  child: TextFormField(
+                    controller: _dittoPrefixCtrls[idx],
+                    decoration: const InputDecoration(
+                      labelText: 'Prefix',
+                      labelStyle: TextStyle(fontSize: 11),
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    style: TextStyle(color: context.textColor, fontSize: 13),
+                    onChanged: (val) => q['shortAnswerPrefix'] = val,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SymbolInputFieldWrapper(
+                  controller: _dittoSuffixCtrls[idx],
+                  onChanged: () =>
+                      q['shortAnswerSuffix'] = _dittoSuffixCtrls[idx].text,
+                  child: TextFormField(
+                    controller: _dittoSuffixCtrls[idx],
+                    decoration: const InputDecoration(
+                      labelText: 'Suffix',
+                      labelStyle: TextStyle(fontSize: 11),
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    style: TextStyle(color: context.textColor, fontSize: 13),
+                    onChanged: (val) => q['shortAnswerSuffix'] = val,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SymbolInputFieldWrapper(
+            controller: _dittoHintCtrls[idx],
+            onChanged: () => q['shortAnswerHint'] = _dittoHintCtrls[idx].text,
+            child: TextFormField(
+              controller: _dittoHintCtrls[idx],
+              decoration: const InputDecoration(
+                labelText: 'Hint (optional)',
+                labelStyle: TextStyle(fontSize: 11),
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              style: TextStyle(color: context.textColor, fontSize: 13),
+              onChanged: (val) => q['shortAnswerHint'] = val,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // TRUE_FALSE: fixed True/False options, tap to pick which is correct.
+  Widget _buildDittoTrueFalseInput(int idx) {
+    final q = _dittoQuestions[idx];
+
+    Widget buildChoiceCard(String label, bool valueForTrue) {
+      final bool isSelected = _dittoTrueFalseAnswers[idx] == valueForTrue;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            setState(() {
+              _dittoTrueFalseAnswers[idx] = valueForTrue;
+              q['correctAnswers'] = [valueForTrue ? '0' : '1'];
+            });
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? const Color(0xFF10B981).withOpacity(0.15)
+                  : (context.isDark ? const Color(0xFF1E293B) : Colors.white),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isSelected ? const Color(0xFF10B981) : context.glassBorder,
+                width: isSelected ? 2 : 1,
+              ),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  isSelected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  color: isSelected ? const Color(0xFF10B981) : context.textColor54,
+                  size: 20,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: isSelected ? const Color(0xFF10B981) : context.textColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Correct Answer:',
+          style: TextStyle(
+            color: context.textColor70,
+            fontWeight: FontWeight.bold,
+            fontSize: 11,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            buildChoiceCard('True', true),
+            const SizedBox(width: 10),
+            buildChoiceCard('False', false),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // Equation-completion step editor, mirroring _buildEquationEditor() but
+  // operating on this ditto's own q['options'] / _dittoEquationStepCtrls[idx].
+  Widget _buildDittoEquationEditor(int idx) {
+    final q = _dittoQuestions[idx];
+    final List optionsList = q['options'] is List ? q['options'] as List : [];
+    final List<TextEditingController> stepCtrls = _dittoEquationStepCtrls[idx];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Equation Steps:',
+              style: TextStyle(
+                color: context.textColor70,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
+              label: const Text(
+                'Add Step',
+                style: TextStyle(color: Color(0xFF818CF8), fontSize: 12),
+              ),
+              onPressed: () {
+                setState(() {
+                  optionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                  stepCtrls.add(TextEditingController());
+                  _syncDittoEquationAnswers(idx);
+                });
+              },
+            ),
+          ],
+        ),
+        _buildDittoTipBox(
+          'Use [INPUT:answer] to add an input box. Example: "= [INPUT:35] + 14"',
+        ),
+        const SizedBox(height: 8),
+        ...List.generate(optionsList.length, (stepIdx) {
+          final ctrl = stepCtrls[stepIdx];
+          return Card(
+            color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(10.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Step ${stepIdx + 1}',
+                        style: TextStyle(
+                          color: context.textColor70,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      if (optionsList.length > 1)
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete,
+                            color: Colors.redAccent,
+                            size: 16,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              optionsList.removeAt(stepIdx);
+                              stepCtrls.removeAt(stepIdx).dispose();
+                              _syncDittoEquationAnswers(idx);
+                            });
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  SymbolInputFieldWrapper(
+                    controller: ctrl,
+                    onChanged: () {
+                      optionsList[stepIdx]['text'] = ctrl.text;
+                      _syncDittoEquationAnswers(idx);
+                    },
+                    child: TextFormField(
+                      controller: ctrl,
+                      style: TextStyle(color: context.textColor, fontSize: 13),
+                      decoration: const InputDecoration(
+                        hintText: 'e.g. = [INPUT:35] + 14',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (val) {
+                        optionsList[stepIdx]['text'] = val;
+                        _syncDittoEquationAnswers(idx);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  // Statement-dropdown step editor, mirroring _buildStatementDropdownEditor().
+  Widget _buildDittoStatementDropdownEditor(int idx) {
+    final q = _dittoQuestions[idx];
+    final List optionsList = q['options'] is List ? q['options'] as List : [];
+    final List<TextEditingController> stepCtrls = _dittoStatementStepCtrls[idx];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Statements:',
+              style: TextStyle(
+                color: context.textColor70,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
+              label: const Text(
+                'Add Statement',
+                style: TextStyle(color: Color(0xFF818CF8), fontSize: 12),
+              ),
+              onPressed: () {
+                setState(() {
+                  optionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                  stepCtrls.add(TextEditingController());
+                  _syncDittoStatementDropdownAnswers(idx);
+                });
+              },
+            ),
+          ],
+        ),
+        _buildDittoTipBox(
+          'Use [SELECT:choice1,choice2:correctChoice] for an inline dropdown. Example: "-4.4 is [SELECT:above,below:below] 1.2"',
+        ),
+        const SizedBox(height: 8),
+        ...List.generate(optionsList.length, (stepIdx) {
+          final ctrl = stepCtrls[stepIdx];
+          return Card(
+            color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(10.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Statement ${stepIdx + 1}',
+                        style: TextStyle(
+                          color: context.textColor70,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      if (optionsList.length > 1)
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete,
+                            color: Colors.redAccent,
+                            size: 16,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              optionsList.removeAt(stepIdx);
+                              stepCtrls.removeAt(stepIdx).dispose();
+                              _syncDittoStatementDropdownAnswers(idx);
+                            });
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  SymbolInputFieldWrapper(
+                    controller: ctrl,
+                    onChanged: () {
+                      optionsList[stepIdx]['text'] = ctrl.text;
+                      _syncDittoStatementDropdownAnswers(idx);
+                    },
+                    child: TextFormField(
+                      controller: ctrl,
+                      style: TextStyle(color: context.textColor, fontSize: 13),
+                      decoration: const InputDecoration(
+                        hintText: 'e.g. -4.4 is [SELECT:above,below:below] 1.2',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (val) {
+                        optionsList[stepIdx]['text'] = val;
+                        _syncDittoStatementDropdownAnswers(idx);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  // Matrix MCQ grid editor, mirroring _buildMatrixMCQEditor(). Rows/columns
+  // use initialValue+onChanged directly against q['options']/q['rightOptions']
+  // (no persistent controllers), matching the main form's own pattern there.
+  Widget _buildDittoMatrixMCQEditor(int idx) {
+    final q = _dittoQuestions[idx];
+    final List optionsList = q['options'] is List ? q['options'] as List : [];
+    final List rightOptionsList =
+        q['rightOptions'] is List ? q['rightOptions'] as List : [];
+    final List<String> correctAnswers = _dittoMatrixCorrectAnswers[idx];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Grid Rows:',
+              style: TextStyle(
+                color: context.textColor70,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
+              label: const Text('Add Row', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              onPressed: () {
+                setState(() {
+                  optionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                  correctAnswers.add('0');
+                });
+              },
+            ),
+          ],
+        ),
+        ...List.generate(optionsList.length, (rowIdx) {
+          final row = optionsList[rowIdx];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    initialValue: row['text'],
+                    style: TextStyle(color: context.textColor, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Row ${rowIdx + 1} label',
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                    ),
+                    onChanged: (val) => row['text'] = val,
+                  ),
+                ),
+                if (optionsList.length > 1)
+                  IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                    onPressed: () {
+                      setState(() {
+                        optionsList.removeAt(rowIdx);
+                        if (rowIdx < correctAnswers.length) {
+                          correctAnswers.removeAt(rowIdx);
+                        }
+                        q['correctAnswers'] = List<String>.from(correctAnswers);
+                      });
+                    },
+                  ),
+              ],
+            ),
+          );
+        }),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Grid Columns:',
+              style: TextStyle(
+                color: context.textColor70,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
+              label: const Text('Add Column', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              onPressed: () {
+                setState(() {
+                  rightOptionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                });
+              },
+            ),
+          ],
+        ),
+        ...List.generate(rightOptionsList.length, (colIdx) {
+          final col = rightOptionsList[colIdx];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    initialValue: col['text'],
+                    style: TextStyle(color: context.textColor, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Column ${colIdx + 1} label',
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                    ),
+                    onChanged: (val) => col['text'] = val,
+                  ),
+                ),
+                if (rightOptionsList.length > 1)
+                  IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                    onPressed: () {
+                      setState(() {
+                        rightOptionsList.removeAt(colIdx);
+                        for (int i = 0; i < correctAnswers.length; i++) {
+                          final int sel = int.tryParse(correctAnswers[i]) ?? 0;
+                          if (sel >= rightOptionsList.length) {
+                            correctAnswers[i] = (rightOptionsList.length - 1)
+                                .clamp(0, 1 << 30)
+                                .toString();
+                          }
+                        }
+                        q['correctAnswers'] = List<String>.from(correctAnswers);
+                      });
+                    },
+                  ),
+              ],
+            ),
+          );
+        }),
+        const SizedBox(height: 12),
+        Text(
+          'Select correct answer for each row:',
+          style: TextStyle(color: context.textColor60, fontSize: 11),
+        ),
+        const SizedBox(height: 6),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Table(
+            defaultColumnWidth: const FixedColumnWidth(90.0),
+            border: TableBorder.all(color: context.glassBorder),
+            children: [
+              TableRow(
+                children: [
+                  const TableCell(child: Padding(padding: EdgeInsets.all(6), child: Text(''))),
+                  ...List.generate(rightOptionsList.length, (colIdx) {
+                    final colText = rightOptionsList[colIdx]['text'] ?? '';
+                    return TableCell(
+                      child: Padding(
+                        padding: const EdgeInsets.all(6.0),
+                        child: Center(
+                          child: Text(
+                            colText.isNotEmpty ? colText : 'Col ${colIdx + 1}',
+                            style: TextStyle(
+                              color: context.textColor70,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+              ...List.generate(optionsList.length, (rowIdx) {
+                if (rowIdx >= correctAnswers.length) {
+                  correctAnswers.add('0');
+                }
+                final int currentSel = int.tryParse(correctAnswers[rowIdx]) ?? 0;
+                final rowText = optionsList[rowIdx]['text'] ?? '';
+                return TableRow(
+                  children: [
+                    TableCell(
+                      verticalAlignment: TableCellVerticalAlignment.middle,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6.0),
+                        child: Text(
+                          rowText.isNotEmpty ? rowText : 'Row ${rowIdx + 1}',
+                          style: TextStyle(color: context.textColor, fontSize: 11),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    ...List.generate(rightOptionsList.length, (colIdx) {
+                      return TableCell(
+                        child: Center(
+                          child: Radio<int>(
+                            value: colIdx,
+                            groupValue: currentSel,
+                            activeColor: const Color(0xFF6366F1),
+                            onChanged: (val) {
+                              if (val != null) {
+                                setState(() {
+                                  correctAnswers[rowIdx] = val.toString();
+                                  q['correctAnswers'] = List<String>.from(correctAnswers);
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Matrix Input grid editor, mirroring _buildMatrixInputEditor(). Cells use
+  // initialValue+onChanged (no persistent controllers), matching the main
+  // form's own pattern; every edit re-encodes back into q['options'][r]['text']
+  // and recomputes q['correctAnswers'] via _syncDittoMatrixInputRows.
+  Widget _buildDittoMatrixInputEditor(int idx) {
+    final q = _dittoQuestions[idx];
+    final List optionsList = q['options'] is List ? q['options'] as List : [];
+    final List rightOptionsList =
+        q['rightOptions'] is List ? q['rightOptions'] as List : [];
+    final List<List<Map<String, dynamic>>> cells = _dittoMatrixInputCells[idx];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Table Columns:',
+              style: TextStyle(
+                color: context.textColor70,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
+              label: const Text('Add Column', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              onPressed: () {
+                setState(() {
+                  rightOptionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                  for (final row in cells) {
+                    row.add({'value': '', 'isInput': false});
+                  }
+                  _syncDittoMatrixInputRows(idx);
+                });
+              },
+            ),
+          ],
+        ),
+        ...List.generate(rightOptionsList.length, (colIdx) {
+          final col = rightOptionsList[colIdx];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    initialValue: col['text'],
+                    style: TextStyle(color: context.textColor, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Column ${colIdx + 1} header',
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                    ),
+                    onChanged: (val) => col['text'] = val,
+                  ),
+                ),
+                if (rightOptionsList.length > 1)
+                  IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                    onPressed: () {
+                      setState(() {
+                        rightOptionsList.removeAt(colIdx);
+                        for (final row in cells) {
+                          if (colIdx < row.length) row.removeAt(colIdx);
+                        }
+                        _syncDittoMatrixInputRows(idx);
+                      });
+                    },
+                  ),
+              ],
+            ),
+          );
+        }),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Table Rows & Cells:',
+              style: TextStyle(
+                color: context.textColor70,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
+              label: const Text('Add Row', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              onPressed: () {
+                setState(() {
+                  optionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                  cells.add(
+                    List.generate(
+                      rightOptionsList.length,
+                      (c) => {'value': '', 'isInput': false},
+                    ),
+                  );
+                  _syncDittoMatrixInputRows(idx);
+                });
+              },
+            ),
+          ],
+        ),
+        _buildDittoTipBox('Check "Input?" for cells students must fill in.'),
+        const SizedBox(height: 8),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Table(
+            defaultColumnWidth: const FixedColumnWidth(120.0),
+            border: TableBorder.all(color: context.glassBorder),
+            children: [
+              TableRow(
+                children: [
+                  const TableCell(child: Padding(padding: EdgeInsets.all(6), child: Text(''))),
+                  ...List.generate(rightOptionsList.length, (colIdx) {
+                    final colText = rightOptionsList[colIdx]['text'] ?? '';
+                    return TableCell(
+                      child: Padding(
+                        padding: const EdgeInsets.all(6.0),
+                        child: Center(
+                          child: Text(
+                            colText.isNotEmpty ? colText : 'Col ${colIdx + 1}',
+                            style: TextStyle(
+                              color: context.textColor70,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                  const TableCell(child: Padding(padding: EdgeInsets.all(6), child: Text(''))),
+                ],
+              ),
+              ...List.generate(optionsList.length, (rowIdx) {
+                while (cells.length <= rowIdx) {
+                  cells.add(
+                    List.generate(rightOptionsList.length, (c) => {'value': '', 'isInput': false}),
+                  );
+                }
+                while (cells[rowIdx].length < rightOptionsList.length) {
+                  cells[rowIdx].add({'value': '', 'isInput': false});
+                }
+                return TableRow(
+                  children: [
+                    TableCell(
+                      verticalAlignment: TableCellVerticalAlignment.middle,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6.0),
+                        child: Text('Row ${rowIdx + 1}', style: TextStyle(color: context.textColor60, fontSize: 11)),
+                      ),
+                    ),
+                    ...List.generate(rightOptionsList.length, (colIdx) {
+                      final cell = cells[rowIdx][colIdx];
+                      final bool isInput = cell['isInput'] == true;
+                      return TableCell(
+                        child: Padding(
+                          padding: const EdgeInsets.all(4.0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              TextFormField(
+                                initialValue: cell['value'],
+                                style: TextStyle(color: context.textColor, fontSize: 12),
+                                decoration: InputDecoration(
+                                  hintText: isInput ? 'Correct value' : 'Label value',
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.all(6),
+                                ),
+                                onChanged: (val) {
+                                  cell['value'] = val;
+                                  _syncDittoMatrixInputRows(idx);
+                                },
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text('Input?', style: TextStyle(color: context.textColor54, fontSize: 9)),
+                                  Checkbox(
+                                    value: isInput,
+                                    activeColor: const Color(0xFF6366F1),
+                                    onChanged: (val) {
+                                      setState(() {
+                                        cell['isInput'] = val == true;
+                                        _syncDittoMatrixInputRows(idx);
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                    TableCell(
+                      verticalAlignment: TableCellVerticalAlignment.middle,
+                      child: Center(
+                        child: IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                          onPressed: () {
+                            setState(() {
+                              optionsList.removeAt(rowIdx);
+                              cells.removeAt(rowIdx);
+                              _syncDittoMatrixInputRows(idx);
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
