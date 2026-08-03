@@ -113,6 +113,16 @@ class _AssessmentQuestionFormScreenState
   // change), so the shared toolbar in the AppBar can insert into it without
   // requiring each field to opt in individually.
   TextEditingController? _globalActiveCtrl;
+  // The focused field's own EditableText.onChanged (i.e. exactly what a real
+  // keystroke would invoke — TextField/TextFormField's onChanged, wired down
+  // to whatever data model that specific field writes into, e.g.
+  // `cell['value'] = val` for a Matrix Input cell). Mutating the controller
+  // alone updates the on-screen text (the field listens to its own
+  // controller) but does NOT reliably re-run this callback, so without
+  // calling it explicitly the backing map/list never sees the inserted
+  // symbol and it silently gets dropped on save — matching the established
+  // pattern in SymbolToolbarStrip._onSymbolTap, which does the same dual step.
+  ValueChanged<String>? _globalActiveOnChanged;
 
   void _handleGlobalFocusChange() {
     final BuildContext? focusContext = FocusManager.instance.primaryFocus?.context;
@@ -121,6 +131,7 @@ class _AssessmentQuestionFormScreenState
         focusContext.findAncestorStateOfType<EditableTextState>();
     if (editableState != null && editableState.mounted) {
       _globalActiveCtrl = editableState.widget.controller;
+      _globalActiveOnChanged = editableState.widget.onChanged;
     }
   }
 
@@ -373,6 +384,7 @@ class _AssessmentQuestionFormScreenState
       return;
     }
     MathSymbolsData.insertSymbol(ctrl, symbol);
+    _globalActiveOnChanged?.call(ctrl.text);
   }
 
   void _showGlobalSymbolPicker() {
@@ -385,7 +397,10 @@ class _AssessmentQuestionFormScreenState
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => FullSymbolPickerModal(controller: ctrl),
+      builder: (_) => FullSymbolPickerModal(
+        controller: ctrl,
+        onChanged: () => _globalActiveOnChanged?.call(ctrl.text),
+      ),
     );
   }
 
