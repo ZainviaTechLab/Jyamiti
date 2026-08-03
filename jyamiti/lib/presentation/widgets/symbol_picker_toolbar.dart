@@ -539,16 +539,38 @@ class SymbolInputFieldWrapper extends StatelessWidget {
   final Widget child;
   final VoidCallback? onChanged;
 
+  /// When false, the inline [SymbolToolbarStrip] is not rendered — use this
+  /// when a shared/global toolbar elsewhere handles symbol insertion instead.
+  final bool showToolbar;
+
+  /// Called whenever the wrapped [child] gains focus (including via a
+  /// descendant, e.g. the actual editable text node inside a TextFormField),
+  /// so a shared toolbar can track which field is currently active.
+  final VoidCallback? onFocusGained;
+
   const SymbolInputFieldWrapper({
     super.key,
     required this.controller,
     required this.child,
     this.focusNode,
     this.onChanged,
+    this.showToolbar = true,
+    this.onFocusGained,
   });
 
   @override
   Widget build(BuildContext context) {
+    final Widget focusAwareChild = Focus(
+      onFocusChange: (hasFocus) {
+        if (hasFocus) onFocusGained?.call();
+      },
+      child: child,
+    );
+
+    if (!showToolbar) {
+      return focusAwareChild;
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -558,7 +580,7 @@ class SymbolInputFieldWrapper extends StatelessWidget {
           focusNode: focusNode,
           onChanged: onChanged,
         ),
-        child,
+        focusAwareChild,
       ],
     );
   }
