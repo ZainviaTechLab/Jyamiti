@@ -3257,21 +3257,24 @@ class _AssessmentQuestionFormScreenState
             style: TextStyle(color: Colors.white38, fontSize: 12),
           ),
         ),
-        TextFormField(
+        SymbolInputFieldWrapper(
           controller: _shortAnswerCtrl,
-          maxLines: 5,
-          style: TextStyle(color: context.textColor),
-          decoration: InputDecoration(
-            labelText: 'Model Answer',
-            labelStyle: TextStyle(color: context.textColor70),
-            filled: true,
-            fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
-            border: OutlineInputBorder(),
-            alignLabelWithHint: true,
+          child: TextFormField(
+            controller: _shortAnswerCtrl,
+            maxLines: 5,
+            style: TextStyle(color: context.textColor),
+            decoration: InputDecoration(
+              labelText: 'Model Answer',
+              labelStyle: TextStyle(color: context.textColor70),
+              filled: true,
+              fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              border: OutlineInputBorder(),
+              alignLabelWithHint: true,
+            ),
+            validator: (v) => (v == null || v.trim().isEmpty)
+                ? 'Please provide the Admin Preset Model Answer'
+                : null,
           ),
-          validator: (v) => (v == null || v.trim().isEmpty)
-              ? 'Please provide the Admin Preset Model Answer'
-              : null,
         ),
       ],
     );
