@@ -99,153 +99,6 @@ class _AssessmentQuestionFormScreenState
   final List<List<TextEditingController>> _dittoStatementStepCtrls = [];
   final List<List<String>> _dittoMatrixCorrectAnswers = [];
   final List<List<List<Map<String, dynamic>>>> _dittoMatrixInputCells = [];
-
-  // Shared/global math-symbol toolbar state: tracks whichever text field
-  // currently has focus so the AppBar toolbar knows where to insert into.
-  TextEditingController? _activeSymbolCtrl;
-  VoidCallback? _activeSymbolOnChanged;
-
-  void _setActiveSymbolTarget(TextEditingController ctrl, VoidCallback? onChanged) {
-    setState(() {
-      _activeSymbolCtrl = ctrl;
-      _activeSymbolOnChanged = onChanged;
-    });
-  }
-
-  void _insertGlobalSymbol(String symbol) {
-    final ctrl = _activeSymbolCtrl;
-    if (ctrl == null) return;
-    MathSymbolsData.insertSymbol(ctrl, symbol);
-    _activeSymbolOnChanged?.call();
-    setState(() {});
-  }
-
-  // Single shared math-symbol toolbar pinned in the AppBar (beside Save
-  // Question) that inserts into whichever field last gained focus, instead
-  // of every field carrying its own inline toolbar strip.
-  Widget _buildGlobalSymbolToolbar() {
-    final isDark = context.isDark;
-    final bool hasTarget = _activeSymbolCtrl != null;
-
-    return Container(
-      width: 250,
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
-        ),
-      ),
-      child: !hasTarget
-          ? Row(
-              children: [
-                Icon(
-                  Icons.functions_rounded,
-                  size: 16,
-                  color: context.textColor54,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  'Tap a field to insert symbols',
-                  style: TextStyle(color: context.textColor54, fontSize: 11),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            )
-          : Row(
-              children: [
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4),
-                  child: Icon(
-                    Icons.functions_rounded,
-                    size: 16,
-                    color: Color(0xFF6366F1),
-                  ),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: MathSymbolsData.quickSymbols.map((symbol) {
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: InkWell(
-                            onTap: () => _insertGlobalSymbol(symbol),
-                            borderRadius: BorderRadius.circular(6),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 3,
-                              ),
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: isDark
-                                    ? const Color(0xFF0F172A)
-                                    : Colors.white,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: isDark
-                                      ? const Color(0xFF475569)
-                                      : const Color(0xFFE2E8F0),
-                                ),
-                              ),
-                              child: Text(
-                                symbol,
-                                style: TextStyle(
-                                  color: context.textColor,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: symbol.length > 3 ? 10 : 12,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                InkWell(
-                  onTap: () {
-                    final ctrl = _activeSymbolCtrl;
-                    if (ctrl == null) return;
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (_) => FullSymbolPickerModal(
-                        controller: ctrl,
-                        onChanged: () {
-                          _activeSymbolOnChanged?.call();
-                          setState(() {});
-                        },
-                      ),
-                    );
-                  },
-                  borderRadius: BorderRadius.circular(6),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF6366F1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Icon(
-                      Icons.grid_view_rounded,
-                      size: 13,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-    );
-  }
-
   bool _isGeneratingAI = false;
   List<Map<String, dynamic>> _generatedQuestions = [];
   List<bool> _selectedGeneratedQuestions = [true, true, true];
@@ -1236,7 +1089,12 @@ class _AssessmentQuestionFormScreenState
     final Map<String, dynamic> ditto = jsonDecode(jsonEncode(baseQuestion));
     ditto['text'] = '';
     ditto['explanation'] = _explanationCtrl.text.trim();
-    ditto['explanationSteps'] = List<Map<String, dynamic>>.from(_explanationSteps);
+    // Deep clone (not a shallow List.from) so editing this Ditto's steps
+    // later can never mutate the main question's own _explanationSteps maps,
+    // and vice versa.
+    ditto['explanationSteps'] = (jsonDecode(jsonEncode(_explanationSteps)) as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
 
     final List optionsList = ditto['options'] is List ? ditto['options'] as List : [];
     final List rightOptionsList =
@@ -1554,12 +1412,6 @@ class _AssessmentQuestionFormScreenState
                         controller: _dittoDescriptiveTextCtrls[idx],
                         onChanged: () => q['descriptiveText'] =
                             _dittoDescriptiveTextCtrls[idx].text,
-                        showToolbar: false,
-                        onFocusGained: () => _setActiveSymbolTarget(
-                          _dittoDescriptiveTextCtrls[idx],
-                          () => q['descriptiveText'] =
-                              _dittoDescriptiveTextCtrls[idx].text,
-                        ),
                         child: TextFormField(
                           controller: _dittoDescriptiveTextCtrls[idx],
                           decoration: InputDecoration(
@@ -1589,14 +1441,6 @@ class _AssessmentQuestionFormScreenState
                         q['text'] = _dittoTextCtrls[idx].text;
                         _syncDittoTextDerivedAnswers(q);
                       },
-                      showToolbar: false,
-                      onFocusGained: () => _setActiveSymbolTarget(
-                        _dittoTextCtrls[idx],
-                        () {
-                          q['text'] = _dittoTextCtrls[idx].text;
-                          _syncDittoTextDerivedAnswers(q);
-                        },
-                      ),
                       child: TextFormField(
                         controller: _dittoTextCtrls[idx],
                         decoration: InputDecoration(
@@ -1700,12 +1544,6 @@ class _AssessmentQuestionFormScreenState
                                   controller: _dittoOptionCtrls[idx][optIdx],
                                   onChanged: () => opt['text'] =
                                       _dittoOptionCtrls[idx][optIdx].text,
-                                  showToolbar: false,
-                                  onFocusGained: () => _setActiveSymbolTarget(
-                                    _dittoOptionCtrls[idx][optIdx],
-                                    () => opt['text'] =
-                                        _dittoOptionCtrls[idx][optIdx].text,
-                                  ),
                                   child: TextFormField(
                                     controller: _dittoOptionCtrls[idx][optIdx],
                                     decoration: InputDecoration(
@@ -1769,12 +1607,6 @@ class _AssessmentQuestionFormScreenState
                                   controller: _dittoOptionCtrls[idx][pIdx],
                                   onChanged: () => leftOpt['text'] =
                                       _dittoOptionCtrls[idx][pIdx].text,
-                                  showToolbar: false,
-                                  onFocusGained: () => _setActiveSymbolTarget(
-                                    _dittoOptionCtrls[idx][pIdx],
-                                    () => leftOpt['text'] =
-                                        _dittoOptionCtrls[idx][pIdx].text,
-                                  ),
                                   child: TextFormField(
                                     controller: _dittoOptionCtrls[idx][pIdx],
                                     decoration: InputDecoration(
@@ -1806,12 +1638,6 @@ class _AssessmentQuestionFormScreenState
                                   controller: _dittoRightPairCtrls[idx][pIdx],
                                   onChanged: () => rightOpt['text'] =
                                       _dittoRightPairCtrls[idx][pIdx].text,
-                                  showToolbar: false,
-                                  onFocusGained: () => _setActiveSymbolTarget(
-                                    _dittoRightPairCtrls[idx][pIdx],
-                                    () => rightOpt['text'] =
-                                        _dittoRightPairCtrls[idx][pIdx].text,
-                                  ),
                                   child: TextFormField(
                                     controller: _dittoRightPairCtrls[idx][pIdx],
                                     decoration: InputDecoration(
@@ -1848,15 +1674,10 @@ class _AssessmentQuestionFormScreenState
                       controller: _dittoExplanationCtrls[idx],
                       onChanged: () =>
                           q['explanation'] = _dittoExplanationCtrls[idx].text,
-                      showToolbar: false,
-                      onFocusGained: () => _setActiveSymbolTarget(
-                        _dittoExplanationCtrls[idx],
-                        () => q['explanation'] = _dittoExplanationCtrls[idx].text,
-                      ),
                       child: TextFormField(
                         controller: _dittoExplanationCtrls[idx],
                         decoration: InputDecoration(
-                          labelText: 'Solution Explanation',
+                          labelText: 'General Solution Explanation (Optional)',
                           hintText: 'Enter step-by-step solution explanation for Ditto #${idx + 1}',
                           labelStyle: TextStyle(
                             fontSize: 11,
@@ -1872,6 +1693,8 @@ class _AssessmentQuestionFormScreenState
                         },
                       ),
                     ),
+                    const SizedBox(height: 12),
+                    _buildDittoExplanationStepsEditor(idx),
                   ],
                 ),
               ),
@@ -1999,11 +1822,6 @@ class _AssessmentQuestionFormScreenState
           controller: _dittoShortAnswerCtrls[idx],
           onChanged: () =>
               q['correctAnswers'] = [_dittoShortAnswerCtrls[idx].text.trim()],
-          showToolbar: false,
-          onFocusGained: () => _setActiveSymbolTarget(
-            _dittoShortAnswerCtrls[idx],
-            () => q['correctAnswers'] = [_dittoShortAnswerCtrls[idx].text.trim()],
-          ),
           child: TextFormField(
             controller: _dittoShortAnswerCtrls[idx],
             maxLines: isDescriptive ? 4 : 1,
@@ -2028,11 +1846,6 @@ class _AssessmentQuestionFormScreenState
                   controller: _dittoPrefixCtrls[idx],
                   onChanged: () =>
                       q['shortAnswerPrefix'] = _dittoPrefixCtrls[idx].text,
-                  showToolbar: false,
-                  onFocusGained: () => _setActiveSymbolTarget(
-                    _dittoPrefixCtrls[idx],
-                    () => q['shortAnswerPrefix'] = _dittoPrefixCtrls[idx].text,
-                  ),
                   child: TextFormField(
                     controller: _dittoPrefixCtrls[idx],
                     decoration: const InputDecoration(
@@ -2052,11 +1865,6 @@ class _AssessmentQuestionFormScreenState
                   controller: _dittoSuffixCtrls[idx],
                   onChanged: () =>
                       q['shortAnswerSuffix'] = _dittoSuffixCtrls[idx].text,
-                  showToolbar: false,
-                  onFocusGained: () => _setActiveSymbolTarget(
-                    _dittoSuffixCtrls[idx],
-                    () => q['shortAnswerSuffix'] = _dittoSuffixCtrls[idx].text,
-                  ),
                   child: TextFormField(
                     controller: _dittoSuffixCtrls[idx],
                     decoration: const InputDecoration(
@@ -2076,11 +1884,6 @@ class _AssessmentQuestionFormScreenState
           SymbolInputFieldWrapper(
             controller: _dittoHintCtrls[idx],
             onChanged: () => q['shortAnswerHint'] = _dittoHintCtrls[idx].text,
-            showToolbar: false,
-            onFocusGained: () => _setActiveSymbolTarget(
-              _dittoHintCtrls[idx],
-              () => q['shortAnswerHint'] = _dittoHintCtrls[idx].text,
-            ),
             child: TextFormField(
               controller: _dittoHintCtrls[idx],
               decoration: const InputDecoration(
@@ -2259,11 +2062,6 @@ class _AssessmentQuestionFormScreenState
                       optionsList[stepIdx]['text'] = ctrl.text;
                       _syncDittoEquationAnswers(idx);
                     },
-                    showToolbar: false,
-                    onFocusGained: () => _setActiveSymbolTarget(ctrl, () {
-                      optionsList[stepIdx]['text'] = ctrl.text;
-                      _syncDittoEquationAnswers(idx);
-                    }),
                     child: TextFormField(
                       controller: ctrl,
                       style: TextStyle(color: context.textColor, fontSize: 13),
@@ -2372,11 +2170,6 @@ class _AssessmentQuestionFormScreenState
                       optionsList[stepIdx]['text'] = ctrl.text;
                       _syncDittoStatementDropdownAnswers(idx);
                     },
-                    showToolbar: false,
-                    onFocusGained: () => _setActiveSymbolTarget(ctrl, () {
-                      optionsList[stepIdx]['text'] = ctrl.text;
-                      _syncDittoStatementDropdownAnswers(idx);
-                    }),
                     child: TextFormField(
                       controller: ctrl,
                       style: TextStyle(color: context.textColor, fontSize: 13),
@@ -2842,6 +2635,295 @@ class _AssessmentQuestionFormScreenState
     );
   }
 
+  // Step-by-step (numbered, block-based) solution editor for a Ditto
+  // question, mirroring _buildExplanationEditorCard()'s step/block section
+  // but operating on this ditto's own q['explanationSteps'] instead of the
+  // main question's _explanationSteps. Text blocks use an ephemeral
+  // per-rebuild controller seeded from block['content'], matching the exact
+  // pattern the main form itself already uses for `blockTextCtrl`.
+  Widget _buildDittoExplanationStepsEditor(int idx) {
+    final q = _dittoQuestions[idx];
+    final bool isDark = context.isDark;
+    if (q['explanationSteps'] == null || q['explanationSteps'] is! List) {
+      q['explanationSteps'] = <Map<String, dynamic>>[];
+    }
+    final List<dynamic> steps = q['explanationSteps'];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Numbered Solution Steps (${steps.length}):',
+              style: TextStyle(
+                color: context.textColor70,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  steps.add({
+                    'stepNumber': steps.length + 1,
+                    'title': '',
+                    'text': '',
+                    'imageUrl': '',
+                    'isSvg': false,
+                  });
+                });
+              },
+              icon: const Icon(Icons.add_rounded, size: 14, color: Color(0xFF3B82F6)),
+              label: const Text('Add Step', style: TextStyle(color: Color(0xFF3B82F6), fontSize: 12)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ...List.generate(steps.length, (sIdx) {
+          final Map<String, dynamic> step = steps[sIdx] as Map<String, dynamic>;
+          step['stepNumber'] = sIdx + 1;
+
+          if (step['blocks'] == null) {
+            final List<Map<String, dynamic>> initialBlocks = [];
+            if ((step['text'] ?? '').toString().isNotEmpty) {
+              initialBlocks.add({'type': 'TEXT', 'content': step['text'], 'isSvg': false});
+            }
+            if ((step['imageUrl'] ?? '').toString().isNotEmpty) {
+              initialBlocks.add({
+                'type': 'IMAGE',
+                'content': step['imageUrl'],
+                'isSvg': step['isSvg'] == true,
+              });
+            }
+            if (initialBlocks.isEmpty) {
+              initialBlocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+            }
+            step['blocks'] = initialBlocks;
+          }
+          final List<dynamic> blocks = step['blocks'];
+
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(color: const Color(0xFF3B82F6).withOpacity(0.35)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF3B82F6).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'Step ${sIdx + 1}',
+                          style: const TextStyle(
+                            color: Color(0xFF3B82F6),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            blocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+                          });
+                        },
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          side: const BorderSide(color: Color(0xFF3B82F6)),
+                        ),
+                        icon: const Icon(Icons.add_circle_outline, size: 14, color: Color(0xFF3B82F6)),
+                        label: const Text('+ Text', style: TextStyle(fontSize: 11, color: Color(0xFF3B82F6))),
+                      ),
+                      const SizedBox(width: 6),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            blocks.add({'type': 'IMAGE', 'content': '', 'isSvg': false});
+                          });
+                        },
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          side: const BorderSide(color: Color(0xFF10B981)),
+                        ),
+                        icon: const Icon(Icons.add_photo_alternate_outlined, size: 14, color: Color(0xFF10B981)),
+                        label: const Text('+ Image', style: TextStyle(fontSize: 11, color: Color(0xFF10B981))),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
+                        onPressed: () {
+                          setState(() {
+                            steps.removeAt(sIdx);
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  ...List.generate(blocks.length, (bIdx) {
+                    final block = blocks[bIdx] as Map<String, dynamic>;
+                    final String bType = block['type'] ?? 'TEXT';
+
+                    if (bType == 'IMAGE') {
+                      final String imgContent = block['content'] ?? '';
+                      final bool isSvg = block['isSvg'] == true;
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.image_rounded, color: Color(0xFF10B981), size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: imgContent.isNotEmpty
+                                  ? Row(
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(6),
+                                          child: SizedBox(
+                                            height: 50,
+                                            width: 70,
+                                            child: _renderQuestionImagePreview(imgContent, isSvg: isSvg),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            imgContent,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(fontSize: 11, color: context.textColor70),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : const Text(
+                                      'No diagram uploaded yet',
+                                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                                    ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: () async {
+                                try {
+                                  final result = await FilePicker.pickFiles(type: FileType.image);
+                                  if (result != null && result.files.single.bytes != null) {
+                                    final bytes = result.files.single.bytes!;
+                                    final filename = result.files.single.name;
+                                    final isSvgFile = filename.toLowerCase().endsWith('.svg');
+
+                                    final res = await ApiService.uploadFile(
+                                      '/assessment-questions/upload',
+                                      bytes,
+                                      filename,
+                                      fieldName: 'file',
+                                    );
+
+                                    if (res.statusCode == 200) {
+                                      final resBody = await res.stream.bytesToString();
+                                      final data = jsonDecode(resBody);
+                                      setState(() {
+                                        block['content'] = data['fileUrl'];
+                                        block['isSvg'] = isSvgFile;
+                                      });
+                                    }
+                                  }
+                                } catch (e) {
+                                  _showSnackBar('Upload error: $e');
+                                }
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF10B981),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              ),
+                              icon: const Icon(Icons.upload_file_rounded, size: 14),
+                              label: Text(imgContent.isEmpty ? 'Upload Image' : 'Change', style: const TextStyle(fontSize: 11)),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                              onPressed: () {
+                                setState(() {
+                                  blocks.removeAt(bIdx);
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    // TEXT Block
+                    final blockTextCtrl = TextEditingController(text: block['content'] ?? '');
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: SymbolInputFieldWrapper(
+                              controller: blockTextCtrl,
+                              onChanged: () {
+                                block['content'] = blockTextCtrl.text;
+                              },
+                              child: TextFormField(
+                                controller: blockTextCtrl,
+                                decoration: InputDecoration(
+                                  labelText: 'Text Block #${bIdx + 1}',
+                                  hintText: 'e.g., 53 is between 50 and 60...',
+                                  labelStyle: TextStyle(fontSize: 11, color: context.textColor70),
+                                  border: const OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                                style: TextStyle(color: context.textColor, fontSize: 13),
+                                maxLines: 2,
+                                onChanged: (val) {
+                                  block['content'] = val;
+                                },
+                              ),
+                            ),
+                          ),
+                          if (blocks.length > 1) ...[
+                            const SizedBox(width: 4),
+                            IconButton(
+                              icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                              onPressed: () {
+                                setState(() {
+                                  blocks.removeAt(bIdx);
+                                });
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isEdit = widget.existingQuestion != null;
@@ -2864,10 +2946,6 @@ class _AssessmentQuestionFormScreenState
         shadowColor: isDark ? Colors.transparent : Colors.black12,
         iconTheme: IconThemeData(color: context.textColor),
         actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: _buildGlobalSymbolToolbar(),
-          ),
           if (_isLoading)
             Center(
               child: Padding(
@@ -3357,8 +3435,6 @@ class _AssessmentQuestionFormScreenState
           const SizedBox(height: 16),
           SymbolInputFieldWrapper(
             controller: _descriptiveTextCtrl,
-            showToolbar: false,
-            onFocusGained: () => _setActiveSymbolTarget(_descriptiveTextCtrl, null),
             child: TextFormField(
               controller: _descriptiveTextCtrl,
               style: TextStyle(color: context.textColor),
@@ -3378,8 +3454,6 @@ class _AssessmentQuestionFormScreenState
           const SizedBox(height: 16),
           SymbolInputFieldWrapper(
             controller: _textCtrl,
-            showToolbar: false,
-            onFocusGained: () => _setActiveSymbolTarget(_textCtrl, null),
             child: TextFormField(
               controller: _textCtrl,
               style: TextStyle(color: context.textColor),
@@ -3533,8 +3607,6 @@ class _AssessmentQuestionFormScreenState
           // General Solution Explanation Text
           SymbolInputFieldWrapper(
             controller: _explanationCtrl,
-            showToolbar: false,
-            onFocusGained: () => _setActiveSymbolTarget(_explanationCtrl, null),
             child: TextFormField(
               controller: _explanationCtrl,
               style: TextStyle(color: context.textColor),
@@ -3796,11 +3868,6 @@ class _AssessmentQuestionFormScreenState
                                 onChanged: () {
                                   block['content'] = blockTextCtrl.text;
                                 },
-                                showToolbar: false,
-                                onFocusGained: () => _setActiveSymbolTarget(
-                                  blockTextCtrl,
-                                  () => block['content'] = blockTextCtrl.text,
-                                ),
                                 child: TextFormField(
                                   controller: blockTextCtrl,
                                   decoration: InputDecoration(
@@ -4603,8 +4670,6 @@ class _AssessmentQuestionFormScreenState
         const SizedBox(height: 12),
         SymbolInputFieldWrapper(
           controller: _shortAnswerCtrl,
-          showToolbar: false,
-          onFocusGained: () => _setActiveSymbolTarget(_shortAnswerCtrl, null),
           child: TextFormField(
             controller: _shortAnswerCtrl,
             style: TextStyle(color: context.textColor),
@@ -4641,8 +4706,6 @@ class _AssessmentQuestionFormScreenState
             Expanded(
               child: SymbolInputFieldWrapper(
                 controller: _prefixCtrl,
-                showToolbar: false,
-                onFocusGained: () => _setActiveSymbolTarget(_prefixCtrl, null),
                 child: TextFormField(
                   controller: _prefixCtrl,
                   style: TextStyle(color: context.textColor),
@@ -4662,8 +4725,6 @@ class _AssessmentQuestionFormScreenState
             Expanded(
               child: SymbolInputFieldWrapper(
                 controller: _suffixCtrl,
-                showToolbar: false,
-                onFocusGained: () => _setActiveSymbolTarget(_suffixCtrl, null),
                 child: TextFormField(
                   controller: _suffixCtrl,
                   style: TextStyle(color: context.textColor),
@@ -4699,8 +4760,6 @@ class _AssessmentQuestionFormScreenState
         ),
         SymbolInputFieldWrapper(
           controller: _hintCtrl,
-          showToolbar: false,
-          onFocusGained: () => _setActiveSymbolTarget(_hintCtrl, null),
           child: TextFormField(
             controller: _hintCtrl,
             style: TextStyle(color: context.textColor),
@@ -4740,8 +4799,6 @@ class _AssessmentQuestionFormScreenState
         ),
         SymbolInputFieldWrapper(
           controller: _shortAnswerCtrl,
-          showToolbar: false,
-          onFocusGained: () => _setActiveSymbolTarget(_shortAnswerCtrl, null),
           child: TextFormField(
             controller: _shortAnswerCtrl,
             maxLines: 5,
@@ -5297,11 +5354,6 @@ class _AssessmentQuestionFormScreenState
                     SymbolInputFieldWrapper(
                       controller: ctrl,
                       onChanged: () => _options[idx]['text'] = ctrl.text,
-                      showToolbar: false,
-                      onFocusGained: () => _setActiveSymbolTarget(
-                        ctrl,
-                        () => _options[idx]['text'] = ctrl.text,
-                      ),
                       child: TextFormField(
                         controller: ctrl,
                         style: TextStyle(color: context.textColor, fontSize: 14),
@@ -5496,11 +5548,6 @@ class _AssessmentQuestionFormScreenState
                     SymbolInputFieldWrapper(
                       controller: ctrl,
                       onChanged: () => _options[idx]['text'] = ctrl.text,
-                      showToolbar: false,
-                      onFocusGained: () => _setActiveSymbolTarget(
-                        ctrl,
-                        () => _options[idx]['text'] = ctrl.text,
-                      ),
                       child: TextFormField(
                         controller: ctrl,
                         style: TextStyle(color: context.textColor, fontSize: 14),
