@@ -17,6 +17,7 @@ import '../bloc/course/course_bloc.dart';
 import '../bloc/course/course_event.dart';
 import '../bloc/course/course_state.dart';
 import '../../exams/screens/assessment_question_form_screen.dart';
+import '../../exams/screens/assessment_taking_screen.dart';
 import '../../academic/screens/video_player_screen.dart';
 import '../../academic/screens/student_learning_path_screen.dart';
 import '../../academic/screens/live_classroom_presentation_screen.dart';
@@ -4234,6 +4235,23 @@ class _SyllabusResourceEditorState extends State<SyllabusResourceEditor>
                                   trailing: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.play_arrow_rounded,
+                                          size: 18,
+                                          color: Color(0xFF818CF8),
+                                        ),
+                                        onPressed: () {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => AssessmentTakingScreen(trySingleQuestion: q),
+                                            ),
+                                          );
+                                        },
+                                        tooltip: 'Try Question',
+                                      ),
+                                      const SizedBox(width: 2),
                                       InkWell(
                                         onTap: () {
                                           setState(() {
@@ -4309,10 +4327,25 @@ class _SyllabusResourceEditorState extends State<SyllabusResourceEditor>
                                               ),
                                             ),
                                           );
-                                          if (updated != null &&
-                                              updated is Map<String, dynamic>) {
+                                          if (updated != null) {
                                             setState(() {
-                                              questions[qIndex] = updated;
+                                              if (updated is List) {
+                                                // Practice-mode save always pops a list
+                                                // (the edited question, plus any Ditto/AI
+                                                // variations added while editing).
+                                                final updatedList =
+                                                    List<Map<String, dynamic>>.from(updated);
+                                                if (updatedList.isNotEmpty) {
+                                                  questions[qIndex] = updatedList.first;
+                                                  if (updatedList.length > 1) {
+                                                    questions.addAll(
+                                                      updatedList.sublist(1),
+                                                    );
+                                                  }
+                                                }
+                                              } else if (updated is Map<String, dynamic>) {
+                                                questions[qIndex] = updated;
+                                              }
                                             });
                                             setDialogState(() {});
                                           }

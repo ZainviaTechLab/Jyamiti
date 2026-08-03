@@ -52,6 +52,9 @@ class _AssessmentQuestionFormScreenState
   List<Map<String, dynamic>> _rightOptions = [];
   List<bool> _correctAnswerSelection = []; // tracks correctness checkbox/radio
 
+  // TRUE_FALSE question state: true = correct answer is "True"
+  bool _trueFalseAnswer = true;
+
   // Geometry question state
   List<Map<String, dynamic>> _geometryNodes = [];
   int _geometryLinesCount = 1;
@@ -116,10 +119,13 @@ class _AssessmentQuestionFormScreenState
     }
 
     if (q != null) {
-      if (_type == 'SHORT_ANSWER') {
+      if (_type == 'SHORT_ANSWER' || _type == 'DESCRIPTIVE') {
         _shortAnswerCtrl.text = (q['correctAnswers'] as List).isNotEmpty
             ? q['correctAnswers'][0].toString()
             : '';
+      } else if (_type == 'TRUE_FALSE') {
+        final List<dynamic> ca = q['correctAnswers'] ?? [];
+        _trueFalseAnswer = ca.isEmpty || ca.first.toString() == '0';
       } else if (_type == 'MATCHING') {
         final List<dynamic> opts = q['options'] ?? [];
         final List<dynamic> rightOpts = q['rightOptions'] ?? [];
@@ -630,6 +636,8 @@ class _AssessmentQuestionFormScreenState
         return;
       }
       correctAnswers = inputs;
+    } else if (_type == 'TRUE_FALSE') {
+      correctAnswers = [_trueFalseAnswer ? '0' : '1'];
     } else {
       // Validate that at least one option is correct
       bool hasCorrect = _correctAnswerSelection.any((val) => val);
@@ -659,6 +667,11 @@ class _AssessmentQuestionFormScreenState
       }
     }
 
+    final List<Map<String, dynamic>> trueFalseOptions = [
+      {'text': 'True', 'imageUrl': '', 'isSvg': false},
+      {'text': 'False', 'imageUrl': '', 'isSvg': false},
+    ];
+
     final reqBody = {
       'grade': _grade,
       'type': _type,
@@ -668,6 +681,8 @@ class _AssessmentQuestionFormScreenState
       'questionImage': _questionImage,
       'options': _type == 'MATRIX_INPUT'
           ? matrixInputOptions
+          : _type == 'TRUE_FALSE'
+          ? trueFalseOptions
           : ((_type == 'SHORT_ANSWER' || _type == 'GEOMETRIC') ? [] : _options),
       'rightOptions':
           (_type == 'MATCHING' ||
@@ -883,6 +898,8 @@ class _AssessmentQuestionFormScreenState
         }
       }
       correctAnswers = inputs;
+    } else if (_type == 'TRUE_FALSE') {
+      correctAnswers = [_trueFalseAnswer ? '0' : '1'];
     } else {
       for (int i = 0; i < _correctAnswerSelection.length; i++) {
         if (_correctAnswerSelection[i]) {
@@ -902,6 +919,11 @@ class _AssessmentQuestionFormScreenState
       }
     }
 
+    final List<Map<String, dynamic>> trueFalseOptions = [
+      {'text': 'True', 'imageUrl': '', 'isSvg': false},
+      {'text': 'False', 'imageUrl': '', 'isSvg': false},
+    ];
+
     return {
       'grade': _grade,
       'type': _type,
@@ -911,6 +933,8 @@ class _AssessmentQuestionFormScreenState
       'questionImage': _questionImage,
       'options': _type == 'MATRIX_INPUT'
           ? matrixInputOptions
+          : _type == 'TRUE_FALSE'
+          ? trueFalseOptions
           : ((_type == 'SHORT_ANSWER' || _type == 'GEOMETRIC') ? [] : _options),
       'rightOptions':
           (_type == 'MATCHING' ||
@@ -1679,6 +1703,10 @@ class _AssessmentQuestionFormScreenState
           child: Text('Multiple Choice MCQ'),
         ),
         DropdownMenuItem(
+          value: 'TRUE_FALSE',
+          child: Text('True / False'),
+        ),
+        DropdownMenuItem(
           value: 'SHORT_ANSWER',
           child: Text('Short Answer'),
         ),
@@ -1933,6 +1961,33 @@ class _AssessmentQuestionFormScreenState
                   Expanded(
                     child: Text(
                       'Insert blanks in your text using [BLANK:answer] or [INPUT:answer] or [BLANK] tags.\nExample: "The area of a circle with radius \$r\$ is [BLANK:\\pi r^2] and perimeter is [BLANK:2\\pi r]."',
+                      style: TextStyle(
+                        color: context.textColor,
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (_type == 'INLINE_SELECT') ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Color(0xFF10B981), size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Insert dropdown boxes in your text using [SELECT:choice1,choice2,...:correctChoice] tags.\nExample: "The value of \$\\pi\$ is approximately [SELECT:3.14,4.13,2.71:3.14]."',
                       style: TextStyle(
                         color: context.textColor,
                         fontSize: 12,
@@ -2404,6 +2459,10 @@ class _AssessmentQuestionFormScreenState
             _buildEquationEditor()
           else if (_type == 'STATEMENT_DROPDOWN')
             _buildStatementDropdownEditor()
+          else if (_type == 'DESCRIPTIVE')
+            _buildDescriptiveAnswerInput()
+          else if (_type == 'TRUE_FALSE')
+            _buildTrueFalseInput()
           else
             _buildMCQOptionsInput(),
         ],
@@ -3172,6 +3231,116 @@ class _AssessmentQuestionFormScreenState
             fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
             border: OutlineInputBorder(),
           ),
+        ),
+      ],
+    );
+  }
+
+  // Admin preset model answer for DESCRIPTIVE (handwritten) questions,
+  // used by DeepSeek AI to evaluate the student's typed/handwritten answer.
+  Widget _buildDescriptiveAnswerInput() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Admin Preset Model Answer:',
+          style: TextStyle(
+            color: context.textColor70,
+            fontWeight: FontWeight.bold,
+            fontSize: 15,
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 4, bottom: 12),
+          child: Text(
+            'Write the ideal/model answer here. DeepSeek AI will gently and politely compare the student\'s typed or handwritten (uploaded image) answer against this for semantic meaning, not exact wording.',
+            style: TextStyle(color: Colors.white38, fontSize: 12),
+          ),
+        ),
+        TextFormField(
+          controller: _shortAnswerCtrl,
+          maxLines: 5,
+          style: TextStyle(color: context.textColor),
+          decoration: InputDecoration(
+            labelText: 'Model Answer',
+            labelStyle: TextStyle(color: context.textColor70),
+            filled: true,
+            fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+            border: OutlineInputBorder(),
+            alignLabelWithHint: true,
+          ),
+          validator: (v) => (v == null || v.trim().isEmpty)
+              ? 'Please provide the Admin Preset Model Answer'
+              : null,
+        ),
+      ],
+    );
+  }
+
+  // TRUE_FALSE: fixed True/False options, just pick which one is correct.
+  Widget _buildTrueFalseInput() {
+    Widget buildChoiceCard(String label, bool valueForTrue) {
+      final bool isSelected = _trueFalseAnswer == valueForTrue;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _trueFalseAnswer = valueForTrue),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? const Color(0xFF10B981).withOpacity(0.15)
+                  : (context.isDark ? const Color(0xFF1E293B) : Colors.white),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected
+                    ? const Color(0xFF10B981)
+                    : context.glassBorder,
+                width: isSelected ? 2 : 1,
+              ),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  isSelected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  color: isSelected ? const Color(0xFF10B981) : context.textColor54,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: isSelected ? const Color(0xFF10B981) : context.textColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Correct Answer:',
+          style: TextStyle(
+            color: context.textColor70,
+            fontWeight: FontWeight.bold,
+            fontSize: 15,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            buildChoiceCard('True', true),
+            const SizedBox(width: 12),
+            buildChoiceCard('False', false),
+          ],
         ),
       ],
     );

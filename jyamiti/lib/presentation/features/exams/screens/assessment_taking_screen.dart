@@ -916,7 +916,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
       correct = correctAnswers.any(
         (c) => _areAnswersEquivalent(c.toString(), answerStr),
       );
-    } else if (q['type'] == 'MCQ_SINGLE') {
+    } else if (q['type'] == 'MCQ_SINGLE' || q['type'] == 'TRUE_FALSE') {
       if (correctAnswers.isNotEmpty) {
         correct = selected.first == correctAnswers.first.toString();
       }
@@ -1038,7 +1038,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
       final List<dynamic> correctAnswers = q['correctAnswers'] ?? [];
       if (q['type'] == 'SHORT_ANSWER') {
         explanation = 'Correct answer: ${correctAnswers.first}';
-      } else if (q['type'] == 'MCQ_SINGLE') {
+      } else if (q['type'] == 'MCQ_SINGLE' || q['type'] == 'TRUE_FALSE') {
         final List<dynamic> options = q['options'] ?? [];
         final int idx = int.tryParse(correctAnswers.first.toString()) ?? -1;
         if (idx >= 0 && idx < options.length) {
@@ -2254,6 +2254,11 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // Main Question Box is skipped entirely for FILL_IN_BLANKS:
+                    // the answer widget below already renders the question text
+                    // inline with the blanks, so this card would otherwise just
+                    // show the same text again (or an empty card).
+                    if (q['type'] != 'FILL_IN_BLANKS')
                     Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(20),
@@ -2436,6 +2441,8 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                                 ],
 
                                 // Question text (below the image, extra bold)
+                                // FILL_IN_BLANKS never reaches here: the whole card is
+                                // skipped for that type (see above).
                                 if (q['type'] != 'INLINE_SELECT')
                                   LatexRichText(
                                     text: q['text'],
@@ -2451,7 +2458,8 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 18),
+                    if (q['type'] != 'FILL_IN_BLANKS')
+                      const SizedBox(height: 18),
 
                     // Answers Section
                     if (q['type'] != 'INLINE_SELECT' &&
@@ -2463,6 +2471,12 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                             ? 'Write your answer:'
                             : q['type'] == 'STATEMENT_DROPDOWN'
                             ? 'Select correct statements:'
+                            : q['type'] == 'FILL_IN_BLANKS'
+                            ? 'Fill in the blanks:'
+                            : q['type'] == 'DESCRIPTIVE'
+                            ? 'Upload after writing:'
+                            : q['type'] == 'TRUE_FALSE'
+                            ? 'Select True or False:'
                             : 'Choose one answer:',
                         style: TextStyle(
                           color: context.textColor54,
@@ -3035,60 +3049,121 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
         }
 
         final bool isCorrect = _areAnswersEquivalent(currentValue, expectedAnswer);
+        final bool isInputLatex = _isLatex(expectedAnswer);
 
-        lineWidgets.add(
-          Container(
-            width: 140,
-            margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-            height: 40,
-            decoration: BoxDecoration(
-              color: showResult
-                  ? (isCorrect
-                        ? Colors.green.withOpacity(0.1)
-                        : Colors.red.withOpacity(0.1))
-                  : (context.isDark ? context.glassBg : Colors.white),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: showResult
-                    ? (isCorrect ? Colors.green : Colors.redAccent)
-                    : (context.isDark
-                          ? const Color(0xFF6366F1).withOpacity(0.4)
-                          : const Color(0xFFCBD5E1)),
-                width: showResult ? 1.5 : 1.0,
-              ),
-            ),
-            child: TextField(
-              enabled: !showResult,
-              controller: TextEditingController(text: currentValue)
-                ..selection = TextSelection.collapsed(offset: currentValue.length),
-              style: GoogleFonts.spaceGrotesk(
-                color: showResult
-                    ? (isCorrect ? Colors.green[700] : Colors.red[700])
-                    : context.textColor,
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-              ),
-              decoration: InputDecoration(
-                hintText: 'fill blank...',
-                hintStyle: TextStyle(
-                  color: context.textColor54.withOpacity(0.4),
-                  fontSize: 13,
+        if (isInputLatex) {
+          // LaTeX-expected blank: use the math keyboard dialog and typeset the result,
+          // matching how EQUATION-type inputs handle LaTeX answers.
+          lineWidgets.add(
+            GestureDetector(
+              onTap: showResult
+                  ? null
+                  : () => _showMathDialog(_currentQuestionIndex, inputIdx: blankIdx),
+              child: Container(
+                width: 140,
+                height: 40,
+                margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: showResult
+                      ? (isCorrect
+                            ? Colors.green.withOpacity(0.1)
+                            : Colors.red.withOpacity(0.1))
+                      : (context.isDark ? context.glassBg : Colors.white),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: showResult
+                        ? (isCorrect ? Colors.green : Colors.redAccent)
+                        : (context.isDark
+                              ? const Color(0xFF6366F1).withOpacity(0.4)
+                              : const Color(0xFFCBD5E1)),
+                    width: showResult ? 1.5 : 1.0,
+                  ),
                 ),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                alignment: Alignment.center,
+                child: currentValue.isEmpty
+                    ? Text(
+                        '?',
+                        style: TextStyle(
+                          color: context.textColor54.withOpacity(0.4),
+                          fontSize: 13,
+                        ),
+                      )
+                    : SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: LatexRichText(
+                          text: '\$$currentValue\$',
+                          style: TextStyle(
+                            color: showResult
+                                ? (isCorrect ? Colors.green[700] : Colors.red[700])
+                                : context.textColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
               ),
-              onChanged: (val) {
-                while (_selectedAnswers[_currentQuestionIndex]!.length <= blankIdx) {
-                  _selectedAnswers[_currentQuestionIndex]!.add("");
-                }
-                _selectedAnswers[_currentQuestionIndex]![blankIdx] = val.trim();
-                _saveProgress();
-              },
             ),
-          ),
-        );
+          );
+        } else {
+          lineWidgets.add(
+            Container(
+              width: 140,
+              margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+              height: 40,
+              decoration: BoxDecoration(
+                color: showResult
+                    ? (isCorrect
+                          ? Colors.green.withOpacity(0.1)
+                          : Colors.red.withOpacity(0.1))
+                    : (context.isDark ? context.glassBg : Colors.white),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: showResult
+                      ? (isCorrect ? Colors.green : Colors.redAccent)
+                      : (context.isDark
+                            ? const Color(0xFF6366F1).withOpacity(0.4)
+                            : const Color(0xFFCBD5E1)),
+                  width: showResult ? 1.5 : 1.0,
+                ),
+              ),
+              // TextFormField keeps its own controller alive across rebuilds
+              // (unlike a freshly-constructed TextEditingController), so typing
+              // no longer loses cursor position/focus on unrelated setState calls.
+              child: TextFormField(
+                enabled: !showResult,
+                initialValue: currentValue,
+                style: GoogleFonts.spaceGrotesk(
+                  color: showResult
+                      ? (isCorrect ? Colors.green[700] : Colors.red[700])
+                      : context.textColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'fill blank...',
+                  hintStyle: TextStyle(
+                    color: context.textColor54.withOpacity(0.4),
+                    fontSize: 13,
+                  ),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                onChanged: (val) {
+                  setState(() {
+                    while (_selectedAnswers[_currentQuestionIndex]!.length <= blankIdx) {
+                      _selectedAnswers[_currentQuestionIndex]!.add("");
+                    }
+                    _selectedAnswers[_currentQuestionIndex]![blankIdx] = val.trim();
+                  });
+                  _saveProgress();
+                },
+              ),
+            ),
+          );
+        }
 
         if (showResult && !isCorrect && expectedAnswer.isNotEmpty) {
           lineWidgets.add(
@@ -3099,14 +3174,23 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                 color: Colors.green.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: Text(
-                '($expectedAnswer)',
-                style: const TextStyle(
-                  color: Colors.green,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              child: isInputLatex
+                  ? LatexRichText(
+                      text: '(\$$expectedAnswer\$)',
+                      style: const TextStyle(
+                        color: Colors.green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
+                  : Text(
+                      '($expectedAnswer)',
+                      style: const TextStyle(
+                        color: Colors.green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
             ),
           );
         }
@@ -5055,7 +5139,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
             enabled: !_hasSubmittedCurrentQuestion,
             onTap: () {
               setState(() {
-                if (q['type'] == 'MCQ_SINGLE') {
+                if (q['type'] == 'MCQ_SINGLE' || q['type'] == 'TRUE_FALSE') {
                   _selectedAnswers[_currentQuestionIndex] = [indexStr];
                 } else {
                   // MCQ_MULTI toggle
@@ -5123,7 +5207,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
       }
     }
 
-    if (type == 'MCQ_SINGLE') {
+    if (type == 'MCQ_SINGLE' || type == 'TRUE_FALSE') {
       return Container(
         width: 20,
         height: 20,

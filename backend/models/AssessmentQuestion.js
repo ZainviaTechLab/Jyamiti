@@ -9,7 +9,7 @@ const assessmentQuestionSchema = new mongoose.Schema({
   },
   type: { 
     type: String, 
-    enum: ['MCQ_SINGLE', 'MCQ_MULTI', 'SHORT_ANSWER', 'ORDERING', 'MATCHING', 'GEOMETRIC', 'MATRIX_MCQ', 'MATRIX_INPUT', 'EQUATION', 'STATEMENT_DROPDOWN', 'INLINE_SELECT', 'FILL_IN_BLANKS', 'DESCRIPTIVE'],
+    enum: ['MCQ_SINGLE', 'MCQ_MULTI', 'TRUE_FALSE', 'SHORT_ANSWER', 'ORDERING', 'MATCHING', 'GEOMETRIC', 'MATRIX_MCQ', 'MATRIX_INPUT', 'EQUATION', 'STATEMENT_DROPDOWN', 'INLINE_SELECT', 'FILL_IN_BLANKS', 'DESCRIPTIVE'],
     required: true 
   },
   descriptiveText: {
