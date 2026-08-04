@@ -6,7 +6,9 @@ list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
   file_selector_windows
   flutter_tts
+  irondash_engine_context
   speech_to_text_windows
+  super_native_extensions
   syncfusion_pdfviewer_windows
   url_launcher_windows
   webview_windows

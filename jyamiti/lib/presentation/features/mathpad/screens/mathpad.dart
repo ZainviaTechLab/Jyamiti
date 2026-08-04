@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io' show File;
 import 'dart:math';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:super_clipboard/super_clipboard.dart';
 
 import '../../../../providers/theme_provider.dart';
 import '../instruments/instrument_models.dart';
@@ -481,6 +484,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Offset? _lastPointerWorldPos;
   int _consecutivePasteCount = 0;
 
+  // Long-press -> "Paste" popup (touch equivalent of Ctrl+V). Detected
+  // manually off the raw Listener pointer callbacks below rather than a
+  // LongPressGestureRecognizer on the canvas's GestureDetector, since that
+  // detector only wires Scale callbacks today -- adding a competing
+  // long-press recognizer to the same arena would risk delaying every
+  // quick tap across every tool (arena resolution isn't guaranteed to
+  // settle before the long-press timeout). Raw pointer callbacks don't
+  // participate in gesture-arena resolution, so this can't interfere with
+  // any existing tool.
+  Timer? _longPressPasteTimer;
+  Offset? _longPressPasteDownScreenPos;
+  Offset? _pastePopupWorldPos;
+
   // Keyboard FocusNode for Ctrl+C / Ctrl+V shortcuts
   final FocusNode _canvasFocusNode = FocusNode();
 
@@ -514,9 +530,32 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     Colors.black,
   ];
 
+  // Small branding watermark drawn on the Ruler/Protractor/Set Squares.
+  // Loaded once as a raw ui.Image (not an Image widget) so it can be drawn
+  // straight into each instrument's own CustomPainter, inside the same
+  // rotated canvas space as the rest of that instrument's body -- a plain
+  // overlay widget wouldn't rotate along with the instrument.
+  ui.Image? _logoImage;
+
+  Future<void> _loadLogoImage() async {
+    try {
+      final ByteData data = await rootBundle.load('assets/image/logo.png');
+      final ui.Codec codec = await ui.instantiateImageCodec(
+        data.buffer.asUint8List(),
+      );
+      final ui.FrameInfo frame = await codec.getNextFrame();
+      if (!mounted) return;
+      setState(() => _logoImage = frame.image);
+    } catch (_) {
+      // Missing/unreadable asset -- instruments just render without the
+      // watermark, nothing else depends on it.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadLogoImage();
     if (widget.initialLines != null) {
       _lines.addAll(widget.initialLines!);
       for (final line in _lines) {
@@ -536,6 +575,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   @override
   void dispose() {
     _circleHoldTimer?.cancel();
+    _longPressPasteTimer?.cancel();
     _textEditorController?.dispose();
     _canvasFocusNode.dispose();
     _panNotifier.dispose();
@@ -1413,25 +1453,37 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// affected per-widget drag handling elsewhere in this file); only the
   /// small remove button is a local tap target.
   Widget _buildTextLabelWidget(int index, MathsPadTextLabel label) {
+    // Offset the outer Positioned up and left by the close-button overhang
+    // (10 px) so the button sits inside the Stack's layout area and receives
+    // hit tests correctly.  The Text itself is nudged back down/right by the
+    // same amount to keep it anchored at label.position.
+    const double overhang = 10;
     return Positioned(
-      left: label.position.dx,
-      top: label.position.dy,
+      left: label.position.dx - overhang,
+      top: label.position.dy - overhang,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          IgnorePointer(
-            child: Text(
-              label.text,
-              style: TextStyle(
-                color: label.color,
-                fontSize: label.fontSize,
-                fontWeight: FontWeight.w600,
+          // Invisible sizing box that includes the close-button area so the
+          // Stack's own hit-test region covers the full widget including the
+          // button that sticks above/to-the-right of the text.
+          Padding(
+            padding: const EdgeInsets.only(top: overhang, left: overhang),
+            child: IgnorePointer(
+              child: Text(
+                label.text,
+                style: TextStyle(
+                  color: label.color,
+                  fontSize: label.fontSize,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
+          // Close button in the top-right corner, now INSIDE the Stack bounds.
           Positioned(
-            right: -10,
-            top: -10,
+            right: 0,
+            top: 0,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () => _deleteTextLabel(index),
@@ -1528,6 +1580,63 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
+  /// Small floating "Paste" button shown after a ~500ms press-and-hold
+  /// (see the long-press timer in _onPointerDown), the touch equivalent of
+  /// Ctrl+V -- tapping it pastes from the system clipboard at that spot;
+  /// tapping anywhere else just dismisses it (handled in _onScaleStart).
+  Widget _buildPastePopup(bool isDark) {
+    if (_pastePopupWorldPos == null) return const SizedBox.shrink();
+    final Offset pos = _pastePopupWorldPos!;
+    return Positioned(
+      left: pos.dx,
+      top: pos.dy - 26,
+      child: Material(
+        color: Colors.transparent,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            setState(() => _pastePopupWorldPos = null);
+            _pasteFromSystemClipboard(atWorldPos: pos);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF6366F1), width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.25),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.content_paste_rounded,
+                  color: Color(0xFF6366F1),
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'Paste',
+                  style: TextStyle(
+                    color: isDark ? Colors.white : const Color(0xFF1E293B),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInstrumentWidget(InstrumentState inst) {
     final isDark = context.isDark;
     if (inst is RulerState) {
@@ -1535,6 +1644,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         key: ValueKey(inst),
         state: inst,
         isDark: isDark,
+        logoImage: _logoImage,
         onRemove: () => setState(() => _instruments.remove(inst)),
       );
     } else if (inst is ProtractorState) {
@@ -1542,6 +1652,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         key: ValueKey(inst),
         state: inst,
         isDark: isDark,
+        logoImage: _logoImage,
         onRemove: () => setState(() => _instruments.remove(inst)),
       );
     } else if (inst is SetSquareState) {
@@ -1549,6 +1660,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         key: ValueKey(inst),
         state: inst,
         isDark: isDark,
+        logoImage: _logoImage,
         onRemove: () => setState(() => _instruments.remove(inst)),
       );
     } else if (inst is CompassState) {
@@ -2144,6 +2256,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _activePointers[event.pointer] = event.localPosition;
     _lastCentroid = _calculateCentroid();
 
+    // Arm the long-press-to-paste timer for a single-finger press. If a
+    // second pointer joins (2-finger pan) or the finger moves too far
+    // before the timer fires, it gets cancelled in _onPointerMove below.
+    if (_activePointers.length == 1) {
+      _longPressPasteDownScreenPos = event.localPosition;
+      _longPressPasteTimer?.cancel();
+      _longPressPasteTimer = Timer(const Duration(milliseconds: 500), () {
+        if (!mounted || _longPressPasteDownScreenPos == null) return;
+        setState(() {
+          _pastePopupWorldPos = _screenToWorld(_longPressPasteDownScreenPos!);
+        });
+      });
+    }
+
     final bool isBarrelOrInverted =
         event.kind == PointerDeviceKind.invertedStylus ||
         (event.buttons & kSecondaryButton != 0) ||
@@ -2157,11 +2283,25 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   void _onPointerMove(PointerMoveEvent event) {
     _updatePointerPos(event.localPosition);
+
+    if (_longPressPasteTimer != null && _longPressPasteDownScreenPos != null) {
+      const double moveTolerance = 10.0;
+      if ((event.localPosition - _longPressPasteDownScreenPos!).distance >
+          moveTolerance) {
+        _longPressPasteTimer?.cancel();
+        _longPressPasteTimer = null;
+        _longPressPasteDownScreenPos = null;
+      }
+    }
+
     if (_activePointers.containsKey(event.pointer)) {
       _activePointers[event.pointer] = event.localPosition;
 
       // Chrome Web Multi-Touch 2-finger pan
       if (_activePointers.length >= 2) {
+        _longPressPasteTimer?.cancel();
+        _longPressPasteTimer = null;
+        _longPressPasteDownScreenPos = null;
         if (_currentLine != null) {
           if (_lines.isNotEmpty && _lines.last == _currentLine) {
             _lines.removeLast();
@@ -2200,6 +2340,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_activePointers.isEmpty) {
       _lastCentroid = null;
     }
+    // Only cancels the pending timer if it hasn't fired yet -- if the paste
+    // popup is already showing, releasing the finger that triggered it
+    // should NOT dismiss it (the user still needs to tap "Paste" on it).
+    _longPressPasteTimer?.cancel();
+    _longPressPasteTimer = null;
+    _longPressPasteDownScreenPos = null;
 
     if (_isStylusBarrelPressed) {
       setState(() {
@@ -2213,6 +2359,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_activePointers.isEmpty) {
       _lastCentroid = null;
     }
+    _longPressPasteTimer?.cancel();
+    _longPressPasteTimer = null;
+    _longPressPasteDownScreenPos = null;
   }
 
   void _onPointerSignal(PointerSignalEvent event) {
@@ -2275,6 +2424,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // rather than also acting on whatever else was tapped.
       if (_textEditorOpen) {
         _commitTextEditor();
+        return;
+      }
+
+      // Any tap elsewhere while the long-press paste popup is showing just
+      // dismisses it (tapping the popup's own "Paste" button itself never
+      // reaches here -- that button consumes its own tap).
+      if (_pastePopupWorldPos != null) {
+        setState(() => _pastePopupWorldPos = null);
         return;
       }
 
@@ -2863,6 +3020,143 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _finishedStrokesNotifier.value++;
   }
 
+  /// Pastes from the OS clipboard (content copied from OUTSIDE the app --
+  /// a screenshot, an image copied from a browser, or plain text) at
+  /// [atWorldPos], preferring an image if one is present, then plain text.
+  /// Falls back to the existing same-app duplicate-selection paste
+  /// (`_pasteClipboard`) if the system clipboard has nothing usable or the
+  /// clipboard API isn't available on this platform/build.
+  Future<void> _pasteFromSystemClipboard({Offset? atWorldPos}) async {
+    final Offset placementPos =
+        atWorldPos ??
+        _lastPointerWorldPos ??
+        _screenToWorld(Offset(_canvasSize.width / 2, _canvasSize.height / 2));
+
+    try {
+      final ClipboardReader reader = await ClipboardReader.readClipboard();
+
+      const List<SimpleDataFormat<Uint8List>> imageFormats = [
+        Formats.png,
+        Formats.jpeg,
+        Formats.gif,
+        Formats.webp,
+        Formats.tiff,
+      ];
+      for (final format in imageFormats) {
+        if (reader.hasValue(format)) {
+          final Uint8List? bytes = await reader.readValue(format);
+          if (bytes != null && bytes.isNotEmpty) {
+            await _insertPastedImageBytes(bytes, placementPos);
+            return;
+          }
+        }
+      }
+
+      // Some sources (e.g. Ctrl+C on an image file in Windows File
+      // Explorer, or a file dragged from Finder) put a file reference on
+      // the clipboard instead of raw image bytes. Read the file from disk
+      // in that case. Not applicable on web (no filesystem access there).
+      if (!kIsWeb && reader.hasValue(Formats.fileUri)) {
+        final Uri? fileUri = await reader.readValue(Formats.fileUri);
+        if (fileUri != null && fileUri.isScheme('file')) {
+          const imageExtensions = {
+            '.png',
+            '.jpg',
+            '.jpeg',
+            '.gif',
+            '.webp',
+            '.bmp',
+            '.tiff',
+          };
+          final String path = fileUri.toFilePath();
+          final String ext = path.contains('.')
+              ? path.substring(path.lastIndexOf('.')).toLowerCase()
+              : '';
+          if (imageExtensions.contains(ext)) {
+            try {
+              final Uint8List bytes = await File(path).readAsBytes();
+              if (bytes.isNotEmpty) {
+                await _insertPastedImageBytes(bytes, placementPos);
+                return;
+              }
+            } catch (e) {
+              debugPrint('Mathpad paste: failed to read image file $path: $e');
+            }
+          }
+        }
+      }
+
+      if (reader.hasValue(Formats.plainText)) {
+        final String? text = await reader.readValue(Formats.plainText);
+        final String trimmed = text?.trim() ?? '';
+        if (trimmed.isNotEmpty) {
+          setState(() {
+            _textLabels.add(
+              MathsPadTextLabel(
+                position: placementPos,
+                text: trimmed,
+                color: _selectedColor,
+              ),
+            );
+          });
+          return;
+        }
+      }
+    } catch (e) {
+      // Clipboard read API unsupported/unavailable on this platform or
+      // build -- fall through to the same-app duplicate-paste below.
+      debugPrint('Mathpad paste: system clipboard read failed: $e');
+    }
+
+    _pasteClipboard();
+  }
+
+  /// Decodes pasted image [bytes] and adds them as an image-backed
+  /// `MathsPadLine` (the same mechanism the Fill Tool uses), centered at
+  /// [placementPos] and scaled down (never up) to fit within a reasonable
+  /// max on-canvas size so a large screenshot doesn't dominate the canvas.
+  Future<void> _insertPastedImageBytes(
+    Uint8List bytes,
+    Offset placementPos,
+  ) async {
+    final ui.Codec codec = await ui.instantiateImageCodec(bytes);
+    final ui.FrameInfo frame = await codec.getNextFrame();
+    final ui.Image image = frame.image;
+
+    double w = image.width.toDouble();
+    double h = image.height.toDouble();
+    if (w <= 0 || h <= 0 || !mounted) {
+      image.dispose();
+      return;
+    }
+    const double maxDim = 400.0;
+    final double scale = (w > h ? maxDim / w : maxDim / h).clamp(0.0, 1.0);
+    w *= scale;
+    h *= scale;
+
+    final Rect bounds = Rect.fromCenter(
+      center: placementPos,
+      width: w,
+      height: h,
+    );
+    final MathsPadLine pastedLine = MathsPadLine(
+      points: [
+        MathsPadStrokePoint(bounds.topLeft),
+        MathsPadStrokePoint(bounds.bottomRight),
+      ],
+      color: _selectedColor,
+      strokeWidth: 0,
+      fillImage: image,
+      fillWorldBounds: bounds,
+    );
+
+    setState(() {
+      _lines.add(pastedLine);
+      _undoHistory.clear();
+    });
+    _finishedStrokesNotifier.value++;
+  }
+
   // Duplicate Selected Strokes
   void _duplicateSelectedLines() {
     if (_selectedLines.isEmpty) return;
@@ -3375,7 +3669,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             return KeyEventResult.handled;
           }
           if (ctrl && event.logicalKey == LogicalKeyboardKey.keyV) {
-            _pasteClipboard();
+            _pasteFromSystemClipboard();
             return KeyEventResult.handled;
           }
         }
@@ -3522,7 +3816,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       ignoring:
                           _instruments.isEmpty &&
                           _textLabels.isEmpty &&
-                          !_textEditorOpen,
+                          !_textEditorOpen &&
+                          _pastePopupWorldPos == null,
                       child: ValueListenableBuilder<Offset>(
                         valueListenable: _panNotifier,
                         builder: (_, pan, child) {
@@ -3638,6 +3933,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                       (e) => _buildTextLabelWidget(e.key, e.value),
                                     ),
                                     _buildTextEditorOverlay(isDark),
+                                    _buildPastePopup(isDark),
                                   ],
                                 ),
                               );
