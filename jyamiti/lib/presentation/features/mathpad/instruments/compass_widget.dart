@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'instrument_handle.dart';
 import 'instrument_models.dart';
@@ -46,26 +47,12 @@ class CompassWidget extends StatelessWidget {
         ),
         IgnorePointer(
           child: Positioned(
-            left: state.pivot.dx - 15,
-            top: state.pivot.dy - 15,
-            child: const _CompassDot(color: Color(0xFF6366F1), size: 30),
-          ),
-        ),
-        IgnorePointer(
-          child: Positioned(
             left: hinge.dx - InstrumentHandle.size / 2,
             top: hinge.dy - InstrumentHandle.size / 2,
             child: const InstrumentHandle(
               role: InstrumentHandleRole.rotate,
               tooltip: '',
             ),
-          ),
-        ),
-        IgnorePointer(
-          child: Positioned(
-            left: tip.dx - 14,
-            top: tip.dy - 14,
-            child: const _CompassDot(color: Color(0xFF1E293B), size: 26),
           ),
         ),
 
@@ -80,32 +67,6 @@ class CompassWidget extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _CompassDot extends StatelessWidget {
-  final Color color;
-  final double size;
-  const _CompassDot({required this.color, required this.size});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.3),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -196,33 +157,17 @@ class _CompassPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final tip = state.tipWorldPosition;
+    final Offset pivot = state.pivot;
+    final Offset tip = state.tipWorldPosition;
 
-    // Leg 1: pivot (the sharp point) up to the hinge -- indigo, thicker.
-    final pivotLegPaint = Paint()
-      ..color = const Color(0xFF6366F1)
-      ..strokeWidth = 5
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(state.pivot, hinge, pivotLegPaint);
+    // Two tapered metal legs meeting at the hinge -- wide near the joint,
+    // narrowing toward the far end, like a real drafting compass's arms.
+    _drawLeg(canvas, from: hinge, to: pivot, isNeedleLeg: true);
+    _drawLeg(canvas, from: hinge, to: tip, isNeedleLeg: false);
 
-    // Leg 2: hinge down to the pencil tip -- dark navy, slightly thinner.
-    final pencilLegPaint = Paint()
-      ..color = const Color(0xFF1E293B)
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(hinge, tip, pencilLegPaint);
-
-    // Hinge screw/joint.
-    final hingePaint = Paint()..color = const Color(0xFF9CA3AF);
-    canvas.drawCircle(hinge, 6, hingePaint);
-    canvas.drawCircle(
-      hinge,
-      6,
-      Paint()
-        ..color = const Color(0xFF6B7280)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
+    _drawNeedleTip(canvas, pivot, hinge);
+    _drawPencilTip(canvas, tip, hinge);
+    _drawHinge(canvas);
 
     if (state.locked && state.tracedArcPoints.length > 1) {
       final arcPaint = Paint()
@@ -237,6 +182,158 @@ class _CompassPainter extends CustomPainter {
       }
       canvas.drawPath(path, arcPaint);
     }
+  }
+
+  /// Tapered metal leg -- a filled quadrilateral, wide at the hinge end and
+  /// narrowing toward the tip end (stopping a little short of the very tip,
+  /// leaving room for the needle/pencil shape drawn separately), shaded with
+  /// a brushed-steel gradient across its width so it reads as a solid metal
+  /// arm rather than a flat stroked line.
+  void _drawLeg(
+    Canvas canvas, {
+    required Offset from,
+    required Offset to,
+    required bool isNeedleLeg,
+  }) {
+    final Offset dir = to - from;
+    final double len = dir.distance;
+    if (len < 1) return;
+    final Offset unit = dir / len;
+    final Offset perp = Offset(-unit.dy, unit.dx);
+
+    const double hingeHalfWidth = 7.0;
+    const double endHalfWidth = 2.0;
+    final double bodyLen = (len - 14).clamp(len * 0.3, len);
+    final Offset bodyEnd = from + unit * bodyLen;
+
+    final Path legPath = Path()
+      ..moveTo(
+        from.dx + perp.dx * hingeHalfWidth,
+        from.dy + perp.dy * hingeHalfWidth,
+      )
+      ..lineTo(
+        bodyEnd.dx + perp.dx * endHalfWidth,
+        bodyEnd.dy + perp.dy * endHalfWidth,
+      )
+      ..lineTo(
+        bodyEnd.dx - perp.dx * endHalfWidth,
+        bodyEnd.dy - perp.dy * endHalfWidth,
+      )
+      ..lineTo(
+        from.dx - perp.dx * hingeHalfWidth,
+        from.dy - perp.dy * hingeHalfWidth,
+      )
+      ..close();
+
+    final Paint fillPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: isNeedleLeg
+            ? const [Color(0xFF94A3B8), Color(0xFFF1F5F9), Color(0xFF64748B)]
+            : const [Color(0xFF475569), Color(0xFF94A3B8), Color(0xFF1E293B)],
+      ).createShader(Rect.fromPoints(from, to).inflate(hingeHalfWidth));
+    canvas.drawPath(legPath, fillPaint);
+    canvas.drawPath(
+      legPath,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0
+        ..color = Colors.black.withOpacity(0.35),
+    );
+  }
+
+  /// Sharp steel needle at the pivot leg's end, tapering to a point exactly
+  /// on the anchor position (where a real compass needle pricks the paper).
+  void _drawNeedleTip(Canvas canvas, Offset pivot, Offset hinge) {
+    final Offset dir = pivot - hinge;
+    final double len = dir.distance;
+    if (len < 1) return;
+    final Offset unit = dir / len;
+    final Offset perp = Offset(-unit.dy, unit.dx);
+    final Offset base = pivot - unit * 13;
+    const double baseHalfWidth = 2.0;
+
+    final Path needle = Path()
+      ..moveTo(
+        base.dx + perp.dx * baseHalfWidth,
+        base.dy + perp.dy * baseHalfWidth,
+      )
+      ..lineTo(pivot.dx, pivot.dy)
+      ..lineTo(
+        base.dx - perp.dx * baseHalfWidth,
+        base.dy - perp.dy * baseHalfWidth,
+      )
+      ..close();
+    canvas.drawPath(needle, Paint()..color = const Color(0xFF1E293B));
+    canvas.drawCircle(pivot, 1.8, Paint()..color = const Color(0xFF0F172A));
+  }
+
+  /// Pencil clamp + wooden pencil + graphite point at the pencil leg's end,
+  /// touching the tip exactly at the drawing point.
+  void _drawPencilTip(Canvas canvas, Offset tip, Offset hinge) {
+    final Offset dir = tip - hinge;
+    final double len = dir.distance;
+    if (len < 1) return;
+    final Offset unit = dir / len;
+    final Offset perp = Offset(-unit.dy, unit.dx);
+
+    final Offset clampStart = tip - unit * 23;
+    final Offset clampEnd = tip - unit * 15;
+    final Offset woodEnd = tip - unit * 5;
+
+    void band(Offset a, Offset b, double halfWidth, Color color) {
+      final path = Path()
+        ..moveTo(a.dx + perp.dx * halfWidth, a.dy + perp.dy * halfWidth)
+        ..lineTo(b.dx + perp.dx * halfWidth, b.dy + perp.dy * halfWidth)
+        ..lineTo(b.dx - perp.dx * halfWidth, b.dy - perp.dy * halfWidth)
+        ..lineTo(a.dx - perp.dx * halfWidth, a.dy - perp.dy * halfWidth)
+        ..close();
+      canvas.drawPath(path, Paint()..color = color);
+    }
+
+    band(clampStart, clampEnd, 3.2, const Color(0xFF9CA3AF));
+    band(clampEnd, woodEnd, 2.6, const Color(0xFFF5C453));
+
+    final Path graphite = Path()
+      ..moveTo(woodEnd.dx + perp.dx * 2.6, woodEnd.dy + perp.dy * 2.6)
+      ..lineTo(tip.dx, tip.dy)
+      ..lineTo(woodEnd.dx - perp.dx * 2.6, woodEnd.dy - perp.dy * 2.6)
+      ..close();
+    canvas.drawPath(graphite, Paint()..color = const Color(0xFF44403C));
+  }
+
+  /// Knurled thumbscrew joint where the two legs meet.
+  void _drawHinge(Canvas canvas) {
+    canvas.drawCircle(
+      hinge,
+      9,
+      Paint()
+        ..shader = RadialGradient(
+          colors: const [Color(0xFFF1F5F9), Color(0xFF64748B)],
+        ).createShader(Rect.fromCircle(center: hinge, radius: 9)),
+    );
+    canvas.drawCircle(
+      hinge,
+      9,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = Colors.black.withOpacity(0.35),
+    );
+    for (int i = 0; i < 8; i++) {
+      final double a = i * pi / 4;
+      final Offset p1 = hinge + Offset(cos(a), sin(a)) * 6;
+      final Offset p2 = hinge + Offset(cos(a), sin(a)) * 9;
+      canvas.drawLine(
+        p1,
+        p2,
+        Paint()
+          ..color = Colors.black.withOpacity(0.25)
+          ..strokeWidth = 1,
+      );
+    }
+    canvas.drawCircle(hinge, 3, Paint()..color = const Color(0xFF334155));
   }
 
   @override

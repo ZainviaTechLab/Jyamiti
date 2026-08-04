@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,6 +26,15 @@ class MathsPadLine {
   final bool isEraser;
   final bool isShape;
 
+  // A Fill Tool result: a rasterized flood-fill of some enclosed region,
+  // rendered as an image instead of a stroked path. When set, `points` holds
+  // exactly 2 entries -- the world-space top-left and bottom-right corners of
+  // `fillWorldBounds` -- purely so this line still participates in the
+  // generic points-based bounds/culling/move/scale/copy machinery below
+  // without any of it needing to know fills exist.
+  ui.Image? fillImage;
+  Rect? fillWorldBounds;
+
   Path? cachedPath;
   Rect? cachedBounds;
 
@@ -33,6 +44,8 @@ class MathsPadLine {
     required this.strokeWidth,
     this.isEraser = false,
     this.isShape = false,
+    this.fillImage,
+    this.fillWorldBounds,
     this.cachedPath,
     this.cachedBounds,
   });
@@ -40,14 +53,56 @@ class MathsPadLine {
   void invalidateCache() {
     cachedPath = null;
     cachedBounds = null;
+    // Keep the rendered image's rect in sync after a move/resize drag (both
+    // just translate/scale `points` in place). Rotation deliberately isn't
+    // synced here -- rotating the two corner points would only ever produce
+    // a skewed axis-aligned re-bound, not a real image rotation, so a
+    // rotated selection intentionally leaves a filled region's image
+    // stationary (see the rotate branch in _onScaleUpdate).
+    if (fillImage != null && points.length >= 2) {
+      fillWorldBounds = Rect.fromPoints(points[0].offset, points[1].offset);
+    }
   }
+}
+
+/// A typed text label placed on the canvas (e.g. "A", "5 cm", "∠ABC") --
+/// draggable and re-editable, independent of the freehand stroke system.
+class MathsPadTextLabel {
+  Offset position; // world-space, top-left anchor
+  String text;
+  Color color;
+  double fontSize;
+
+  MathsPadTextLabel({
+    required this.position,
+    required this.text,
+    required this.color,
+    this.fontSize = 20,
+  });
+
+  Size get measuredSize {
+    final TextPainter tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    return tp.size;
+  }
+
+  Rect get worldBounds => position & measuredSize;
 }
 
 enum CanvasToolMode {
   pen,
+  straightLine,
   angle,
   polygonAngle,
   circleArc,
+  fill,
+  text,
+  spacer,
   eraser,
   tapSelect,
   lasso,
@@ -96,16 +151,22 @@ class _ShapeToolItem {
 /// Angle Tool once fixed: an arc between the two rays plus a label placed
 /// along their bisector, so both sit visually inside the angle's wedge.
 class _FixedAngleLabel {
-  final Offset vertex;
+  // Mutable so the Spacer Tool can shift it along with its source lines
+  // when they move.
+  Offset vertex;
   final double startAngle; // radians, direction of the first ray
   final double sweepAngle; // signed radians, shortest path to the second ray
   final String text;
+  // The two stroke objects that form this angle's rays. If either gets
+  // erased/undone/deleted, this label is orphaned and should disappear too.
+  final List<MathsPadLine> sourceLines;
 
-  const _FixedAngleLabel({
+  _FixedAngleLabel({
     required this.vertex,
     required this.startAngle,
     required this.sweepAngle,
     required this.text,
+    required this.sourceLines,
   });
 
   static const double labelRadius = 42;
@@ -114,6 +175,33 @@ class _FixedAngleLabel {
     final bisector = startAngle + sweepAngle / 2;
     return vertex + Offset(cos(bisector), sin(bisector)) * labelRadius;
   }
+}
+
+/// Snapshot of everything being pushed apart by one Spacer Tool drag --
+/// captured once (with each item's ORIGINAL position) the moment the drag's
+/// axis is decided, so the live shift each frame is computed fresh from the
+/// original positions rather than compounding small errors by repeatedly
+/// nudging an already-nudged position.
+class _SpacerDragState {
+  final bool isVertical;
+  final Offset startWorld;
+  final List<MathsPadLine> lines;
+  final Map<MathsPadLine, List<Offset>> originalLinePoints;
+  final List<MathsPadTextLabel> labels;
+  final Map<MathsPadTextLabel, Offset> originalLabelPositions;
+  final List<_FixedAngleLabel> angleLabels;
+  final Map<_FixedAngleLabel, Offset> originalAngleVertices;
+
+  _SpacerDragState({
+    required this.isVertical,
+    required this.startWorld,
+    required this.lines,
+    required this.originalLinePoints,
+    required this.labels,
+    required this.originalLabelPositions,
+    required this.angleLabels,
+    required this.originalAngleVertices,
+  });
 }
 
 /// One pink arc marking an angle from the Angle Tool / Polygon Angle Tool --
@@ -271,6 +359,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Offset? _angleOtherEndOfA;
   Offset? _angleLiveEnd;
   double? _angleLiveDegrees;
+  // The actual line-A stroke object (so a fixed label can be tied back to
+  // both strokes that formed it, and cleaned up if either gets erased).
+  MathsPadLine? _angleLineAObject;
   final List<_FixedAngleLabel> _fixedAngleLabels = [];
 
   // Polygon Angle Tool: chains segments end-to-end (each new drag must
@@ -278,6 +369,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // angle at every joint; ending a segment back near the very first vertex
   // closes the polygon and also fixes the closing angle there.
   List<Offset> _polygonVertices = [];
+  // Parallel to _polygonVertices: segmentLines[i] connects vertices[i] to
+  // vertices[i+1]. Kept so each fixed vertex-angle label can be tied back to
+  // the two actual segment strokes that formed it.
+  List<MathsPadLine> _polygonSegmentLines = [];
   Offset? _polygonLiveEnd;
   double? _polygonLiveDegrees;
   bool _polygonWillClose = false;
@@ -294,6 +389,49 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   double? _circleStartAngle;
   bool _circleHasStartedSweeping = false;
   List<Offset> _circleArcPoints = [];
+  Offset? _circleLiveEnd;
+  // The circle only "arms" (locks its radius and becomes ready to sweep an
+  // arc) once the pointer has held still at some length for a full second --
+  // any drag that never pauses that long never starts a circle at all.
+  Timer? _circleHoldTimer;
+  Offset? _circleHoldAnchor;
+
+  // ─── Straight Line Tool ───────────────────────────────────────────────
+  // When true, the line snaps to whichever of horizontal/vertical is closer
+  // to the actual drag angle instead of following it freely. Toggled by
+  // tapping the tool's own toolbar button again while it's already active
+  // (same convention as the Eraser's Stroke/Area toggle).
+  bool _lineAxisLocked = false;
+  Offset? _straightLineLiveEnd;
+
+  // ─── Spacer Tool ──────────────────────────────────────────────────────
+  // Drag through a gap to push everything past that point further away,
+  // live, opening up blank space to work in -- like "Add Space" in note
+  // apps. Axis (vertical vs horizontal) is decided from the first ~8px of
+  // actual movement, UNLESS _spacerHorizontalOnly is set (toggled by
+  // tapping the tool's own toolbar button again), which always forces
+  // horizontal. _spacerDrag stays null until the axis is decided.
+  Offset? _spacerPointerStart;
+  _SpacerDragState? _spacerDrag;
+  double _spacerLiveShift = 0;
+  bool _spacerHorizontalOnly = false;
+
+  // ─── Text Label Tool ──────────────────────────────────────────────────
+  final List<MathsPadTextLabel> _textLabels = [];
+
+  // Dragging an existing label (always available, independent of the active
+  // tool, matching how geometry instruments can always be dragged).
+  int? _draggedTextLabelIndex;
+  Offset? _textDragPointerStart;
+  Offset? _textDragLabelStart;
+  bool _textDragMoved = false;
+
+  // The inline text-entry editor -- used both for a brand-new label
+  // (_textEditingIndex == null) and for re-editing an existing one.
+  bool _textEditorOpen = false;
+  int? _textEditingIndex;
+  Offset? _textEditorWorldPos;
+  TextEditingController? _textEditorController;
 
   // Question Banner Collapsed/Expanded State
   bool _isQuestionBannerExpanded = true;
@@ -397,6 +535,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   @override
   void dispose() {
+    _circleHoldTimer?.cancel();
+    _textEditorController?.dispose();
     _canvasFocusNode.dispose();
     _panNotifier.dispose();
     _scaleNotifier.dispose();
@@ -459,6 +599,192 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
+  /// Drops any fixed Angle Tool / Polygon Angle Tool label whose ray strokes
+  /// include one of [removedLines] -- so erasing, undoing, or deleting a
+  /// stroke that formed an angle also removes that angle's arc + label
+  /// instead of leaving it stranded on screen.
+  void _removeOrphanedAngleLabels(Iterable<MathsPadLine> removedLines) {
+    if (_fixedAngleLabels.isEmpty) return;
+    final Set<MathsPadLine> removedSet = removedLines.toSet();
+    if (removedSet.isEmpty) return;
+    _fixedAngleLabels.removeWhere(
+      (label) => label.sourceLines.any(removedSet.contains),
+    );
+  }
+
+  // ─── Straight Line Tool ───────────────────────────────────────────────
+
+  /// The nearest endpoint of any other existing stroke within snapping
+  /// tolerance of [worldPos], or null if nothing is close enough. Used so
+  /// starting (or ending) a new line right next to an existing line's tip
+  /// connects to it exactly instead of leaving a small gap/misalignment.
+  Offset? _findNearbyLineEndpoint(Offset worldPos, {MathsPadLine? exclude}) {
+    const double tolerance = 20.0;
+    Offset? best;
+    double bestDist = tolerance;
+    for (final line in _lines) {
+      if (identical(line, exclude)) continue;
+      if (line.fillImage != null || line.points.isEmpty) continue;
+      for (final candidate in [
+        line.points.first.offset,
+        line.points.last.offset,
+      ]) {
+        final double d = (candidate - worldPos).distance;
+        if (d < bestDist) {
+          bestDist = d;
+          best = candidate;
+        }
+      }
+    }
+    return best;
+  }
+
+  /// When axis-locked, snaps [end] to whichever of horizontal/vertical
+  /// (relative to [start]) is closer to the actual drag direction.
+  Offset _applyLineAxisLock(Offset start, Offset end) {
+    if (!_lineAxisLocked) return end;
+    final double dx = (end.dx - start.dx).abs();
+    final double dy = (end.dy - start.dy).abs();
+    return dx >= dy ? Offset(end.dx, start.dy) : Offset(start.dx, end.dy);
+  }
+
+  void _handleStraightLineToolStart(Offset worldPos) {
+    final Offset snapped = _findNearbyLineEndpoint(worldPos) ?? worldPos;
+    _currentLine = MathsPadLine(
+      points: [MathsPadStrokePoint(snapped)],
+      color: _selectedColor,
+      strokeWidth: _penWidth,
+    );
+    _straightLineLiveEnd = snapped;
+  }
+
+  void _handleStraightLineToolUpdate(Offset worldPos) {
+    if (_currentLine == null) return;
+    final Offset start = _currentLine!.points.first.offset;
+    // A nearby existing endpoint always wins over the axis lock -- landing
+    // exactly on another stroke's tip is more useful than a pure H/V line.
+    final Offset end =
+        _findNearbyLineEndpoint(worldPos, exclude: _currentLine) ??
+        _applyLineAxisLock(start, worldPos);
+    _currentLine!.points
+      ..clear()
+      ..add(MathsPadStrokePoint(start))
+      ..add(MathsPadStrokePoint(end));
+    _straightLineLiveEnd = end;
+    _activeDrawingNotifier.value++;
+  }
+
+  void _handleStraightLineToolEnd() {
+    if (_currentLine == null) return;
+    final Offset start = _currentLine!.points.first.offset;
+    final Offset end = _currentLine!.points.last.offset;
+    if ((end - start).distance > 2) {
+      _currentLine!.invalidateCache();
+      _lines.add(_currentLine!);
+      _finishedStrokesNotifier.value++;
+    }
+    _currentLine = null;
+    _straightLineLiveEnd = null;
+  }
+
+  // ─── Spacer Tool ──────────────────────────────────────────────────────
+
+  void _handleSpacerToolStart(Offset worldPos) {
+    _spacerPointerStart = worldPos;
+    _spacerDrag = null;
+    _spacerLiveShift = 0;
+  }
+
+  void _handleSpacerToolUpdate(Offset worldPos) {
+    if (_spacerPointerStart == null) return;
+
+    if (_spacerDrag == null) {
+      final Offset delta = worldPos - _spacerPointerStart!;
+      const double activateThreshold = 8.0;
+      if (delta.distance < activateThreshold) return;
+
+      final bool isVertical = _spacerHorizontalOnly
+          ? false
+          : delta.dy.abs() >= delta.dx.abs();
+      final Offset start = _spacerPointerStart!;
+      const double tolerance = 2.0;
+      final double startCoord = isVertical ? start.dy : start.dx;
+
+      final List<MathsPadLine> affectedLines = _lines.where((line) {
+        if (line.points.isEmpty) return false;
+        final double minCoord = isVertical
+            ? line.points.map((p) => p.offset.dy).reduce(min)
+            : line.points.map((p) => p.offset.dx).reduce(min);
+        return minCoord >= startCoord - tolerance;
+      }).toList();
+      final Map<MathsPadLine, List<Offset>> originalLinePoints = {
+        for (final line in affectedLines)
+          line: line.points.map((p) => p.offset).toList(),
+      };
+
+      final List<MathsPadTextLabel> affectedLabels = _textLabels.where((l) {
+        final double coord = isVertical ? l.position.dy : l.position.dx;
+        return coord >= startCoord - tolerance;
+      }).toList();
+      final Map<MathsPadTextLabel, Offset> originalLabelPositions = {
+        for (final l in affectedLabels) l: l.position,
+      };
+
+      final Set<MathsPadLine> affectedLineSet = affectedLines.toSet();
+      final List<_FixedAngleLabel> affectedAngleLabels = _fixedAngleLabels
+          .where((l) => l.sourceLines.any(affectedLineSet.contains))
+          .toList();
+      final Map<_FixedAngleLabel, Offset> originalAngleVertices = {
+        for (final l in affectedAngleLabels) l: l.vertex,
+      };
+
+      _spacerDrag = _SpacerDragState(
+        isVertical: isVertical,
+        startWorld: start,
+        lines: affectedLines,
+        originalLinePoints: originalLinePoints,
+        labels: affectedLabels,
+        originalLabelPositions: originalLabelPositions,
+        angleLabels: affectedAngleLabels,
+        originalAngleVertices: originalAngleVertices,
+      );
+    }
+
+    final _SpacerDragState drag = _spacerDrag!;
+    final double rawShift = drag.isVertical
+        ? worldPos.dy - drag.startWorld.dy
+        : worldPos.dx - drag.startWorld.dx;
+    // Only ever pushes content further away -- dragging back toward the
+    // start just closes the gap back down to nothing, never past it.
+    final double shift = rawShift.clamp(0.0, double.infinity);
+    _spacerLiveShift = shift;
+    final Offset shiftOffset = drag.isVertical
+        ? Offset(0, shift)
+        : Offset(shift, 0);
+
+    for (final line in drag.lines) {
+      final List<Offset> original = drag.originalLinePoints[line]!;
+      for (int i = 0; i < line.points.length; i++) {
+        line.points[i].offset = original[i] + shiftOffset;
+      }
+      line.invalidateCache();
+    }
+    for (final label in drag.labels) {
+      label.position = drag.originalLabelPositions[label]! + shiftOffset;
+    }
+    for (final angleLabel in drag.angleLabels) {
+      angleLabel.vertex =
+          drag.originalAngleVertices[angleLabel]! + shiftOffset;
+    }
+    _finishedStrokesNotifier.value++;
+  }
+
+  void _handleSpacerToolEnd() {
+    _spacerPointerStart = null;
+    _spacerDrag = null;
+    _spacerLiveShift = 0;
+  }
+
   // ─── Angle Tool ──────────────────────────────────────────────────────────
 
   double _angleBetween(Offset vecA, Offset vecB) {
@@ -485,6 +811,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _angleLineAStart = null;
     _angleLineAEnd = null;
     _angleWaitingForSecondLine = false;
+    _angleLineAObject = null;
     _angleVertex = null;
     _angleOtherEndOfA = null;
     _angleLiveEnd = null;
@@ -550,12 +877,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (!_angleWaitingForSecondLine) {
       // Line A just finished -- now wait for line B from one of its ends.
       _angleLineAEnd = _currentLine!.points.last.offset;
+      _angleLineAObject = _currentLine!;
       _angleWaitingForSecondLine = true;
     } else {
       // Line B just finished -- fix the angle as a permanent arc + label.
       if (_angleLiveDegrees != null &&
           _angleVertex != null &&
-          _angleOtherEndOfA != null) {
+          _angleOtherEndOfA != null &&
+          _angleLineAObject != null) {
         final vertex = _angleVertex!;
         final a1 = (_angleOtherEndOfA! - vertex).direction;
         final a2 = (_currentLine!.points.last.offset - vertex).direction;
@@ -565,6 +894,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             startAngle: a1,
             sweepAngle: _signedAngleDiff(a1, a2),
             text: '${_angleLiveDegrees!.toStringAsFixed(1)}°',
+            sourceLines: [_angleLineAObject!, _currentLine!],
           ),
         );
       }
@@ -577,6 +907,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   void _resetPolygonTool() {
     _polygonVertices = [];
+    _polygonSegmentLines = [];
     _polygonLiveEnd = null;
     _polygonLiveDegrees = null;
     _polygonWillClose = false;
@@ -646,7 +977,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final segmentStart = _currentLine!.points.first.offset;
     final segmentEnd = _currentLine!.points.last.offset;
 
-    if (_polygonVertices.length >= 2 && _polygonLiveDegrees != null) {
+    if (_polygonVertices.length >= 2 &&
+        _polygonLiveDegrees != null &&
+        _polygonSegmentLines.isNotEmpty) {
       final vertex = segmentStart;
       final prevVertex = _polygonVertices[_polygonVertices.length - 2];
       final a1 = (prevVertex - vertex).direction;
@@ -657,6 +990,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           startAngle: a1,
           sweepAngle: _signedAngleDiff(a1, a2),
           text: '${_polygonLiveDegrees!.toStringAsFixed(1)}°',
+          sourceLines: [_polygonSegmentLines.last, _currentLine!],
         ),
       );
     }
@@ -669,17 +1003,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       final a1 = (segmentStart - p0).direction;
       final a2 = (p1 - p0).direction;
       final closingDeg = _angleBetween(segmentStart - p0, p1 - p0);
-      _fixedAngleLabels.add(
-        _FixedAngleLabel(
-          vertex: p0,
-          startAngle: a1,
-          sweepAngle: _signedAngleDiff(a1, a2),
-          text: '${closingDeg.toStringAsFixed(1)}°',
-        ),
-      );
+      if (_polygonSegmentLines.isNotEmpty) {
+        _fixedAngleLabels.add(
+          _FixedAngleLabel(
+            vertex: p0,
+            startAngle: a1,
+            sweepAngle: _signedAngleDiff(a1, a2),
+            text: '${closingDeg.toStringAsFixed(1)}°',
+            sourceLines: [_polygonSegmentLines.first, _currentLine!],
+          ),
+        );
+      }
       _resetPolygonTool();
     } else {
       _polygonVertices.add(segmentEnd);
+      _polygonSegmentLines.add(_currentLine!);
       _polygonLiveEnd = null;
       _polygonLiveDegrees = null;
     }
@@ -689,24 +1027,52 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // ─── Circle/Arc Tool ─────────────────────────────────────────────────────
 
   void _resetCircleArcTool() {
+    _circleHoldTimer?.cancel();
+    _circleHoldTimer = null;
+    _circleHoldAnchor = null;
     _circleCenter = null;
     _circleMaxRadius = 0;
     _circleStartAngle = null;
     _circleHasStartedSweeping = false;
     _circleArcPoints = [];
+    _circleLiveEnd = null;
   }
 
   void _handleCircleArcToolStart(Offset worldPos) {
+    _circleHoldTimer?.cancel();
+    _circleHoldTimer = null;
+    _circleHoldAnchor = null;
     _circleCenter = worldPos;
     _circleMaxRadius = 0;
     _circleStartAngle = null;
     _circleHasStartedSweeping = false;
     _circleArcPoints = [];
+    _circleLiveEnd = null;
     _currentLine = MathsPadLine(
       points: [MathsPadStrokePoint(worldPos)],
       color: _selectedColor,
       strokeWidth: _penWidth,
     );
+  }
+
+  /// Fires once the pointer has held still at [holdPos] for a full second --
+  /// arms the tool to start sweeping an arc at that locked radius. If the
+  /// pointer moves again before this fires, [_handleCircleArcToolUpdate]
+  /// cancels it and starts a fresh one, so a circle only ever begins if the
+  /// user actually pauses; a continuous drag that never pauses draws nothing.
+  void _armCircleArcHold(Offset holdPos) {
+    if (!mounted || _currentLine == null || _circleCenter == null) return;
+    setState(() {
+      _circleHasStartedSweeping = true;
+      _circleStartAngle = (holdPos - _circleCenter!).direction;
+      _circleMaxRadius = (holdPos - _circleCenter!).distance;
+      _circleLiveEnd = null;
+      _circleArcPoints = [
+        _circleCenter! +
+            Offset(cos(_circleStartAngle!), sin(_circleStartAngle!)) *
+                _circleMaxRadius,
+      ];
+    });
   }
 
   void _handleCircleArcToolUpdate(Offset worldPos) {
@@ -716,23 +1082,25 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (dist < 1) return;
     final angle = vec.direction;
 
-    if (dist > _circleMaxRadius) {
-      _circleMaxRadius = dist;
-      _circleStartAngle ??= angle;
-    }
+    if (!_circleHasStartedSweeping) {
+      // Still drawing the initial straight radius -- track the live end so
+      // the dynamic length badge always matches exactly what's on screen.
+      _circleLiveEnd = worldPos;
 
-    // Once the drag has curved more than ~5deg away from the initial radius
-    // direction, start tracing an arc at the locked (max-reached) radius
-    // instead of a straight line.
-    if (!_circleHasStartedSweeping && _circleStartAngle != null) {
-      final sweptSoFar = _signedAngleDiff(_circleStartAngle!, angle).abs();
-      if (sweptSoFar > 5 * pi / 180) {
-        _circleHasStartedSweeping = true;
-        _circleArcPoints = [
-          _circleCenter! +
-              Offset(cos(_circleStartAngle!), sin(_circleStartAngle!)) *
-                  _circleMaxRadius,
-        ];
+      // Restart the 1-second hold timer whenever the pointer moves away from
+      // wherever it's currently anchored. The timer only ever completes if
+      // the pointer stays within a small tolerance of one spot for the full
+      // second, which is exactly what "hold a specific length" means here.
+      const double holdTolerance = 6.0;
+      if (_circleHoldAnchor == null ||
+          (worldPos - _circleHoldAnchor!).distance > holdTolerance) {
+        _circleHoldAnchor = worldPos;
+        _circleHoldTimer?.cancel();
+        final Offset anchorForThisHold = worldPos;
+        _circleHoldTimer = Timer(
+          const Duration(seconds: 1),
+          () => _armCircleArcHold(anchorForThisHold),
+        );
       }
     }
 
@@ -773,6 +1141,215 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // straight radius preview is discarded (nothing committed).
     _currentLine = null;
     _resetCircleArcTool();
+  }
+
+  // ─── Fill Tool (MS Paint-style bucket fill) ──────────────────────────────
+
+  static const int _fillColorTolerance = 40;
+
+  /// Tap-triggered flood fill: rasterizes the current strokes at screen
+  /// resolution, floods a contiguous same-color region from [screenTapPos]
+  /// (tolerant of anti-aliased edges), and adds the result as a normal
+  /// `MathsPadLine` with an image instead of a stroked path -- so undo/redo/
+  /// clear, which only ever touch `_lines`/`_undoHistory`, need no changes at
+  /// all to support it.
+  Future<void> _performBucketFill(Offset screenTapPos) async {
+    if (_canvasSize.isEmpty) return;
+    final int width = _canvasSize.width.ceil();
+    final int height = _canvasSize.height.ceil();
+    if (width <= 0 || height <= 0) return;
+
+    final int startX = screenTapPos.dx.floor();
+    final int startY = screenTapPos.dy.floor();
+    if (startX < 0 || startX >= width || startY < 0 || startY >= height) {
+      return;
+    }
+
+    // Rasterize just the strokes (not the grid/ruled background pattern --
+    // that would risk faint grid lines being misread as fill boundaries) at
+    // the exact same pan/scale transform the live painter uses, so the
+    // tapped screen pixel lines up with what's actually on screen.
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final Canvas offscreenCanvas = Canvas(recorder);
+    offscreenCanvas.save();
+    offscreenCanvas.translate(_panOffset.dx, _panOffset.dy);
+    offscreenCanvas.scale(_scale);
+    final _MathsPadFinishedStrokesPainter tempPainter =
+        _MathsPadFinishedStrokesPainter(
+          lines: _lines,
+          bgMode: _bgMode,
+          isDark: false,
+          canvasBgColor: Colors.transparent,
+          panOffset: _panOffset,
+          scale: _scale,
+        );
+    tempPainter._drawStrokes(offscreenCanvas, _lines);
+    offscreenCanvas.restore();
+    final ui.Picture picture = recorder.endRecording();
+    final ui.Image rasterImage = await picture.toImage(width, height);
+    final ByteData? byteData = await rasterImage.toByteData(
+      format: ui.ImageByteFormat.rawRgba,
+    );
+    rasterImage.dispose();
+    if (byteData == null) return;
+    final Uint8List pixels = byteData.buffer.asUint8List();
+
+    int idx(int x, int y) => (y * width + x) * 4;
+
+    final int startIdx = idx(startX, startY);
+    final int targetR = pixels[startIdx];
+    final int targetG = pixels[startIdx + 1];
+    final int targetB = pixels[startIdx + 2];
+    final int targetA = pixels[startIdx + 3];
+
+    final int fillR = (_selectedColor.r * 255.0).round().clamp(0, 255);
+    final int fillG = (_selectedColor.g * 255.0).round().clamp(0, 255);
+    final int fillB = (_selectedColor.b * 255.0).round().clamp(0, 255);
+    const int fillA = 255;
+
+    bool closeEnoughToFillColor() {
+      return (targetR - fillR).abs() <= _fillColorTolerance &&
+          (targetG - fillG).abs() <= _fillColorTolerance &&
+          (targetB - fillB).abs() <= _fillColorTolerance &&
+          (targetA - fillA).abs() <= _fillColorTolerance;
+    }
+
+    // Nothing would actually change -- tapping an area already filled with
+    // (close enough to) the current color.
+    if (closeEnoughToFillColor()) return;
+
+    bool matchesTarget(int x, int y) {
+      final int i = idx(x, y);
+      return (pixels[i] - targetR).abs() <= _fillColorTolerance &&
+          (pixels[i + 1] - targetG).abs() <= _fillColorTolerance &&
+          (pixels[i + 2] - targetB).abs() <= _fillColorTolerance &&
+          (pixels[i + 3] - targetA).abs() <= _fillColorTolerance;
+    }
+
+    // Scanline span flood fill -- much faster than a naive per-pixel
+    // 4-directional flood fill, since a whole contiguous horizontal run of
+    // matching pixels is claimed and enqueued in one step instead of one
+    // pixel at a time.
+    final Uint8List visited = Uint8List(width * height);
+    final List<int> stack = <int>[startY * width + startX];
+    int minX = startX, maxX = startX, minY = startY, maxY = startY;
+
+    while (stack.isNotEmpty) {
+      final int packed = stack.removeLast();
+      final int y = packed ~/ width;
+      final int x = packed % width;
+      if (visited[y * width + x] != 0) continue;
+      if (!matchesTarget(x, y)) continue;
+
+      // Expand left to find the start of this span.
+      int spanStart = x;
+      while (spanStart - 1 >= 0 &&
+          visited[y * width + (spanStart - 1)] == 0 &&
+          matchesTarget(spanStart - 1, y)) {
+        spanStart--;
+      }
+      // Expand right to find the end of this span.
+      int spanEnd = x;
+      while (spanEnd + 1 < width &&
+          visited[y * width + (spanEnd + 1)] == 0 &&
+          matchesTarget(spanEnd + 1, y)) {
+        spanEnd++;
+      }
+
+      bool aboveAdded = false;
+      bool belowAdded = false;
+      for (int sx = spanStart; sx <= spanEnd; sx++) {
+        visited[y * width + sx] = 1;
+        final int px = idx(sx, y);
+        pixels[px] = fillR;
+        pixels[px + 1] = fillG;
+        pixels[px + 2] = fillB;
+        pixels[px + 3] = fillA;
+
+        if (sx < minX) minX = sx;
+        if (sx > maxX) maxX = sx;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+
+        if (y > 0) {
+          final bool match = visited[(y - 1) * width + sx] == 0 &&
+              matchesTarget(sx, y - 1);
+          if (match && !aboveAdded) {
+            stack.add((y - 1) * width + sx);
+            aboveAdded = true;
+          } else if (!match) {
+            aboveAdded = false;
+          }
+        }
+        if (y < height - 1) {
+          final bool match = visited[(y + 1) * width + sx] == 0 &&
+              matchesTarget(sx, y + 1);
+          if (match && !belowAdded) {
+            stack.add((y + 1) * width + sx);
+            belowAdded = true;
+          } else if (!match) {
+            belowAdded = false;
+          }
+        }
+      }
+    }
+
+    if (maxX < minX || maxY < minY) return; // nothing was actually filled
+
+    final int cropW = maxX - minX + 1;
+    final int cropH = maxY - minY + 1;
+    final Uint8List cropped = Uint8List(cropW * cropH * 4);
+    for (int y = 0; y < cropH; y++) {
+      for (int x = 0; x < cropW; x++) {
+        final int srcX = minX + x;
+        final int srcY = minY + y;
+        final int dstI = (y * cropW + x) * 4;
+        if (visited[srcY * width + srcX] != 0) {
+          cropped[dstI] = fillR;
+          cropped[dstI + 1] = fillG;
+          cropped[dstI + 2] = fillB;
+          cropped[dstI + 3] = fillA;
+        }
+        // else leave as fully transparent (Uint8List defaults to 0)
+      }
+    }
+
+    final Completer<ui.Image> completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(cropped, cropW, cropH, ui.PixelFormat.rgba8888, (
+      ui.Image img,
+    ) {
+      completer.complete(img);
+    });
+    final ui.Image fillImage = await completer.future;
+
+    if (!mounted) {
+      fillImage.dispose();
+      return;
+    }
+
+    final Offset worldTopLeft = _screenToWorld(
+      Offset(minX.toDouble(), minY.toDouble()),
+    );
+    final Offset worldBottomRight = _screenToWorld(
+      Offset((maxX + 1).toDouble(), (maxY + 1).toDouble()),
+    );
+    final Rect worldBounds = Rect.fromPoints(worldTopLeft, worldBottomRight);
+
+    final MathsPadLine fillLine = MathsPadLine(
+      points: [
+        MathsPadStrokePoint(worldBounds.topLeft),
+        MathsPadStrokePoint(worldBounds.bottomRight),
+      ],
+      color: _selectedColor,
+      strokeWidth: 0,
+      fillImage: fillImage,
+      fillWorldBounds: worldBounds,
+    );
+
+    setState(() {
+      _lines.add(fillLine);
+    });
+    _finishedStrokesNotifier.value++;
   }
 
   // ─── Geometry Instruments: helpers ──────────────────────────────────────
@@ -830,6 +1407,127 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _finishedStrokesNotifier.value++;
   }
 
+  /// A placed text label: the text itself is IgnorePointer'd (dragging is
+  /// handled centrally through the canvas's own gesture detector, same as
+  /// every instrument, to avoid the nested-Positioned coordinate bug that
+  /// affected per-widget drag handling elsewhere in this file); only the
+  /// small remove button is a local tap target.
+  Widget _buildTextLabelWidget(int index, MathsPadTextLabel label) {
+    return Positioned(
+      left: label.position.dx,
+      top: label.position.dy,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          IgnorePointer(
+            child: Text(
+              label.text,
+              style: TextStyle(
+                color: label.color,
+                fontSize: label.fontSize,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Positioned(
+            right: -10,
+            top: -10,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _deleteTextLabel(index),
+              child: Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEF4444),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.25),
+                      blurRadius: 3,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.close_rounded,
+                  size: 12,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Inline editor shown while placing a new label or re-editing an
+  /// existing one -- a small floating card with a text field, matching the
+  /// visual style of the other instrument badges in this file.
+  Widget _buildTextEditorOverlay(bool isDark) {
+    if (!_textEditorOpen ||
+        _textEditorWorldPos == null ||
+        _textEditorController == null) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      left: _textEditorWorldPos!.dx,
+      top: _textEditorWorldPos!.dy - 26,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF6366F1), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.25),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 140,
+                child: TextField(
+                  controller: _textEditorController,
+                  autofocus: true,
+                  style: TextStyle(
+                    color: isDark ? Colors.white : const Color(0xFF1E293B),
+                    fontSize: 15,
+                  ),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText: 'Label text…',
+                  ),
+                  onSubmitted: (_) => _commitTextEditor(),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _commitTextEditor,
+                child: const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF22C55E),
+                  size: 22,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInstrumentWidget(InstrumentState inst) {
     final isDark = context.isDark;
     if (inst is RulerState) {
@@ -883,11 +1581,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: live ? const Color(0xFF2563EB) : const Color(0xFF1E293B),
+              // Fixed labels use a light, translucent background (instead of
+              // solid black) so they read as a soft overlay rather than an
+              // opaque tag sitting on top of the drawing.
+              color: live
+                  ? const Color(0xFF2563EB)
+                  : Colors.white.withOpacity(0.78),
               borderRadius: BorderRadius.circular(14),
+              border: live
+                  ? null
+                  : Border.all(color: const Color(0xFF1E293B).withOpacity(0.12)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.25),
+                  color: Colors.black.withOpacity(0.2),
                   blurRadius: 4,
                   offset: const Offset(0, 2),
                 ),
@@ -895,8 +1601,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             ),
             child: Text(
               text,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: live ? Colors.white : const Color(0xFF1E293B),
                 fontWeight: FontWeight.bold,
                 fontSize: 12,
               ),
@@ -914,6 +1620,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final bisector = startAngle + sweepAngle / 2;
     return vertex +
         Offset(cos(bisector), sin(bisector)) * _FixedAngleLabel.labelRadius;
+  }
+
+  /// Point just off the midpoint of segment [a]-[b], offset perpendicular by
+  /// [offset] px, used to float the Circle/Arc tool's live length badge
+  /// beside the radius line instead of directly on top of it.
+  Offset _perpendicularMidpoint(Offset a, Offset b, double offset) {
+    final mid = Offset((a.dx + b.dx) / 2, (a.dy + b.dy) / 2);
+    final dir = b - a;
+    if (dir.distance == 0) return mid;
+    final normal = Offset(-dir.dy, dir.dx) / dir.distance;
+    return mid + normal * offset;
   }
 
   /// All angle arcs to paint this frame: every fixed one, plus the live one
@@ -1041,6 +1758,104 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       }
     }
     return null;
+  }
+
+  // ─── Text Label Tool ──────────────────────────────────────────────────
+
+  int? _hitTestTextLabel(Offset worldPos) {
+    for (int i = _textLabels.length - 1; i >= 0; i--) {
+      if (_textLabels[i].worldBounds.inflate(8).contains(worldPos)) return i;
+    }
+    return null;
+  }
+
+  /// Existing labels are always draggable, regardless of the active tool --
+  /// matching how geometry instruments always take priority too.
+  bool _tryStartTextLabelDrag(Offset worldPos) {
+    final int? idx = _hitTestTextLabel(worldPos);
+    if (idx == null) return false;
+    _draggedTextLabelIndex = idx;
+    _textDragPointerStart = worldPos;
+    _textDragLabelStart = _textLabels[idx].position;
+    _textDragMoved = false;
+    return true;
+  }
+
+  void _updateTextLabelDrag(Offset worldPos) {
+    if (_draggedTextLabelIndex == null ||
+        _textDragPointerStart == null ||
+        _textDragLabelStart == null) {
+      return;
+    }
+    final Offset delta = worldPos - _textDragPointerStart!;
+    if (delta.distance > 4) _textDragMoved = true;
+    setState(() {
+      _textLabels[_draggedTextLabelIndex!].position = _textDragLabelStart! + delta;
+    });
+  }
+
+  /// If the pointer never actually moved, treat it as a tap instead of a
+  /// drag and open that label for editing rather than just "moving" it in
+  /// place.
+  void _endTextLabelDrag() {
+    if (_draggedTextLabelIndex == null) return;
+    final int idx = _draggedTextLabelIndex!;
+    final bool moved = _textDragMoved;
+    _draggedTextLabelIndex = null;
+    _textDragPointerStart = null;
+    _textDragLabelStart = null;
+    _textDragMoved = false;
+    if (!moved) {
+      _openTextEditor(editingIndex: idx);
+    }
+  }
+
+  void _openTextEditor({int? editingIndex, Offset? newPosition}) {
+    setState(() {
+      _textEditingIndex = editingIndex;
+      _textEditorWorldPos = editingIndex != null
+          ? _textLabels[editingIndex].position
+          : newPosition;
+      _textEditorController = TextEditingController(
+        text: editingIndex != null ? _textLabels[editingIndex].text : '',
+      );
+      _textEditorOpen = true;
+    });
+  }
+
+  void _commitTextEditor() {
+    if (!_textEditorOpen) return;
+    final String value = _textEditorController?.text.trim() ?? '';
+    final int? editingIndex = _textEditingIndex;
+    final Offset? newPosition = _textEditorWorldPos;
+    setState(() {
+      if (editingIndex != null) {
+        if (value.isEmpty) {
+          _textLabels.removeAt(editingIndex);
+        } else {
+          _textLabels[editingIndex].text = value;
+        }
+      } else if (value.isNotEmpty && newPosition != null) {
+        _textLabels.add(
+          MathsPadTextLabel(
+            position: newPosition,
+            text: value,
+            color: _selectedColor,
+          ),
+        );
+      }
+      _textEditorController?.dispose();
+      _textEditorController = null;
+      _textEditorOpen = false;
+      _textEditingIndex = null;
+      _textEditorWorldPos = null;
+    });
+  }
+
+  void _deleteTextLabel(int index) {
+    setState(() {
+      _textLabels.removeAt(index);
+    });
   }
 
   bool _tryStartInstrumentDrag(Offset worldPos) {
@@ -1456,10 +2271,43 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (details.pointerCount == 1 && _toolMode != CanvasToolMode.pan) {
       final worldPos = _screenToWorld(details.localFocalPoint);
 
+      // Any tap while the text editor is open commits/closes it first,
+      // rather than also acting on whatever else was tapped.
+      if (_textEditorOpen) {
+        _commitTextEditor();
+        return;
+      }
+
       // Geometry instrument handles (move/rotate/resize, or the compass's
       // pivot/hinge/tip) always take priority over the current drawing
       // tool, so instruments stay adjustable no matter what's selected.
       if (_tryStartInstrumentDrag(worldPos)) {
+        return;
+      }
+
+      // Existing text labels are always draggable/editable too, regardless
+      // of the active tool -- same priority as instruments.
+      if (_tryStartTextLabelDrag(worldPos)) {
+        return;
+      }
+
+      if (_toolMode == CanvasToolMode.text) {
+        _openTextEditor(newPosition: worldPos);
+        return;
+      }
+
+      if (_toolMode == CanvasToolMode.straightLine) {
+        _handleStraightLineToolStart(worldPos);
+        _undoHistory.clear();
+        _selectedLines.clear();
+        _activeDrawingNotifier.value++;
+        return;
+      }
+
+      if (_toolMode == CanvasToolMode.spacer) {
+        _handleSpacerToolStart(worldPos);
+        _undoHistory.clear();
+        _selectedLines.clear();
         return;
       }
 
@@ -1484,6 +2332,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _undoHistory.clear();
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
+        return;
+      }
+
+      if (_toolMode == CanvasToolMode.fill) {
+        // A tap-and-release action, not a drag -- handled entirely here.
+        _undoHistory.clear();
+        _selectedLines.clear();
+        _performBucketFill(details.localFocalPoint);
         return;
       }
 
@@ -1549,6 +2405,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             _undoHistory.add(hitLine);
             _lines.remove(hitLine);
             _selectedLines.remove(hitLine);
+            _removeOrphanedAngleLabels([hitLine]);
           });
         }
       } else {
@@ -1594,6 +2451,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     } else if (_draggedInstrument != null) {
       _updateInstrumentDrag(_screenToWorld(details.localFocalPoint));
       return;
+    } else if (_draggedTextLabelIndex != null) {
+      _updateTextLabelDrag(_screenToWorld(details.localFocalPoint));
+      return;
     } else if (_activeShapeTool != null && _shapeDragStartPos != null) {
       final worldPos = _screenToWorld(details.localFocalPoint);
       _shapeDragCurrentPos = worldPos;
@@ -1629,6 +2489,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
         for (final line in _selectedLines) {
           if (line.points.isEmpty) continue;
+          // A Fill Tool region is a raster image, not a real stroke -- there's
+          // no way to rotate its pixels here, so leave it stationary rather
+          // than rotating just its bounding corner points (which would only
+          // skew the rect, not actually rotate the image).
+          if (line.fillImage != null) continue;
 
           // Calculate individual stroke center (centroid of this line's points)
           double sumX = 0;
@@ -1688,6 +2553,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _undoHistory.add(hitLine);
         _lines.remove(hitLine);
         _selectedLines.remove(hitLine);
+        _removeOrphanedAngleLabels([hitLine]);
         _finishedStrokesNotifier.value++;
         _activeDrawingNotifier.value++;
       }
@@ -1709,6 +2575,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       final worldPos = _screenToWorld(details.localFocalPoint);
       _lassoPoints.add(worldPos);
       _activeDrawingNotifier.value++;
+    } else if (_toolMode == CanvasToolMode.straightLine &&
+        _currentLine != null) {
+      // setState needed for the same reason as the other tools' live badges
+      // below: the instruments-overlay Stack only rebuilds on pan/zoom or a
+      // real setState, not on `_activeDrawingNotifier`.
+      setState(() {
+        _handleStraightLineToolUpdate(_screenToWorld(details.localFocalPoint));
+      });
+    } else if (_toolMode == CanvasToolMode.spacer &&
+        _spacerPointerStart != null) {
+      setState(() {
+        _handleSpacerToolUpdate(_screenToWorld(details.localFocalPoint));
+      });
     } else if (_toolMode == CanvasToolMode.angle && _currentLine != null) {
       // setState (not just the notifier bump inside the handler) is needed
       // here because the live angle badge lives in the instruments-overlay
@@ -1722,10 +2601,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _handlePolygonToolUpdate(_screenToWorld(details.localFocalPoint));
       });
     } else if (_toolMode == CanvasToolMode.circleArc && _currentLine != null) {
-      // No setState needed: the live preview is just `_currentLine`, already
-      // driven by `_activeDrawingNotifier` like a normal freehand stroke --
-      // there's no separate overlay widget (unlike the angle tools' badge).
-      _handleCircleArcToolUpdate(_screenToWorld(details.localFocalPoint));
+      // setState needed (same reason as the angle tools above): the live
+      // length badge lives in the instruments-overlay Stack, which only
+      // rebuilds on pan/zoom or a real setState, not on `_activeDrawingNotifier`.
+      setState(() {
+        _handleCircleArcToolUpdate(_screenToWorld(details.localFocalPoint));
+      });
     } else if (_currentLine != null) {
       // 1-finger freehand drawing stroke update
       final worldPos = _screenToWorld(details.localFocalPoint);
@@ -1745,6 +2626,22 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _endInstrumentDrag();
       return;
     }
+    if (_draggedTextLabelIndex != null) {
+      _endTextLabelDrag();
+      return;
+    }
+    if (_toolMode == CanvasToolMode.straightLine && _currentLine != null) {
+      setState(() {
+        _handleStraightLineToolEnd();
+      });
+      return;
+    }
+    if (_toolMode == CanvasToolMode.spacer) {
+      setState(() {
+        _handleSpacerToolEnd();
+      });
+      return;
+    }
     if (_toolMode == CanvasToolMode.angle && _currentLine != null) {
       setState(() {
         _handleAngleToolEnd();
@@ -1758,7 +2655,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return;
     }
     if (_toolMode == CanvasToolMode.circleArc) {
-      _handleCircleArcToolEnd();
+      setState(() {
+        _handleCircleArcToolEnd();
+      });
       return;
     }
     if (_activeShapeTool != null &&
@@ -1890,6 +2789,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           strokeWidth: line.strokeWidth,
           isEraser: line.isEraser,
           isShape: line.isShape,
+          fillImage: line.fillImage,
+          fillWorldBounds: line.fillWorldBounds,
         );
       }).toList();
     });
@@ -1946,6 +2847,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
         isShape: line.isShape,
+        fillImage: line.fillImage,
+        fillWorldBounds: line.fillWorldBounds?.shift(translation),
       );
       _buildAndCachePath(newLine);
       return newLine;
@@ -1976,6 +2879,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         color: line.color,
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
+        fillImage: line.fillImage,
+        fillWorldBounds: line.fillWorldBounds?.shift(copyOffset),
       );
       _buildAndCachePath(newLine);
       duplicatedLines.add(newLine);
@@ -1995,6 +2900,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       setState(() {
         _undoHistory.addAll(_selectedLines);
         _lines.removeWhere((line) => _selectedLines.contains(line));
+        _removeOrphanedAngleLabels(_selectedLines);
         _selectedLines.clear();
       });
       _finishedStrokesNotifier.value++;
@@ -2411,8 +3317,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void _undo() {
     if (_lines.isNotEmpty) {
       setState(() {
-        _undoHistory.add(_lines.removeLast());
+        final removed = _lines.removeLast();
+        _undoHistory.add(removed);
         _selectedLines.clear();
+        _removeOrphanedAngleLabels([removed]);
       });
       _finishedStrokesNotifier.value++;
     }
@@ -2436,6 +3344,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _undoHistory.clear();
       _selectedLines.clear();
       _lassoPoints.clear();
+      _fixedAngleLabels.clear();
+      _textLabels.clear();
+      _textEditorController?.dispose();
+      _textEditorController = null;
+      _textEditorOpen = false;
+      _textEditingIndex = null;
+      _textEditorWorldPos = null;
     });
     _finishedStrokesNotifier.value++;
   }
@@ -2604,7 +3519,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     // GestureDetectors; empty overlay space falls through to the
                     // drawing Listener/GestureDetector beneath it.
                     IgnorePointer(
-                      ignoring: _instruments.isEmpty,
+                      ignoring:
+                          _instruments.isEmpty &&
+                          _textLabels.isEmpty &&
+                          !_textEditorOpen,
                       child: ValueListenableBuilder<Offset>(
                         valueListenable: _panNotifier,
                         builder: (_, pan, child) {
@@ -2672,6 +3590,54 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                         '${_polygonLiveDegrees!.toStringAsFixed(1)}°',
                                         live: true,
                                       ),
+                                    if (_toolMode ==
+                                            CanvasToolMode.circleArc &&
+                                        _circleCenter != null &&
+                                        _circleLiveEnd != null &&
+                                        !_circleHasStartedSweeping)
+                                      _buildAngleBadge(
+                                        _perpendicularMidpoint(
+                                          _circleCenter!,
+                                          _circleLiveEnd!,
+                                          20,
+                                        ),
+                                        '${((_circleLiveEnd! - _circleCenter!).distance / kPxPerCm).toStringAsFixed(1)} cm',
+                                        live: true,
+                                      ),
+                                    if (_toolMode ==
+                                            CanvasToolMode.straightLine &&
+                                        _currentLine != null &&
+                                        _straightLineLiveEnd != null)
+                                      _buildAngleBadge(
+                                        _perpendicularMidpoint(
+                                          _currentLine!.points.first.offset,
+                                          _straightLineLiveEnd!,
+                                          20,
+                                        ),
+                                        '${((_straightLineLiveEnd! - _currentLine!.points.first.offset).distance / kPxPerCm).toStringAsFixed(1)} cm',
+                                        live: true,
+                                      ),
+                                    if (_toolMode == CanvasToolMode.spacer &&
+                                        _spacerDrag != null)
+                                      _buildAngleBadge(
+                                        _spacerDrag!.isVertical
+                                            ? _spacerDrag!.startWorld +
+                                                  Offset(
+                                                    24,
+                                                    _spacerLiveShift / 2,
+                                                  )
+                                            : _spacerDrag!.startWorld +
+                                                  Offset(
+                                                    _spacerLiveShift / 2,
+                                                    24,
+                                                  ),
+                                        '${(_spacerLiveShift / kPxPerCm).toStringAsFixed(1)} cm',
+                                        live: true,
+                                      ),
+                                    ..._textLabels.asMap().entries.map(
+                                      (e) => _buildTextLabelWidget(e.key, e.value),
+                                    ),
+                                    _buildTextEditorOverlay(isDark),
                                   ],
                                 ),
                               );
@@ -3113,6 +4079,31 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     }),
                   ),
                   _buildIconButton(
+                    icon: _lineAxisLocked
+                        ? Icons.add_rounded
+                        : Icons.horizontal_rule_rounded,
+                    tooltip: _lineAxisLocked
+                        ? 'Straight Line Tool: HORIZONTAL/VERTICAL ONLY -- '
+                              'length shown live; starting/ending near '
+                              "another line's tip connects to it exactly "
+                              '(tap icon again to allow any angle)'
+                        : 'Straight Line Tool: drag to draw a line with its '
+                              "length shown live; starting/ending near "
+                              "another line's tip connects to it exactly "
+                              '(tap icon again to lock to horizontal/vertical only)',
+                    isSelected: _toolMode == CanvasToolMode.straightLine,
+                    onTap: () => setState(() {
+                      if (_toolMode == CanvasToolMode.straightLine) {
+                        _lineAxisLocked = !_lineAxisLocked;
+                      } else {
+                        _toolMode = CanvasToolMode.straightLine;
+                      }
+                      _activeShapeTool = null;
+                      _selectedWidth = _penWidth;
+                      _selectedLines.clear();
+                    }),
+                  ),
+                  _buildIconButton(
                     icon: Icons.call_split_rounded,
                     tooltip:
                         'Angle Tool: draw a line, then drag a second line '
@@ -3156,6 +4147,53 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       _selectedWidth = _penWidth;
                       _selectedLines.clear();
                       _resetCircleArcTool();
+                    }),
+                  ),
+                  _buildIconButton(
+                    icon: Icons.format_color_fill_rounded,
+                    tooltip:
+                        'Fill Tool: tap inside any closed area to flood-fill '
+                        'it with the current color, like a paint bucket',
+                    isSelected: _toolMode == CanvasToolMode.fill,
+                    onTap: () => setState(() {
+                      _toolMode = CanvasToolMode.fill;
+                      _activeShapeTool = null;
+                      _selectedLines.clear();
+                    }),
+                  ),
+                  _buildIconButton(
+                    icon: Icons.text_fields_rounded,
+                    tooltip:
+                        'Text Label: tap empty space to add a label; tap an '
+                        'existing one to edit it, or drag it to move it',
+                    isSelected: _toolMode == CanvasToolMode.text,
+                    onTap: () => setState(() {
+                      _toolMode = CanvasToolMode.text;
+                      _activeShapeTool = null;
+                      _selectedLines.clear();
+                    }),
+                  ),
+                  _buildIconButton(
+                    icon: _spacerHorizontalOnly
+                        ? Icons.compare_arrows_rounded
+                        : Icons.unfold_more_rounded,
+                    tooltip: _spacerHorizontalOnly
+                        ? 'Spacer Tool: HORIZONTAL ONLY -- drag through a gap '
+                              'to push everything past that point sideways '
+                              '(tap icon again to go back to any direction)'
+                        : 'Spacer Tool: drag through a gap to push everything '
+                              'past that point further away, live, opening up '
+                              'blank space to work in (tap icon again for '
+                              'horizontal-only)',
+                    isSelected: _toolMode == CanvasToolMode.spacer,
+                    onTap: () => setState(() {
+                      if (_toolMode == CanvasToolMode.spacer) {
+                        _spacerHorizontalOnly = !_spacerHorizontalOnly;
+                      } else {
+                        _toolMode = CanvasToolMode.spacer;
+                      }
+                      _activeShapeTool = null;
+                      _selectedLines.clear();
                     }),
                   ),
                   _buildIconButton(
@@ -3879,6 +4917,12 @@ List<Offset> _chaikinSmooth(List<Offset> pts, {int iterations = 3}) {
 }
 
 void _buildAndCachePath(MathsPadLine line) {
+  if (line.fillImage != null) {
+    // Fill Tool result -- rendered as an image (see _drawStrokes), not a
+    // stroked path, so there's nothing to build here.
+    line.cachedBounds = line.fillWorldBounds;
+    return;
+  }
   if (line.points.isEmpty) return;
 
   if (line.points.length == 1) {
@@ -4063,6 +5107,26 @@ class _MathsPadFinishedStrokesPainter extends CustomPainter {
 
   void _drawStrokes(Canvas canvas, List<MathsPadLine> visibleLines) {
     for (final line in visibleLines) {
+      if (line.fillImage != null && line.fillWorldBounds != null) {
+        // Fill Tool result: draw the rasterized flood-fill image directly.
+        // It only ever contains pixels for the region that was actually
+        // filled (everything else in the cropped image is transparent), so
+        // draw order relative to boundary strokes doesn't matter -- the
+        // strokes that formed the boundary were never touched by the fill
+        // and remain visible on top (or underneath) regardless.
+        canvas.drawImageRect(
+          line.fillImage!,
+          Rect.fromLTWH(
+            0,
+            0,
+            line.fillImage!.width.toDouble(),
+            line.fillImage!.height.toDouble(),
+          ),
+          line.fillWorldBounds!,
+          Paint(),
+        );
+        continue;
+      }
       if (line.points.isEmpty) continue;
 
       final paint = Paint()
