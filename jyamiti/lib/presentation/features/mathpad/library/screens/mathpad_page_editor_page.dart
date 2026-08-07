@@ -77,6 +77,9 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
   bool _isPadCanvasOnly = false;
   MathsPadLiveStateReader? _liveReader;
   Timer? _autosaveTimer;
+  bool _showBottomBar = true;
+  Timer? _bottomBarTimer;
+  Timer? _hoverTimer;
   // Every save (periodic autosave tick, page switch, the pad's own manual
   // Save Page button, close) is chained onto this so at most one
   // `savePage` call for a given page is ever in flight -- see
@@ -116,11 +119,16 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       const Duration(seconds: 5),
       (_) => _saveCurrentLive(),
     );
+    _bottomBarTimer = Timer(const Duration(seconds: 10), () {
+      if (mounted) setState(() => _showBottomBar = false);
+    });
   }
 
   @override
   void dispose() {
     _autosaveTimer?.cancel();
+    _bottomBarTimer?.cancel();
+    _hoverTimer?.cancel();
     super.dispose();
   }
 
@@ -214,7 +222,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
     _loadAllPreviews();
   }
 
-  Future<void> _deleteCurrentPage() async {
+  Future<void> _deletePageAt(int index) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -243,15 +251,21 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
     );
     if (confirmed != true) return;
 
-    final removed = _pages.removeAt(_currentIndex);
+    final removed = _pages.removeAt(index);
     await widget.storage.deletePages(widget.batchId, [removed.id]);
     if (_pages.isEmpty) {
       _pages.add(MathPadPageRef.create('Page 1'));
     }
     await widget.onPagesChanged();
-    final nextIndex = _currentIndex >= _pages.length ? _pages.length - 1 : _currentIndex;
-    await _loadPage(nextIndex);
+    
+    if (index == _currentIndex) {
+      final nextIndex = _currentIndex >= _pages.length ? _pages.length - 1 : _currentIndex;
+      await _loadPage(nextIndex);
+    } else if (index < _currentIndex) {
+      _currentIndex--;
+    }
     _loadAllPreviews();
+    if (mounted) setState(() {});
   }
 
   Future<void> _renamePageAt(int index) async {
@@ -454,7 +468,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
             IconButton(
               icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
               tooltip: 'Delete Page',
-              onPressed: _deleteCurrentPage,
+              onPressed: () => _deletePageAt(_currentIndex),
             ),
           ],
         ),
@@ -591,6 +605,14 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                       ),
                     ),
                   ),
+                  IconButton(
+                    icon: const Icon(Icons.add_rounded, color: Color(0xFF10B981)),
+                    tooltip: 'New Page',
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _addPage();
+                    },
+                  ),
                 ],
               ),
             ),
@@ -650,6 +672,20 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                                   ),
                                 ),
                               ),
+                            Positioned(
+                              right: 4,
+                              top: 4,
+                              child: IconButton(
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                icon: Icon(
+                                  Icons.cancel_rounded,
+                                  size: 20,
+                                  color: Colors.redAccent.withValues(alpha: 0.6),
+                                ),
+                                onPressed: () => _deletePageAt(i),
+                              ),
+                            ),
                             Positioned(
                               left: 6,
                               bottom: 6,
@@ -737,19 +773,28 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                     return _pendingSave;
                   },
               onClose: () => Navigator.of(context).pop(),
-              onCanvasOnlyModeChanged: (isCanvasOnly) =>
-                  setState(() => _isPadCanvasOnly = isCanvasOnly),
+              onCanvasOnlyModeChanged: (isCanvasOnly) {
+                setState(() {
+                  _isPadCanvasOnly = isCanvasOnly;
+                  if (!isCanvasOnly) {
+                    _showBottomBar = true;
+                    _bottomBarTimer?.cancel();
+                    _bottomBarTimer = Timer(const Duration(seconds: 10), () {
+                      if (mounted) setState(() => _showBottomBar = false);
+                    });
+                  }
+                });
+              },
+              leadingToolbarAction: _buildLibraryButton(context),
+              trailingToolbarAction: _buildPagePreviewToggleButton(context),
             ),
             if (!_isPadCanvasOnly) ...[
-              Positioned(
-                left: 16,
-                top: 16,
-                child: _buildLibraryButton(context),
-              ),
-              Positioned(
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 400),
+                curve: Curves.easeInCubic,
                 left: 0,
                 right: 0,
-                bottom: 16,
+                bottom: _showBottomBar ? 16 : -200,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -759,11 +804,47 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                   ],
                 ),
               ),
-              Positioned(
-                right: 16,
-                top: 16,
-                child: _buildPagePreviewToggleButton(context),
-              ),
+              if (!_showBottomBar)
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: 40,
+                  child: Center(
+                    child: MouseRegion(
+                      onEnter: (_) {
+                        _hoverTimer?.cancel();
+                        _hoverTimer = Timer(const Duration(seconds: 2), () {
+                          if (mounted) {
+                            setState(() {
+                              _showBottomBar = true;
+                              _bottomBarTimer?.cancel();
+                              _bottomBarTimer = Timer(const Duration(seconds: 10), () {
+                                if (mounted) setState(() => _showBottomBar = false);
+                              });
+                            });
+                          }
+                        });
+                      },
+                      onExit: (_) {
+                        _hoverTimer?.cancel();
+                      },
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: () {
+                          setState(() {
+                            _showBottomBar = true;
+                            _bottomBarTimer?.cancel();
+                            _bottomBarTimer = Timer(const Duration(seconds: 10), () {
+                              if (mounted) setState(() => _showBottomBar = false);
+                            });
+                          });
+                        },
+                        child: const SizedBox(width: 300, height: 40),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ],
         ),

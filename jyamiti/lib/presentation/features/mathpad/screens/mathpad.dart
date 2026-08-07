@@ -455,6 +455,8 @@ class MathsPadWidget extends StatefulWidget {
   // widget (e.g. the Math Pad Library page editor's book/page-preview
   // buttons and page-switcher bar) can hide that too while it's active.
   final ValueChanged<bool>? onCanvasOnlyModeChanged;
+  final Widget? leadingToolbarAction;
+  final Widget? trailingToolbarAction;
 
   const MathsPadWidget({
     super.key,
@@ -476,6 +478,8 @@ class MathsPadWidget extends StatefulWidget {
     this.onSaveRequested,
     this.onEditorReady,
     this.onCanvasOnlyModeChanged,
+    this.leadingToolbarAction,
+    this.trailingToolbarAction,
   });
 
   @override
@@ -920,9 +924,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // (advancing the phase, triggering a repaint) while something is
     // actually selected -- otherwise this tick is just a cheap boolean
     // check, so there's no cost to leaving it running idle.
-    _selectionGlowTimer = Timer.periodic(const Duration(milliseconds: 16), (
-      _,
-    ) {
+    _selectionGlowTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (_selectedLines.isEmpty) return;
       _selectionGlowPhase += 0.9;
       _activeDrawingNotifier.value++;
@@ -2695,10 +2697,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
     _resizingTextLabelIndex = idx;
     _resizeStartFontSize = label.fontSize;
-    _resizeStartCornerDist = max(
-      (handlePos - label.position).distance,
-      1.0,
-    );
+    _resizeStartCornerDist = max((handlePos - label.position).distance, 1.0);
     return true;
   }
 
@@ -3216,6 +3215,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    if (_isFullScreenMode && _toolbarRevealedInFullScreen) {
+      setState(() {
+        _toolbarRevealedInFullScreen = false;
+        widget.onCanvasOnlyModeChanged?.call(true);
+      });
+    }
     _frictionController?.stop();
     _updatePointerPos(event.localPosition);
     _activePointers[event.pointer] = event.localPosition;
@@ -4854,7 +4859,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ? const Color(0xFF0F2B52)
               : (_themeMode == MathPadTheme.aswadLail
                     ? const Color(0xFF000000)
-                    : (isDark ? const Color(0xFF0F172A) : const Color(0xFFFCFDFE))));
+                    : (isDark
+                          ? const Color(0xFF0F172A)
+                          : const Color(0xFFFCFDFE))));
 
     return Focus(
       focusNode: _canvasFocusNode,
@@ -4985,7 +4992,32 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             left: 0,
             right: 0,
             bottom: 16,
-            child: Center(child: _buildFullScreenQuickTools(isDark)),
+            child: Stack(
+              alignment: Alignment.bottomCenter,
+              clipBehavior: Clip.none,
+              children: [
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 320),
+                  curve: Curves.easeOutBack,
+                  bottom: _quickToolsExpanded ? 68 : 10,
+                  child: AnimatedScale(
+                    duration: const Duration(milliseconds: 320),
+                    curve: Curves.easeOutBack,
+                    scale: _quickToolsExpanded ? 1.0 : 0.0,
+                    alignment: Alignment.bottomCenter,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 250),
+                      opacity: _quickToolsExpanded ? 1.0 : 0.0,
+                      child: IgnorePointer(
+                        ignoring: !_quickToolsExpanded,
+                        child: _buildQuickColorsArc(isDark),
+                      ),
+                    ),
+                  ),
+                ),
+                _buildFullScreenQuickTools(isDark),
+              ],
+            ),
           ),
         ],
       );
@@ -5013,6 +5045,69 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _buildToolbar(context, isDark),
         canvasArea,
       ],
+    );
+  }
+
+  Widget _buildQuickColorsArc(bool isDark) {
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B).withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.85),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(50), bottom: Radius.circular(12)),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: isDark ? 0.2 : 0.6),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: _palette.map((color) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: GestureDetector(
+              onTap: () {
+                if (_selectedLines.isNotEmpty) {
+                  _recolorSelectedLines(color);
+                  setState(() => _selectedColor = color);
+                } else {
+                  setState(() {
+                    _selectedColor = color;
+                    _toolMode = CanvasToolMode.pen;
+                    _activeShapeTool = null;
+                  });
+                }
+              },
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white,
+                    width: _selectedColor.value == color.value ? 2.5 : 1.5,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 2,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 
@@ -5070,14 +5165,40 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       );
     }
 
+    Widget animatedTool(Widget child, int distance) {
+      final double delayMs = distance * 50.0;
+      final double totalDurationMs = 500.0;
+      final double startFraction = delayMs / totalDurationMs;
+      
+      return TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.0, end: 1.0),
+        duration: Duration(milliseconds: totalDurationMs.toInt()),
+        curve: Interval(startFraction, 1.0, curve: Curves.easeOutBack),
+        builder: (context, value, child) {
+          return Transform.translate(
+            offset: Offset(0, -40 * (1 - value)),
+            child: Opacity(
+              opacity: value.clamp(0.0, 1.0),
+              child: child,
+            ),
+          );
+        },
+        child: child,
+      );
+    }
+
     // The box toggle itself -- centre element both collapsed and expanded,
     // so the container growing wider around it (it's laid out via
     // `Center` at the call site) reads as tools sliding out to either
     // side of the box rather than the box itself moving.
     final Widget box = GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () =>
-          setState(() => _quickToolsExpanded = !_quickToolsExpanded),
+      onTap: () => setState(() => _quickToolsExpanded = !_quickToolsExpanded),
+      onDoubleTap: () => setState(() {
+        _isFullScreenMode = false;
+        _toolbarRevealedInFullScreen = false;
+        widget.onCanvasOnlyModeChanged?.call(false);
+      }),
       child: Container(
         width: 34,
         height: 34,
@@ -5100,52 +5221,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return glassShell(width: 56, child: box);
     }
 
-    final List<Color> quickColors = [_palette[0], _palette[1], _palette[2]];
-    Widget colorDot(Color c) {
-      return GestureDetector(
-        onTap: () {
-          // Same as the main palette: recolour an existing selection in
-          // place instead of just arming the pen.
-          if (_selectedLines.isNotEmpty) {
-            _recolorSelectedLines(c);
-            setState(() => _selectedColor = c);
-            return;
-          }
-          setState(() {
-            _selectedColor = c;
-            _toolMode = CanvasToolMode.pen;
-            _activeShapeTool = null;
-          });
-        },
-        child: Container(
-          width: 22,
-          height: 22,
-          decoration: BoxDecoration(
-            color: c,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: Colors.white,
-              width: _selectedColor.value == c.value ? 2.6 : 1.4,
-            ),
-            boxShadow: const [
-              BoxShadow(color: Colors.black26, blurRadius: 2, offset: Offset(0, 1)),
-            ],
-          ),
-        ),
-      );
-    }
-
     return glassShell(
-      width: 296,
-      // Clamped to its own full 296-wide layout regardless of what width
+      width: 380,
+      // Clamped to its own full 380-wide layout regardless of what width
       // the AnimatedContainer above has actually reached at this frame --
       // it starts the 320ms width tween at 56 the instant this branch is
       // returned, so without this the Row (mainAxisSize.max, spaceEvenly)
       // would overflow every narrower in-between frame of the expand
       // animation, not just the very first one.
       child: OverflowBox(
-        minWidth: 296,
-        maxWidth: 296,
+        minWidth: 380,
+        maxWidth: 380,
         minHeight: 56,
         maxHeight: 56,
         alignment: Alignment.center,
@@ -5153,7 +5239,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             // Left of the box.
-            _quickToolIconButton(
+            animatedTool(_quickToolIconButton(
               icon: Icons.edit_rounded,
               iconColor: iconColor,
               isSelected: _toolMode == CanvasToolMode.pen,
@@ -5161,8 +5247,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 _toolMode = CanvasToolMode.pen;
                 _activeShapeTool = null;
               }),
-            ),
-            _quickToolIconButton(
+            ), 4),
+            animatedTool(_quickToolIconButton(
               icon: Icons.gesture_rounded,
               iconColor: iconColor,
               isSelected: _toolMode == CanvasToolMode.lasso,
@@ -5171,18 +5257,72 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 _activeShapeTool = null;
                 _selectedLines.clear();
               }),
-            ),
-            colorDot(quickColors[0]),
+            ), 3),
+            animatedTool(_quickToolIconButton(
+              icon: _eraserMode == EraserMode.stroke
+                  ? Icons.auto_fix_high_rounded
+                  : Icons.cleaning_services_rounded,
+              iconColor: iconColor,
+              isSelected: _toolMode == CanvasToolMode.eraser,
+              onTap: () {
+                _activeShapeTool = null;
+                _handleEraserButtonTap();
+              },
+            ), 2),
+            animatedTool(_quickToolIconButton(
+              icon: Icons.center_focus_strong_rounded,
+              iconColor: iconColor,
+              isSelected: _toolMode == CanvasToolMode.laser,
+              onTap: () => setState(() {
+                _toolMode = CanvasToolMode.laser;
+                _activeShapeTool = null;
+                _selectedLines.clear();
+              }),
+            ), 1),
             box,
             // Right of the box.
-            colorDot(quickColors[1]),
-            colorDot(quickColors[2]),
-            _quickToolIconButton(
+            animatedTool(_quickToolIconButton(
+              icon: Icons.format_color_fill_rounded,
+              iconColor: iconColor,
+              isSelected: _toolMode == CanvasToolMode.fill,
+              onTap: () => setState(() {
+                _toolMode = CanvasToolMode.fill;
+                _activeShapeTool = null;
+                _selectedLines.clear();
+              }),
+            ), 1),
+            animatedTool(_quickToolIconButton(
+              icon: Icons.back_hand_rounded,
+              iconColor: iconColor,
+              isSelected: _toolMode == CanvasToolMode.pan,
+              onTap: () => setState(() {
+                _toolMode = CanvasToolMode.pan;
+                _activeShapeTool = null;
+                _selectedLines.clear();
+              }),
+            ), 2),
+            animatedTool(_quickToolIconButton(
+              icon: _spacerHorizontalOnly
+                  ? Icons.compare_arrows_rounded
+                  : Icons.unfold_more_rounded,
+              iconColor: iconColor,
+              isSelected: _toolMode == CanvasToolMode.spacer,
+              onTap: () => setState(() {
+                if (_toolMode == CanvasToolMode.spacer) {
+                  _spacerHorizontalOnly = !_spacerHorizontalOnly;
+                } else {
+                  _toolMode = CanvasToolMode.spacer;
+                }
+                _activeShapeTool = null;
+                _selectedLines.clear();
+              }),
+            ), 3),
+            animatedTool(_quickToolIconButton(
               icon: Icons.undo_rounded,
               iconColor: iconColor,
               isSelected: false,
               onTap: _undo,
-            ),
+            ), 4),
           ],
         ),
       ),
@@ -5319,7 +5459,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           // Skipped for `isTransparentBg` (used to composite the live
           // widget over something else, e.g. the slide viewer) since that
           // use case wants real transparency, not a recording-friendly one.
-          if (!widget.isTransparentBg) Positioned.fill(child: ColoredBox(color: bgColor)),
+          if (!widget.isTransparentBg)
+            Positioned.fill(child: ColoredBox(color: bgColor)),
           Listener(
             onPointerDown: _onPointerDown,
             onPointerMove: _onPointerMove,
@@ -5952,16 +6093,26 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             ? Border(top: edgeBorder)
             : Border(bottom: edgeBorder),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        // Clamp instead of the platform-default rubber-band/bounce physics
-        // -- most noticeable (and worst-looking) when this toolbar is
-        // rotated 90° into the left/right-docked layout, where scrolling
-        // to reach more tools produces a visible bounce/overshoot instead
-        // of stopping cleanly at the end of the row.
-        physics: const ClampingScrollPhysics(),
-        child: Row(
-          children: [
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.leadingToolbarAction != null) ...[
+            RotatedBox(quarterTurns: _toolbarOnLeft ? -1 : 0, child: widget.leadingToolbarAction!),
+            const SizedBox(width: 12),
+            Container(width: 1, height: 32, color: isDark ? Colors.white24 : Colors.black12),
+            const SizedBox(width: 12),
+          ],
+          Flexible(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              // Clamp instead of the platform-default rubber-band/bounce physics
+              // -- most noticeable (and worst-looking) when this toolbar is
+              // rotated 90° into the left/right-docked layout, where scrolling
+              // to reach more tools produces a visible bounce/overshoot instead
+              // of stopping cleanly at the end of the row.
+              physics: const ClampingScrollPhysics(),
+              child: Row(
+                children: [
             // Pen, Stroke Eraser, Tap-to-Select, Lasso Select, & Pan Tool
             Container(
               decoration: BoxDecoration(
@@ -6789,6 +6940,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           ],
         ),
       ),
+      ),
+      if (widget.trailingToolbarAction != null) ...[
+        const SizedBox(width: 12),
+        Container(width: 1, height: 32, color: isDark ? Colors.white24 : Colors.black12),
+        const SizedBox(width: 12),
+        RotatedBox(quarterTurns: _toolbarOnLeft ? -1 : 0, child: widget.trailingToolbarAction!),
+      ],
+      ],
+      ),
     );
   }
 
@@ -7580,7 +7740,11 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
       final Paint tailPaint = Paint()
         ..isAntiAlias = true
         ..color = const Color(0xFFFF3B30).withValues(alpha: 0.45 * t);
-      canvas.drawCircle(p.pos, (coreScreenRadius * 0.55 * t) / scale, tailPaint);
+      canvas.drawCircle(
+        p.pos,
+        (coreScreenRadius * 0.55 * t) / scale,
+        tailPaint,
+      );
     }
 
     // The current (newest) point gets the full glowing "hot" dot.
@@ -7607,9 +7771,7 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           const Color(0xFFFF453A).withValues(alpha: 0.0),
         ],
         stops: const [0.0, 0.45, 1.0],
-      ).createShader(
-        Rect.fromCircle(center: latest.pos, radius: coreRadius),
-      );
+      ).createShader(Rect.fromCircle(center: latest.pos, radius: coreRadius));
     canvas.drawCircle(latest.pos, coreRadius, corePaint);
 
     // A crisp thin ring on top reads as "sharp focus point" rather than
@@ -7727,7 +7889,9 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
         final double radius = (line.strokeWidth / 2) + standoff;
         _paintNeonRing(
           canvas,
-          Path()..addOval(Rect.fromCircle(center: line.points.first.offset, radius: radius)),
+          Path()..addOval(
+            Rect.fromCircle(center: line.points.first.offset, radius: radius),
+          ),
           neonShader,
           ringThickness / scale,
         );
