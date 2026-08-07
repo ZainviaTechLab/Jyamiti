@@ -90,6 +90,18 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# Bundled ffmpeg.exe (GPLv3, see third_party/ffmpeg/NOTICE.txt) -- invoked as
+# a standalone subprocess by MathPadRecordingService to encode Math Pad
+# board+voice recordings. Installed next to the app exe (same directory
+# `Platform.resolvedExecutable` resolves to) so the app can find it at
+# runtime without any extra configuration.
+install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/ffmpeg.exe"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/LICENSE.ffmpeg.txt"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/NOTICE.txt"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

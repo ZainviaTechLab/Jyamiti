@@ -32,6 +32,19 @@ class AuthProvider extends ChangeNotifier {
     }
     _token = prefs.getString('auth_token');
     _user = jsonDecode(prefs.getString('auth_user')!);
+    // Show the last-known profile immediately (if we have one cached) so
+    // dashboards render right away instead of blocking on a spinner for
+    // the whole /auth/profile round trip on every app open -- it's
+    // refreshed silently right after regardless.
+    final cachedProfile = prefs.getString('auth_profile');
+    if (cachedProfile != null) {
+      try {
+        _profile = jsonDecode(cachedProfile);
+      } catch (_) {
+        // Corrupt/old cache shape -- ignore, fetchProfile() below will
+        // repopulate it.
+      }
+    }
     notifyListeners();
     // Fetch fresh profile in background
     fetchProfile();
@@ -84,6 +97,8 @@ class AuthProvider extends ChangeNotifier {
         } else {
           _profile = profile;
           notifyListeners();
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('auth_profile', response.body);
         }
       }
     } catch (e) {
@@ -136,6 +151,7 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
     await prefs.remove('auth_user');
+    await prefs.remove('auth_profile');
     notifyListeners();
   }
 }

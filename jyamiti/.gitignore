@@ -48,3 +48,9 @@ app.*.map.json
 **/android/key.properties
 **/android/app/*.jks
 
+# Bundled ffmpeg.exe for Math Pad recording (windows/CMakeLists.txt installs
+# it into the build output) -- ~80MB binary, deliberately not committed;
+# see windows/third_party/ffmpeg/NOTICE.txt for how to (re)fetch it.
+windows/third_party/ffmpeg/*.exe
+windows/third_party/ffmpeg/*.zip
+

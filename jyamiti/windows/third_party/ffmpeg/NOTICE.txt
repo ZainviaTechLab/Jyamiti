@@ -1,0 +1,11 @@
+This application bundles a separate, unmodified ffmpeg.exe (the
+"essentials" static Windows build from https://www.gyan.dev/ffmpeg/builds/)
+to encode Math Pad board+voice recordings into .mp4 files. It is invoked
+as a standalone subprocess -- it is not linked into, and does not share a
+process with, this application's own code.
+
+ffmpeg.exe is licensed under the GNU General Public License v3 (GPLv3).
+The full license text is included alongside it as LICENSE.ffmpeg.txt.
+
+FFmpeg source code: https://ffmpeg.org/download.html
+This specific Windows build's source/build scripts: https://www.gyan.dev/ffmpeg/builds/

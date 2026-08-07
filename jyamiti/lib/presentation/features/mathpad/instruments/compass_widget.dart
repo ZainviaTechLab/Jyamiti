@@ -1,6 +1,5 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'instrument_handle.dart';
 import 'instrument_models.dart';
 
 /// A compass with a fixed pivot leg and a hinged pencil arm — drawn as a
@@ -43,16 +42,6 @@ class CompassWidget extends StatelessWidget {
           child: CustomPaint(
             size: Size.infinite,
             painter: _CompassPainter(state: state, hinge: hinge),
-          ),
-        ),
-        IgnorePointer(
-          child: Positioned(
-            left: hinge.dx - InstrumentHandle.size / 2,
-            top: hinge.dy - InstrumentHandle.size / 2,
-            child: const InstrumentHandle(
-              role: InstrumentHandleRole.rotate,
-              tooltip: '',
-            ),
           ),
         ),
 

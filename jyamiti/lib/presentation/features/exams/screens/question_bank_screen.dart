@@ -21,6 +21,7 @@ class _QuestionBankScreenState extends State<QuestionBankScreen> {
   String? _selectedCourseId;
   String? _selectedChapterFilter;
   String? _selectedTopicFilter;
+  String? _selectedSubTopicFilter;
   List<dynamic> _questions = [];
   bool _isLoading = false;
 
@@ -148,6 +149,7 @@ class _QuestionBankScreenState extends State<QuestionBankScreen> {
                     _selectedCourseId = v;
                     _selectedChapterFilter = null;
                     _selectedTopicFilter = null;
+                    _selectedSubTopicFilter = null;
                   });
                   _fetchQuestions();
                 },
@@ -185,6 +187,7 @@ class _QuestionBankScreenState extends State<QuestionBankScreen> {
                             setState(() {
                               _selectedChapterFilter = v;
                               _selectedTopicFilter = null; // Reset topic when chapter changes
+                              _selectedSubTopicFilter = null;
                             });
                           },
                         ),
@@ -216,6 +219,42 @@ class _QuestionBankScreenState extends State<QuestionBankScreen> {
                               onChanged: _selectedChapterFilter == null ? null : (v) {
                                 setState(() {
                                   _selectedTopicFilter = v;
+                                  _selectedSubTopicFilter = null;
+                                });
+                              },
+                            );
+                          }
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Builder(
+                          builder: (ctx) {
+                            final chapter = syllabus.firstWhere((ch) => ch['title'] == _selectedChapterFilter, orElse: () => null);
+                            final List<dynamic> topics = chapter?['topics'] ?? [];
+                            final topic = topics.firstWhere((t) => t['title'] == _selectedTopicFilter, orElse: () => null);
+                            final List<dynamic> subTopics = (topic?['subTopics'] as List?) ?? [];
+                            return DropdownButtonFormField<String>(
+                              value: _selectedSubTopicFilter,
+                              dropdownColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+                              style: TextStyle(color: context.textColor),
+                              decoration: InputDecoration(
+                                labelText: 'Filter by Subtopic',
+                                labelStyle: TextStyle(color: context.textColor70),
+                                isDense: true,
+                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: context.textColor54.withOpacity(0.4))),
+                              ),
+                              items: [
+                                const DropdownMenuItem<String>(value: null, child: Text('All Subtopics')),
+                                if (_selectedTopicFilter != null)
+                                  ...subTopics.map((s) => DropdownMenuItem<String>(
+                                    value: s['title'],
+                                    child: Text(s['title']),
+                                  ))
+                              ],
+                              onChanged: _selectedTopicFilter == null ? null : (v) {
+                                setState(() {
+                                  _selectedSubTopicFilter = v;
                                 });
                               },
                             );
@@ -235,6 +274,7 @@ class _QuestionBankScreenState extends State<QuestionBankScreen> {
                   final filteredQuestions = _questions.where((q) {
                     if (_selectedChapterFilter != null && q['chapter'] != _selectedChapterFilter) return false;
                     if (_selectedTopicFilter != null && q['topic'] != _selectedTopicFilter) return false;
+                    if (_selectedSubTopicFilter != null && q['subtopic'] != _selectedSubTopicFilter) return false;
                     return true;
                   }).toList();
                   
@@ -256,7 +296,12 @@ class _QuestionBankScreenState extends State<QuestionBankScreen> {
                           children: [
                             Text('${q['type']} • ${q['marks']} marks', style: TextStyle(color: context.textColor60)),
                             if (q['chapter'] != null && q['chapter'].toString().isNotEmpty)
-                              Text('Chapter: ${q['chapter']}${q['topic'] != null && q['topic'].toString().isNotEmpty ? ' • Topic: ${q['topic']}' : ''}', style: const TextStyle(color: Color(0xFF8B5CF6), fontSize: 12)),
+                              Text(
+                                'Chapter: ${q['chapter']}'
+                                '${q['topic'] != null && q['topic'].toString().isNotEmpty ? ' • Topic: ${q['topic']}' : ''}'
+                                '${q['subtopic'] != null && q['subtopic'].toString().isNotEmpty ? ' • Subtopic: ${q['subtopic']}' : ''}',
+                                style: const TextStyle(color: Color(0xFF8B5CF6), fontSize: 12),
+                              ),
                           ],
                         ),
                         trailing: Row(

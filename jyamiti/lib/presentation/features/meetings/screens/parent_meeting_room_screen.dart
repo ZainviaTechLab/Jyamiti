@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import '../../../../services/parent_meeting_service.dart';
 
-// Universal Web Platform Iframe / HtmlView Helper
-import 'dart:ui_web' as ui_web;
-import 'dart:html' as html;
+// The Agora meeting room is embedded via an HTML iframe, which only exists
+// on web -- conditionally import the real dart:html-based controller on web
+// and a no-op stub everywhere else, so this screen compiles on every
+// platform (Windows/macOS/Linux/Android/iOS) without pulling in dart:html.
+import 'meeting_iframe_controller_stub.dart'
+    if (dart.library.html) 'meeting_iframe_controller_web.dart';
 
 class ParentMeetingRoomScreen extends StatefulWidget {
   final Map<String, dynamic> meeting;
@@ -30,7 +34,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
   int _elapsedSeconds = 0;
   Timer? _timer;
   late String _viewId;
-  html.IFrameElement? _iframeElement;
+  final MeetingIframeController _iframeController = MeetingIframeController();
   bool _iframeReady = false;
   bool _isLeaving = false;
 
@@ -78,8 +82,8 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
   }
 
   void _postIframeMessage(Map<String, dynamic> data) {
-    if (_iframeReady && _iframeElement != null) {
-      _iframeElement!.contentWindow?.postMessage(data, '*');
+    if (_iframeReady) {
+      _iframeController.postMessage(data);
     }
   }
 
@@ -427,36 +431,20 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 </html>
     ''';
 
-    final html.IFrameElement iframeElement = html.IFrameElement()
-      ..srcdoc = htmlContent
-      ..allow = 'camera; microphone; display-capture; autoplay; fullscreen'
-      ..style.border = 'none'
-      ..style.width = '100%'
-      ..style.height = '100%';
-
-    _iframeElement = iframeElement;
-
-    // Listen for messages from the iframe JS
-    html.window.onMessage.listen((event) {
-      if (!mounted) return;
-      final data = event.data;
-      if (data is Map) {
-        final type = data['type'];
-        if (type == 'iframe_ready' || type == 'pong') {
-          setState(() => _iframeReady = true);
-        } else if (type == 'agora_left') {
-          // JS confirmed it left — safe to pop the screen
-          if (mounted && !_isLeaving) {
-            _isLeaving = true;
-            if (mounted) Navigator.pop(context);
-          }
+    _iframeController.create(
+      viewId: _viewId,
+      htmlContent: htmlContent,
+      onReady: () {
+        if (!mounted) return;
+        setState(() => _iframeReady = true);
+      },
+      onLeft: () {
+        // JS confirmed it left — safe to pop the screen
+        if (mounted && !_isLeaving) {
+          _isLeaving = true;
+          Navigator.pop(context);
         }
-      }
-    });
-
-    ui_web.platformViewRegistry.registerViewFactory(
-      _viewId,
-      (int viewId) => iframeElement,
+      },
     );
 
     setState(() {});
@@ -467,8 +455,9 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     _timer?.cancel();
     // Only send leave if we're not already in the leave flow
     if (!_isLeaving) {
-      _iframeElement?.contentWindow?.postMessage({'action': 'leave'}, '*');
+      _iframeController.postMessage({'action': 'leave'});
     }
+    _iframeController.dispose();
     super.dispose();
   }
 
@@ -657,6 +646,18 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                               style: TextStyle(color: Color(0xFF94A3B8)),
                             ),
                           ],
+                        ),
+                      )
+                    : !kIsWeb
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24.0),
+                          child: Text(
+                            'Video meetings are currently only available '
+                            'in the web app.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Color(0xFF94A3B8)),
+                          ),
                         ),
                       )
                     : HtmlElementView(viewType: _viewId),

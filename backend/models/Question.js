@@ -4,6 +4,7 @@ const questionSchema = new mongoose.Schema({
   course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
   chapter: { type: String, default: '' },
   topic: { type: String, default: '' },
+  subtopic: { type: String, default: '' },
   type: { 
     type: String, 
     enum: ['MCQ_SINGLE', 'MCQ_MULTI', 'TRUE_FALSE', 'SHORT_ANSWER'], 

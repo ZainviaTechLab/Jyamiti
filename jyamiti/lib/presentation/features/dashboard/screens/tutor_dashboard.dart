@@ -1,5 +1,6 @@
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -17,7 +18,7 @@ import '../../academic/screens/tutor_tutorials_screen.dart';
 import '../../academic/screens/student_learning_path_screen.dart';
 import '../../academic/screens/tutor_manage_assignments_screen.dart';
 import '../../academic/screens/batch_performances_screen.dart';
-import '../../mathpad/screens/mathpad.dart';
+import '../../mathpad/library/screens/mathpad_library_screen.dart';
 import '../../slides/screens/slide_decks_manager_screen.dart';
 import '../../../widgets/writing_pad_widget.dart';
 import '../../competitions/screens/tutor_competition_host_screen.dart';
@@ -224,10 +225,48 @@ class _TutorDashboardState extends State<TutorDashboard> {
           isInline: true,
         );
       case 10:
-        return MathsPadWidget();
+        if (kIsWeb) {
+          return _buildMathPadWebFallback();
+        }
+        return MathPadLibraryScreen(
+          batches: profile?['batches'] as List?,
+          isInline: true,
+        );
       default:
         return _buildOverviewTab(profile);
     }
+  }
+
+  Widget _buildMathPadWebFallback() {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.all(32),
+        decoration: BoxDecoration(
+          color: context.isDark
+              ? Colors.white.withValues(alpha: 0.03)
+              : Colors.white.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: context.glassBorder),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.desktop_windows_rounded,
+              size: 48,
+              color: context.textColor60,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "Math Pad Library isn't available on the web version yet.\n"
+              'Please use the Windows/macOS/Linux desktop app or the Android/iOS app.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: context.textColor60, fontSize: 15),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ─── Overview Tab ────────────────────────────────────────────────────────────
@@ -1026,12 +1065,16 @@ class _TutorDashboardState extends State<TutorDashboard> {
           children: [
             Icon(icon, size: 15, color: color),
             const SizedBox(width: 7),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ),
           ],

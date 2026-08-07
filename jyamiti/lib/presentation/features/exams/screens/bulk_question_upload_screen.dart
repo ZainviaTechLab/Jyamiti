@@ -22,6 +22,7 @@ class _BulkQuestionUploadScreenState extends State<BulkQuestionUploadScreen> {
   
   String? _selectedChapter;
   String? _selectedTopic;
+  String? _selectedSubTopic;
 
   final String _sampleFormat = """
 [TYPE] MCQ_SINGLE
@@ -128,6 +129,7 @@ class _BulkQuestionUploadScreenState extends State<BulkQuestionUploadScreen> {
         'type': 'SHORT_ANSWER',
         'chapter': _selectedChapter ?? '',
         'topic': _selectedTopic ?? '',
+        'subtopic': _selectedSubTopic ?? '',
         'marks': 1,
         'text': '',
         'options': [],
@@ -256,6 +258,7 @@ class _BulkQuestionUploadScreenState extends State<BulkQuestionUploadScreen> {
                         setState(() {
                           _selectedChapter = v;
                           _selectedTopic = null;
+                          _selectedSubTopic = null;
                         });
                       },
                     ),
@@ -284,6 +287,39 @@ class _BulkQuestionUploadScreenState extends State<BulkQuestionUploadScreen> {
                           onChanged: _selectedChapter == null ? null : (v) {
                             setState(() {
                               _selectedTopic = v;
+                              _selectedSubTopic = null;
+                            });
+                          },
+                        );
+                      }
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Builder(
+                      builder: (ctx) {
+                        final syllabus = (widget.course!['syllabus'] as List<dynamic>?) ?? [];
+                        final chapter = syllabus.firstWhere((ch) => ch['title'] == _selectedChapter, orElse: () => null);
+                        final topics = (chapter?['topics'] as List<dynamic>?) ?? [];
+                        final topic = topics.firstWhere((t) => t['title'] == _selectedTopic, orElse: () => null);
+                        final subTopics = (topic?['subTopics'] as List<dynamic>?) ?? [];
+                        return DropdownButtonFormField<String>(
+                          value: _selectedSubTopic,
+                          dropdownColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+                          style: TextStyle(color: context.textColor),
+                          decoration: InputDecoration(
+                            labelText: 'Subtopic (Optional)',
+                            labelStyle: TextStyle(color: context.textColor70),
+                            isDense: true,
+                            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: context.textColor54.withOpacity(0.4))),
+                          ),
+                          items: _selectedTopic == null ? [] : subTopics.map((s) => DropdownMenuItem<String>(
+                            value: s['title'],
+                            child: Text(s['title']),
+                          )).toList(),
+                          onChanged: _selectedTopic == null ? null : (v) {
+                            setState(() {
+                              _selectedSubTopic = v;
                             });
                           },
                         );
@@ -359,7 +395,13 @@ class _BulkQuestionUploadScreenState extends State<BulkQuestionUploadScreen> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text('${q['type']} • ${q['marks']} marks', style: const TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold, fontSize: 12)),
-                                if (q['chapter'] != '') Text('Ch: ${q['chapter']}', style: TextStyle(color: context.textColor54, fontSize: 12)),
+                                if (q['chapter'] != '')
+                                  Text(
+                                    'Ch: ${q['chapter']}'
+                                    '${q['topic'] != null && q['topic'].toString().isNotEmpty ? ' / ${q['topic']}' : ''}'
+                                    '${q['subtopic'] != null && q['subtopic'].toString().isNotEmpty ? ' / ${q['subtopic']}' : ''}',
+                                    style: TextStyle(color: context.textColor54, fontSize: 12),
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 6),

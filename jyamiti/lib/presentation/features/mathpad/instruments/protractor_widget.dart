@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'instrument_handle.dart';
 import 'instrument_models.dart';
@@ -14,12 +15,14 @@ import 'instrument_models.dart';
 class ProtractorWidget extends StatelessWidget {
   final ProtractorState state;
   final bool isDark;
+  final ui.Image? logoImage;
   final VoidCallback onRemove;
 
   const ProtractorWidget({
     super.key,
     required this.state,
     required this.isDark,
+    this.logoImage,
     required this.onRemove,
   });
 
@@ -36,7 +39,11 @@ class ProtractorWidget extends StatelessWidget {
             children: [
               CustomPaint(
                 size: Size.infinite,
-                painter: _ProtractorPainter(state: state, isDark: isDark),
+                painter: _ProtractorPainter(
+                  state: state,
+                  isDark: isDark,
+                  logoImage: logoImage,
+                ),
               ),
               _visualHandle(handles['move']!, InstrumentHandleRole.move),
               _visualHandle(handles['rotate']!, InstrumentHandleRole.rotate),
@@ -81,8 +88,13 @@ class ProtractorWidget extends StatelessWidget {
 class _ProtractorPainter extends CustomPainter {
   final ProtractorState state;
   final bool isDark;
+  final ui.Image? logoImage;
 
-  _ProtractorPainter({required this.state, required this.isDark});
+  _ProtractorPainter({
+    required this.state,
+    required this.isDark,
+    this.logoImage,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -182,6 +194,27 @@ class _ProtractorPainter extends CustomPainter {
           innerLabelPt - Offset(textPainter.width / 2, textPainter.height / 2),
         );
       }
+    }
+
+    // Small branding watermark, centered in the body below the pivot.
+    if (logoImage != null) {
+      final double logoSize = min(22.0, r * 0.35);
+      final Rect dst = Rect.fromCenter(
+        center: Offset(0, -r * 0.5),
+        width: logoSize,
+        height: logoSize,
+      );
+      canvas.drawImageRect(
+        logoImage!,
+        Rect.fromLTWH(
+          0,
+          0,
+          logoImage!.width.toDouble(),
+          logoImage!.height.toDouble(),
+        ),
+        dst,
+        Paint()..color = Colors.white.withOpacity(0.5),
+      );
     }
 
     canvas.restore();

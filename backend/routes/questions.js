@@ -15,8 +15,8 @@ router.get('/course/:courseId', authenticateToken, requireRole(['ADMIN', 'TUTOR'
 
 router.post('/', authenticateToken, requireRole(['ADMIN', 'TUTOR', 'MENTOR']), async (req, res) => {
   try {
-    const { course, chapter, topic, type, text, options, correctAnswers, marks } = req.body;
-    const question = await Question.create({ course, chapter, topic, type, text, options, correctAnswers, marks });
+    const { course, chapter, topic, subtopic, type, text, options, correctAnswers, marks } = req.body;
+    const question = await Question.create({ course, chapter, topic, subtopic, type, text, options, correctAnswers, marks });
     res.status(201).json(question);
   } catch (error) {
     res.status(500).json({ message: 'Internal server error' });
@@ -39,10 +39,10 @@ router.post('/bulk', authenticateToken, requireRole(['ADMIN', 'TUTOR', 'MENTOR']
 
 router.put('/:id', authenticateToken, requireRole(['ADMIN', 'TUTOR', 'MENTOR']), async (req, res) => {
   try {
-    const { course, chapter, topic, type, text, options, correctAnswers, marks } = req.body;
+    const { course, chapter, topic, subtopic, type, text, options, correctAnswers, marks } = req.body;
     const question = await Question.findByIdAndUpdate(
       req.params.id,
-      { course, chapter, topic, type, text, options, correctAnswers, marks },
+      { course, chapter, topic, subtopic, type, text, options, correctAnswers, marks },
       { new: true }
     );
     if (!question) return res.status(404).json({ message: 'Question not found' });

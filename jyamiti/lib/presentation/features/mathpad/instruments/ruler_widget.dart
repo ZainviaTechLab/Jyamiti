@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'instrument_handle.dart';
 import 'instrument_models.dart';
@@ -13,12 +14,14 @@ import 'instrument_models.dart';
 class RulerWidget extends StatelessWidget {
   final RulerState state;
   final bool isDark;
+  final ui.Image? logoImage;
   final VoidCallback onRemove;
 
   const RulerWidget({
     super.key,
     required this.state,
     required this.isDark,
+    this.logoImage,
     required this.onRemove,
   });
 
@@ -35,7 +38,11 @@ class RulerWidget extends StatelessWidget {
             children: [
               CustomPaint(
                 size: Size.infinite,
-                painter: _RulerPainter(state: state, isDark: isDark),
+                painter: _RulerPainter(
+                  state: state,
+                  isDark: isDark,
+                  logoImage: logoImage,
+                ),
               ),
               _visualHandle(handles['move']!, InstrumentHandleRole.move),
               _visualHandle(handles['rotate']!, InstrumentHandleRole.rotate),
@@ -93,8 +100,9 @@ class RulerWidget extends StatelessWidget {
 class _RulerPainter extends CustomPainter {
   final RulerState state;
   final bool isDark;
+  final ui.Image? logoImage;
 
-  _RulerPainter({required this.state, required this.isDark});
+  _RulerPainter({required this.state, required this.isDark, this.logoImage});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -151,6 +159,27 @@ class _RulerPainter extends CustomPainter {
           Offset(x - textPainter.width / 2, -height / 2 + tickHeight + 2),
         );
       }
+    }
+
+    // Small branding watermark, centered on the ruler body.
+    if (logoImage != null) {
+      const double logoSize = 20;
+      final Rect dst = Rect.fromCenter(
+        center: Offset.zero,
+        width: logoSize,
+        height: logoSize,
+      );
+      canvas.drawImageRect(
+        logoImage!,
+        Rect.fromLTWH(
+          0,
+          0,
+          logoImage!.width.toDouble(),
+          logoImage!.height.toDouble(),
+        ),
+        dst,
+        Paint()..color = Colors.white.withOpacity(0.55),
+      );
     }
 
     canvas.restore();

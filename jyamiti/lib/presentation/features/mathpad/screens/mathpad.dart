@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:super_clipboard/super_clipboard.dart';
+import 'package:provider/provider.dart';
 
 import '../../../../providers/theme_provider.dart';
 import '../instruments/instrument_models.dart';
@@ -16,6 +17,38 @@ import '../instruments/ruler_widget.dart';
 import '../instruments/protractor_widget.dart';
 import '../instruments/compass_widget.dart';
 import '../instruments/set_square_widget.dart';
+import '../recording/mathpad_recording_service.dart';
+
+/// Hands the full current canvas content back to whoever opened
+/// [MathsPadWidget] with a `onSaveRequested` callback (e.g. the Math Pad
+/// Library's page editor) -- named params so call sites stay readable.
+typedef MathsPadSaveCallback =
+    Future<void> Function({
+      required List<MathsPadLine> lines,
+      required List<InstrumentState> instruments,
+      required List<MathsPadTextLabel> textLabels,
+      required List<MathsPadFixedAngleLabel> fixedAngleLabels,
+      required CanvasBgMode bgMode,
+      required MathPadTheme themeMode,
+    });
+
+/// A closure that reads the canvas's CURRENT (live, still-mutable) content
+/// whenever it's called -- as opposed to [MathsPadSaveCallback], which is
+/// only invoked once at an explicit save/close moment. Handed to
+/// `onEditorReady` at [MathsPadWidget] init so an external page-switcher
+/// (e.g. the Math Pad Library's multi-page editor) can silently snapshot
+/// "whatever's on screen right now" before swapping in a different page,
+/// without needing a save button press.
+typedef MathsPadLiveStateReader =
+    ({
+      List<MathsPadLine> lines,
+      List<InstrumentState> instruments,
+      List<MathsPadTextLabel> textLabels,
+      List<MathsPadFixedAngleLabel> fixedAngleLabels,
+      CanvasBgMode bgMode,
+      MathPadTheme themeMode,
+    })
+    Function();
 
 class MathsPadStrokePoint {
   Offset offset;
@@ -24,7 +57,11 @@ class MathsPadStrokePoint {
 
 class MathsPadLine {
   final List<MathsPadStrokePoint> points;
-  final Color color;
+  // Mutable so a selected stroke/shape can be recoloured in place from the
+  // palette (see `_recolorSelectedLines`) without swapping in a new object
+  // identity -- which would otherwise desync `_selectedLines` membership
+  // and any `MathsPadFixedAngleLabel.sourceLines` reference to this line.
+  Color color;
   final double strokeWidth;
   final bool isEraser;
   final bool isShape;
@@ -37,6 +74,11 @@ class MathsPadLine {
   // without any of it needing to know fills exist.
   ui.Image? fillImage;
   Rect? fillWorldBounds;
+  // Radians, only meaningful when `fillImage != null` -- the image is
+  // rendered rotated about its own `fillWorldBounds` center at paint time
+  // (see `_drawStrokes`); the bounds rect itself stays axis-aligned and is
+  double rotation;
+  String? groupId;
 
   Path? cachedPath;
   Rect? cachedBounds;
@@ -49,6 +91,8 @@ class MathsPadLine {
     this.isShape = false,
     this.fillImage,
     this.fillWorldBounds,
+    this.rotation = 0,
+    this.groupId,
     this.cachedPath,
     this.cachedBounds,
   });
@@ -57,11 +101,7 @@ class MathsPadLine {
     cachedPath = null;
     cachedBounds = null;
     // Keep the rendered image's rect in sync after a move/resize drag (both
-    // just translate/scale `points` in place). Rotation deliberately isn't
-    // synced here -- rotating the two corner points would only ever produce
-    // a skewed axis-aligned re-bound, not a real image rotation, so a
-    // rotated selection intentionally leaves a filled region's image
-    // stationary (see the rotate branch in _onScaleUpdate).
+    // just translate/scale `points` in place).
     if (fillImage != null && points.length >= 2) {
       fillWorldBounds = Rect.fromPoints(points[0].offset, points[1].offset);
     }
@@ -103,6 +143,7 @@ enum CanvasToolMode {
   angle,
   polygonAngle,
   circleArc,
+  square,
   fill,
   text,
   spacer,
@@ -110,6 +151,23 @@ enum CanvasToolMode {
   tapSelect,
   lasso,
   pan,
+  laser,
+}
+
+// How long a single Laser Pointer trail point stays visible (fading out
+// over this whole window) before being dropped -- shared by the state's
+// prune timer and the painter's fade calculation so they never drift apart.
+const int _kLaserTrailLifetimeMs = 550;
+
+/// One point along a Laser Pointer trail -- purely a transient visual (never
+/// added to `_lines`, never touches undo history, saves/exports, or
+/// recordings' permanent content) that fades out on its own shortly after
+/// being laid down, the same way a real presentation laser pointer's glow
+/// doesn't leave a mark.
+class _LaserTrailPoint {
+  final Offset pos;
+  final int bornAtMs;
+  _LaserTrailPoint(this.pos, this.bornAtMs);
 }
 
 enum EraserMode { area, stroke }
@@ -124,7 +182,11 @@ enum SelectionHandleType {
   rotate,
 }
 
-enum CanvasBgMode { grid, ruled, blank, jyamitiCosmos }
+enum CanvasBgMode { grid, ruled, blank }
+
+// "Aswad Lail" (أسود ليل, Arabic for "black night") -- a pure-black theme,
+// #000000, distinct from the dark-navy `dark` theme.
+enum MathPadTheme { light, dark, cosmos, aswadLail }
 
 enum BasicShapeType {
   circle,
@@ -153,7 +215,7 @@ class _ShapeToolItem {
 /// A permanent "XX.X°" angle marker left behind by the Angle Tool / Polygon
 /// Angle Tool once fixed: an arc between the two rays plus a label placed
 /// along their bisector, so both sit visually inside the angle's wedge.
-class _FixedAngleLabel {
+class MathsPadFixedAngleLabel {
   // Mutable so the Spacer Tool can shift it along with its source lines
   // when they move.
   Offset vertex;
@@ -164,7 +226,7 @@ class _FixedAngleLabel {
   // erased/undone/deleted, this label is orphaned and should disappear too.
   final List<MathsPadLine> sourceLines;
 
-  _FixedAngleLabel({
+  MathsPadFixedAngleLabel({
     required this.vertex,
     required this.startAngle,
     required this.sweepAngle,
@@ -192,8 +254,14 @@ class _SpacerDragState {
   final Map<MathsPadLine, List<Offset>> originalLinePoints;
   final List<MathsPadTextLabel> labels;
   final Map<MathsPadTextLabel, Offset> originalLabelPositions;
-  final List<_FixedAngleLabel> angleLabels;
-  final Map<_FixedAngleLabel, Offset> originalAngleVertices;
+  final List<MathsPadFixedAngleLabel> angleLabels;
+  final Map<MathsPadFixedAngleLabel, Offset> originalAngleVertices;
+  // The most negative shift allowed -- how far the moving group can be
+  // pulled back (closing the gap) before its nearest stroke edge would
+  // touch the nearest stationary stroke's edge. 0 if there's nothing
+  // stationary to collide with, so pulling back still just closes the gap
+  // to nothing (the old behaviour) rather than going unbounded.
+  final double minAllowedShift;
 
   _SpacerDragState({
     required this.isVertical,
@@ -204,6 +272,7 @@ class _SpacerDragState {
     required this.originalLabelPositions,
     required this.angleLabels,
     required this.originalAngleVertices,
+    required this.minAllowedShift,
   });
 }
 
@@ -221,6 +290,53 @@ class _AngleArcSpec {
     required this.sweepAngle,
     required this.live,
   });
+}
+
+/// Paints a small semicircle-with-ticks glyph -- the "Add Protractor"
+/// toolbar button's icon, since no stock Material icon actually looks like
+/// a protractor. Mirrors the real `ProtractorWidget`'s shape/orientation
+/// (flat edge along the bottom, arc bulging upward) at icon scale.
+class _ProtractorIconPainter extends CustomPainter {
+  final Color color;
+
+  _ProtractorIconPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double r = size.width / 2 - 1.5;
+    // The semicircle's own bounding box spans from the flat edge (at
+    // `center.dy`) up to `r` above it, so its vertical midpoint sits at
+    // `center.dy - r / 2` -- placing the flat edge at `size.height / 2 +
+    // r / 2` puts that midpoint exactly on the icon box's own centre,
+    // instead of visually sitting high with too much empty space below.
+    final Offset center = Offset(size.width / 2, size.height / 2 + r / 2);
+
+    final Paint stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.3
+      ..strokeCap = StrokeCap.round
+      ..isAntiAlias = true;
+
+    final Path body = Path()
+      ..moveTo(center.dx - r, center.dy)
+      ..arcTo(Rect.fromCircle(center: center, radius: r), pi, pi, false)
+      ..lineTo(center.dx + r, center.dy)
+      ..close();
+    canvas.drawPath(body, stroke);
+
+    // A few degree ticks around the arc, like the real instrument's --
+    // simplified to every 45° at icon scale.
+    for (int deg = 0; deg <= 180; deg += 45) {
+      final double theta = pi - (deg * pi / 180);
+      final Offset dir = Offset(cos(theta), -sin(theta));
+      canvas.drawLine(center + dir * r, center + dir * (r - 3), stroke);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ProtractorIconPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class _AngleArcPainter extends CustomPainter {
@@ -318,6 +434,28 @@ class MathsPadWidget extends StatefulWidget {
   final String? noteId;
   final String? noteTitle;
 
+  // Math Pad Library hooks (see `mathpad/library/`): let a caller restore
+  // the FULL canvas content of a saved page (not just strokes) and save it
+  // back out. All optional -- omitting them leaves every existing caller's
+  // behavior unchanged.
+  final List<InstrumentState>? initialInstruments;
+  final List<MathsPadTextLabel>? initialTextLabels;
+  final List<MathsPadFixedAngleLabel>? initialFixedAngleLabels;
+  final CanvasBgMode? initialBgMode;
+  final MathPadTheme? initialThemeMode;
+  final MathsPadSaveCallback? onSaveRequested;
+  // Called once at init with a closure the caller can invoke at any later
+  // moment to read this pad's CURRENT content -- used by the Math Pad
+  // Library's page switcher to silently save "whatever's on screen" before
+  // swapping in a different page, without a save-button press.
+  final ValueChanged<MathsPadLiveStateReader>? onEditorReady;
+  // Fires whenever this pad's own "canvas only" mode (its internal
+  // toolbar hidden down to a small pull-handle -- see `_isFullScreenMode`)
+  // is toggled, so a caller with its OWN floating chrome around this
+  // widget (e.g. the Math Pad Library page editor's book/page-preview
+  // buttons and page-switcher bar) can hide that too while it's active.
+  final ValueChanged<bool>? onCanvasOnlyModeChanged;
+
   const MathsPadWidget({
     super.key,
     this.onClose,
@@ -330,6 +468,14 @@ class MathsPadWidget extends StatefulWidget {
     this.enableSaveNotes = false,
     this.noteId,
     this.noteTitle,
+    this.initialInstruments,
+    this.initialTextLabels,
+    this.initialFixedAngleLabels,
+    this.initialBgMode,
+    this.initialThemeMode,
+    this.onSaveRequested,
+    this.onEditorReady,
+    this.onCanvasOnlyModeChanged,
   });
 
   @override
@@ -365,7 +511,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // The actual line-A stroke object (so a fixed label can be tied back to
   // both strokes that formed it, and cleaned up if either gets erased).
   MathsPadLine? _angleLineAObject;
-  final List<_FixedAngleLabel> _fixedAngleLabels = [];
+  final List<MathsPadFixedAngleLabel> _fixedAngleLabels = [];
 
   // Polygon Angle Tool: chains segments end-to-end (each new drag must
   // continue from the last committed vertex), showing/fixing the interior
@@ -393,11 +539,34 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   bool _circleHasStartedSweeping = false;
   List<Offset> _circleArcPoints = [];
   Offset? _circleLiveEnd;
+  // Tracks the sweep as a continuously-unwrapped angle (not the wrapped
+  // -pi..pi `Offset.direction` value) so points can be densely interpolated
+  // between two consecutive pointer events regardless of how far apart they
+  // land -- otherwise a platform/input device that delivers coarser pointer
+  // events (e.g. a physical mouse vs. a trackpad) produces a visibly
+  // faceted arc instead of a smooth circle.
+  double? _circleLastRawAngle;
+  double _circleSweptAngle = 0;
   // The circle only "arms" (locks its radius and becomes ready to sweep an
   // arc) once the pointer has held still at some length for a full second --
   // any drag that never pauses that long never starts a circle at all.
   Timer? _circleHoldTimer;
   Offset? _circleHoldAnchor;
+
+  // ─── Square Tool ──────────────────────────────────────────────────────
+  // Same two-phase gesture as the Circle/Arc Tool: drag out one side (any
+  // angle -- horizontal and vertical are just the common cases), hold
+  // still for a second to lock its length, then keep dragging to either
+  // side of that segment to pick which way a square of that same side
+  // length extends. On release, only the square remains -- same discard
+  // rule as the circle if it's never actually armed.
+  Offset? _squareBaseStart;
+  Offset? _squareBaseEnd; // live end while still dragging the initial side
+  double _squareSideLength = 0;
+  bool _squareHasArmed = false;
+  List<Offset> _squareLivePoints = []; // the 4 (5, closed) corners once armed
+  Timer? _squareHoldTimer;
+  Offset? _squareHoldAnchor;
 
   // ─── Straight Line Tool ───────────────────────────────────────────────
   // When true, the line snaps to whichever of horizontal/vertical is closer
@@ -406,6 +575,23 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // (same convention as the Eraser's Stroke/Area toggle).
   bool _lineAxisLocked = false;
   Offset? _straightLineLiveEnd;
+
+  // When true, the toolbar docks as a vertical bar along the left edge
+  // (rotated 90°) instead of the default horizontal bar across the top.
+  bool _toolbarOnLeft = false;
+
+  // When true, the canvas fills the entire screen and the toolbar is
+  // hidden -- only a small pull-handle strip remains at the top. Tapping
+  // that handle slides the full toolbar down into view (see
+  // `_toolbarRevealedInFullScreen`) so every control, including the way
+  // back out of full screen, is still reachable without permanently taking
+  // up canvas space.
+  bool _isFullScreenMode = false;
+  bool _toolbarRevealedInFullScreen = false;
+  // Full-screen-only floating "glass waterdrop" quick-tools bubble -- a
+  // faster way to switch pen/lasso/colour or undo without pulling the
+  // whole toolbar into view.
+  bool _quickToolsExpanded = false;
 
   // ─── Spacer Tool ──────────────────────────────────────────────────────
   // Drag through a gap to push everything past that point further away,
@@ -428,6 +614,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Offset? _textDragPointerStart;
   Offset? _textDragLabelStart;
   bool _textDragMoved = false;
+  bool _textLabelWasAlreadySelected = false;
+
+  // The currently "active" text label (tapped once) -- its close button
+  // and resize handle only render while it holds this, per the user's
+  // request that those controls not clutter every label all the time.
+  int? _selectedTextLabelIndex;
+  int? _resizingTextLabelIndex;
+  double? _resizeStartFontSize;
+  double? _resizeStartCornerDist;
 
   // The inline text-entry editor -- used both for a brand-new label
   // (_textEditingIndex == null) and for re-editing an existing one.
@@ -474,6 +669,77 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // Hardware Stylus Side Barrel Button & Eraser Tip Detection
   bool _isStylusBarrelPressed = false;
 
+  // Most recent raw pointer pressure (updated from the `Listener`'s raw
+  // PointerEvents, since `ScaleStartDetails`/`ScaleUpdateDetails` -- what
+  // actually drives stroke drawing -- carry no pressure info at all).
+  // Devices without pressure sensing (mouse, plain touch) always report
+  // 1.0, so this only ever changes pen behaviour on an actual
+  // pressure-sensitive stylus.
+  double _currentPointerPressure = 1.0;
+
+  // ─── Pen Tool: auto-straighten on hold ─────────────────────────────────
+  // While freehand drawing (ink only, not the eraser), pausing mid-stroke
+  // for a beat auto-straightens the stroke-so-far into a clean line IF it
+  // already looks roughly straight (an intentionally-straight but slightly
+  // wobbly hand-drawn line, not real handwriting -- see
+  // `_tryAutoStraightenPenLine`'s straightness check). Same "draw and hold
+  // to correct" idea as OneNote's ink shapes. Continued dragging after that
+  // keeps the line straight, following the pointer, same as the Straight
+  // Line Tool.
+  Timer? _penHoldTimer;
+  Offset? _penHoldAnchor;
+  bool _penAutoStraightened = false;
+
+  void _resetPenAutoStraighten() {
+    _penHoldTimer?.cancel();
+    _penHoldTimer = null;
+    _penHoldAnchor = null;
+    _penAutoStraightened = false;
+  }
+
+  /// Fires after holding still for a second mid-freehand-stroke. If what's
+  /// been drawn so far already looks roughly straight, snaps it to a
+  /// perfect straight line from the stroke's start to the hold point, and
+  /// flips on `_penAutoStraightened` so `_onScaleUpdate` keeps the line
+  /// straight (following the pointer) for the rest of the drag instead of
+  /// resuming freehand sampling.
+  void _tryAutoStraightenPenLine(Offset holdPos) {
+    final line = _currentLine;
+    if (line == null || line.points.length < 3) return;
+
+    final Offset start = line.points.first.offset;
+    final double lineLen = (holdPos - start).distance;
+    if (lineLen < 12) return; // too short to judge intent either way
+
+    // Max perpendicular distance any drawn point strays from the straight
+    // start->hold segment, as a fraction of that segment's length -- real
+    // handwriting wanders far more than this; an intentionally-straight
+    // but slightly wobbly hand-drawn line stays close to it.
+    final Offset dir = (holdPos - start) / lineLen;
+    final Offset perp = Offset(-dir.dy, dir.dx);
+    double maxDeviation = 0;
+    for (final p in line.points) {
+      final Offset toPoint = p.offset - start;
+      final double dist = (toPoint.dx * perp.dx + toPoint.dy * perp.dy).abs();
+      if (dist > maxDeviation) maxDeviation = dist;
+    }
+    const double straightnessFraction = 0.12;
+    final double allowedDeviation = (lineLen * straightnessFraction).clamp(
+      4.0,
+      40.0,
+    );
+    if (maxDeviation > allowedDeviation) return; // too curvy -- leave as-is
+
+    setState(() {
+      line.points
+        ..clear()
+        ..add(MathsPadStrokePoint(start))
+        ..add(MathsPadStrokePoint(holdPos));
+      _penAutoStraightened = true;
+    });
+    _activeDrawingNotifier.value++;
+  }
+
   // Selected Lines & Move Drag State
   final Set<MathsPadLine> _selectedLines = {};
   bool _isDraggingSelection = false;
@@ -500,8 +766,51 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // Keyboard FocusNode for Ctrl+C / Ctrl+V shortcuts
   final FocusNode _canvasFocusNode = FocusNode();
 
+  // ─── Board + Voice Recording (Windows only) ────────────────────────────
+  // See `MathPadRecordingService` -- the key is what lets it snapshot just
+  // the canvas below, not the toolbar or anything outside this widget.
+  final GlobalKey _canvasCaptureKey = GlobalKey();
+  final MathPadRecordingService _recordingService = MathPadRecordingService();
+  MathPadRecordingState _recordingState = MathPadRecordingState.idle;
+  Duration _recordingElapsed = Duration.zero;
+
   // Lasso Selection Points for Free-Select Area Erase & Move
   List<Offset> _lassoPoints = [];
+
+  // Laser Pointer Tool: a fading trail, never a permanent stroke. Repainted
+  // by a lightweight `Timer.periodic` (not tied to the drawing gesture)
+  // since points must keep fading out even after the pointer stops moving;
+  // the timer self-cancels once the trail is fully empty so it costs
+  // nothing while the tool isn't in use.
+  final List<_LaserTrailPoint> _laserTrail = [];
+  Timer? _laserFadeTimer;
+
+  // Neon selection outline: advanced by `_selectionGlowTimer` (set up in
+  // initState) to animate the marching-dash motion traced around every
+  // selected stroke.
+  double _selectionGlowPhase = 0.0;
+  Timer? _selectionGlowTimer;
+
+  void _addLaserPoint(Offset worldPos) {
+    _laserTrail.add(
+      _LaserTrailPoint(worldPos, DateTime.now().millisecondsSinceEpoch),
+    );
+    _activeDrawingNotifier.value++;
+    _laserFadeTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final int nowMs = DateTime.now().millisecondsSinceEpoch;
+      final int before = _laserTrail.length;
+      _laserTrail.removeWhere(
+        (p) => nowMs - p.bornAtMs > _kLaserTrailLifetimeMs,
+      );
+      if (_laserTrail.length != before) {
+        _activeDrawingNotifier.value++;
+      }
+      if (_laserTrail.isEmpty) {
+        _laserFadeTimer?.cancel();
+        _laserFadeTimer = null;
+      }
+    });
+  }
 
   // Infinite Canvas Pan & Zoom Transformation State
   Offset _panOffset = Offset.zero;
@@ -518,6 +827,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   double _eraserWidth = 14.0;
   double _selectedWidth = 3.0;
   CanvasBgMode _bgMode = CanvasBgMode.grid;
+  MathPadTheme?
+  _themeMode; // Null means follow System/App theme unless overridden by the user/saved state
 
   final List<Color> _palette = const [
     Color(0xFF6366F1), // Indigo
@@ -562,7 +873,41 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _buildAndCachePath(line);
       }
     }
-    if (widget.isTransparentBg) {
+    if (widget.initialBgMode != null) {
+      _bgMode = widget.initialBgMode!;
+    } else if (widget.isInline) {
+      _bgMode = CanvasBgMode.blank;
+    }
+    if (widget.initialThemeMode != null) {
+      _themeMode = widget.initialThemeMode;
+    } else {
+      _themeMode =
+          MathPadTheme.light; // The user requested light theme as default
+      SharedPreferences.getInstance().then((prefs) {
+        if (!mounted) return;
+        final savedTheme = prefs.getString('mathpad_default_theme');
+        if (savedTheme != null) {
+          setState(() {
+            _themeMode = MathPadTheme.values.firstWhere(
+              (e) => e.name == savedTheme,
+              orElse: () => MathPadTheme.light,
+            );
+          });
+        }
+      });
+    }
+    if (widget.initialInstruments != null) {
+      _instruments.addAll(widget.initialInstruments!);
+    }
+    if (widget.initialTextLabels != null) {
+      _textLabels.addAll(widget.initialTextLabels!);
+    }
+    if (widget.initialFixedAngleLabels != null) {
+      _fixedAngleLabels.addAll(widget.initialFixedAngleLabels!);
+    }
+    if (widget.initialBgMode != null) {
+      _bgMode = widget.initialBgMode!;
+    } else if (widget.isTransparentBg) {
       _bgMode = CanvasBgMode.blank;
     }
     _panNotifier = ValueNotifier<Offset>(_panOffset);
@@ -570,6 +915,37 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _finishedStrokesNotifier = ValueNotifier<int>(0);
     _activeDrawingNotifier = ValueNotifier<int>(0);
     _frictionController = AnimationController(vsync: this);
+    // Drives the selected-stroke neon outline's marching-dash motion.
+    // Runs for the widget's whole lifetime but only does any real work
+    // (advancing the phase, triggering a repaint) while something is
+    // actually selected -- otherwise this tick is just a cheap boolean
+    // check, so there's no cost to leaving it running idle.
+    _selectionGlowTimer = Timer.periodic(const Duration(milliseconds: 16), (
+      _,
+    ) {
+      if (_selectedLines.isEmpty) return;
+      _selectionGlowPhase += 0.9;
+      _activeDrawingNotifier.value++;
+    });
+    _recordingService.onUpdate = (state, elapsed) {
+      if (!mounted) return;
+      setState(() {
+        _recordingState = state;
+        _recordingElapsed = elapsed;
+      });
+    };
+    widget.onEditorReady?.call(
+      () => (
+        lines: _lines,
+        instruments: _instruments,
+        textLabels: _textLabels,
+        fixedAngleLabels: _fixedAngleLabels,
+        bgMode: _bgMode,
+        themeMode:
+            _themeMode ??
+            (context.isDark ? MathPadTheme.dark : MathPadTheme.light),
+      ),
+    );
   }
 
   @override
@@ -583,7 +959,51 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _finishedStrokesNotifier.dispose();
     _activeDrawingNotifier.dispose();
     _frictionController?.dispose();
+    _recordingService.dispose();
+    _laserFadeTimer?.cancel();
+    _selectionGlowTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_recordingState == MathPadRecordingState.recording) {
+      try {
+        final String path = await _recordingService.stop();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Recording saved to $path'),
+            backgroundColor: const Color(0xFF10B981),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      } on MathPadRecordingException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 10),
+          ),
+        );
+      }
+      return;
+    }
+    if (_recordingState != MathPadRecordingState.idle) return;
+    try {
+      await _recordingService.start(_canvasCaptureKey);
+    } on MathPadRecordingException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  String _formatRecordingElapsed(Duration d) {
+    final int minutes = d.inMinutes;
+    final int seconds = d.inSeconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
   // Calculate average centroid of active touch pointers
@@ -771,12 +1191,43 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       };
 
       final Set<MathsPadLine> affectedLineSet = affectedLines.toSet();
-      final List<_FixedAngleLabel> affectedAngleLabels = _fixedAngleLabels
-          .where((l) => l.sourceLines.any(affectedLineSet.contains))
-          .toList();
-      final Map<_FixedAngleLabel, Offset> originalAngleVertices = {
+      final List<MathsPadFixedAngleLabel> affectedAngleLabels =
+          _fixedAngleLabels
+              .where((l) => l.sourceLines.any(affectedLineSet.contains))
+              .toList();
+      final Map<MathsPadFixedAngleLabel, Offset> originalAngleVertices = {
         for (final l in affectedAngleLabels) l: l.vertex,
       };
+
+      // How far this drag can pull the moving group BACK (negative shift,
+      // closing the gap) before its nearest stroke edge would touch the
+      // nearest stationary stroke's edge -- using each stroke's actual ink
+      // edge (centreline +/- half its width), not just centre points, so
+      // "touch" means the ink visually meets rather than centrelines
+      // crossing through each other.
+      double stationaryMaxEdge = double.negativeInfinity;
+      for (final line in _lines) {
+        if (affectedLineSet.contains(line) || line.points.isEmpty) continue;
+        final double halfWidth = line.strokeWidth / 2;
+        final double lineMax = isVertical
+            ? line.points.map((p) => p.offset.dy).reduce(max)
+            : line.points.map((p) => p.offset.dx).reduce(max);
+        final double edge = lineMax + halfWidth;
+        if (edge > stationaryMaxEdge) stationaryMaxEdge = edge;
+      }
+      double movingMinEdge = double.infinity;
+      for (final line in affectedLines) {
+        final double halfWidth = line.strokeWidth / 2;
+        final double lineMin = isVertical
+            ? line.points.map((p) => p.offset.dy).reduce(min)
+            : line.points.map((p) => p.offset.dx).reduce(min);
+        final double edge = lineMin - halfWidth;
+        if (edge < movingMinEdge) movingMinEdge = edge;
+      }
+      final double minAllowedShift =
+          (stationaryMaxEdge.isFinite && movingMinEdge.isFinite)
+          ? min(0.0, stationaryMaxEdge - movingMinEdge)
+          : 0.0;
 
       _spacerDrag = _SpacerDragState(
         isVertical: isVertical,
@@ -787,6 +1238,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         originalLabelPositions: originalLabelPositions,
         angleLabels: affectedAngleLabels,
         originalAngleVertices: originalAngleVertices,
+        minAllowedShift: minAllowedShift,
       );
     }
 
@@ -794,9 +1246,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final double rawShift = drag.isVertical
         ? worldPos.dy - drag.startWorld.dy
         : worldPos.dx - drag.startWorld.dx;
-    // Only ever pushes content further away -- dragging back toward the
-    // start just closes the gap back down to nothing, never past it.
-    final double shift = rawShift.clamp(0.0, double.infinity);
+    // Dragging forward pushes content further away; dragging back past the
+    // start now keeps closing the gap (going negative) until the moving
+    // group's nearest stroke edge would touch the nearest stationary
+    // stroke's edge, then stops there.
+    final double shift = rawShift.clamp(drag.minAllowedShift, double.infinity);
     _spacerLiveShift = shift;
     final Offset shiftOffset = drag.isVertical
         ? Offset(0, shift)
@@ -813,8 +1267,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       label.position = drag.originalLabelPositions[label]! + shiftOffset;
     }
     for (final angleLabel in drag.angleLabels) {
-      angleLabel.vertex =
-          drag.originalAngleVertices[angleLabel]! + shiftOffset;
+      angleLabel.vertex = drag.originalAngleVertices[angleLabel]! + shiftOffset;
     }
     _finishedStrokesNotifier.value++;
   }
@@ -847,6 +1300,30 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return diff;
   }
 
+  /// Snaps [worldPos] (relative to [vertex]) so the angle it forms with
+  /// [referenceDirection] (radians) lands on the nearest 0.5-degree
+  /// increment -- keeps the raw drag distance untouched, only discretizes
+  /// the angle, so the ray steps cleanly through 10.5°, 11.0°, 11.5°, ...
+  /// instead of tracking every fractional degree the pointer happens to
+  /// pass over. Used by both the Angle Tool's second line and the Polygon
+  /// Angle Tool's joints.
+  Offset _snapAngleToHalfDegree(
+    Offset vertex,
+    double referenceDirection,
+    Offset worldPos,
+  ) {
+    final double distance = (worldPos - vertex).distance;
+    if (distance < 1) return worldPos;
+    final double rawOffset = _signedAngleDiff(
+      referenceDirection,
+      (worldPos - vertex).direction,
+    );
+    const double stepRad = 0.5 * pi / 180;
+    final double snappedOffset = (rawOffset / stepRad).round() * stepRad;
+    final double newDirection = referenceDirection + snappedOffset;
+    return vertex + Offset(cos(newDirection), sin(newDirection)) * distance;
+  }
+
   void _resetAngleTool() {
     _angleLineAStart = null;
     _angleLineAEnd = null;
@@ -862,9 +1339,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     const double vertexTolerance = 30.0;
 
     if (_angleWaitingForSecondLine) {
-      final nearStart = _angleLineAStart != null &&
+      final nearStart =
+          _angleLineAStart != null &&
           (worldPos - _angleLineAStart!).distance <= vertexTolerance;
-      final nearEnd = _angleLineAEnd != null &&
+      final nearEnd =
+          _angleLineAEnd != null &&
           (worldPos - _angleLineAEnd!).distance <= vertexTolerance;
       if (nearStart || nearEnd) {
         _angleVertex = nearStart ? _angleLineAStart : _angleLineAEnd;
@@ -891,18 +1370,30 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void _handleAngleToolUpdate(Offset worldPos) {
     if (_currentLine == null) return;
     final start = _currentLine!.points.first.offset;
+
+    Offset endPoint = worldPos;
+    final bool isSecondLine =
+        _angleWaitingForSecondLine &&
+        _angleVertex != null &&
+        _angleOtherEndOfA != null;
+    if (isSecondLine) {
+      endPoint = _snapAngleToHalfDegree(
+        _angleVertex!,
+        (_angleOtherEndOfA! - _angleVertex!).direction,
+        worldPos,
+      );
+    }
+
     _currentLine!.points
       ..clear()
       ..add(MathsPadStrokePoint(start))
-      ..add(MathsPadStrokePoint(worldPos));
+      ..add(MathsPadStrokePoint(endPoint));
 
-    if (_angleWaitingForSecondLine &&
-        _angleVertex != null &&
-        _angleOtherEndOfA != null) {
-      _angleLiveEnd = worldPos;
+    if (isSecondLine) {
+      _angleLiveEnd = endPoint;
       _angleLiveDegrees = _angleBetween(
         _angleOtherEndOfA! - _angleVertex!,
-        worldPos - _angleVertex!,
+        endPoint - _angleVertex!,
       );
     }
     _activeDrawingNotifier.value++;
@@ -929,7 +1420,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         final a1 = (_angleOtherEndOfA! - vertex).direction;
         final a2 = (_currentLine!.points.last.offset - vertex).direction;
         _fixedAngleLabels.add(
-          _FixedAngleLabel(
+          MathsPadFixedAngleLabel(
             vertex: vertex,
             startAngle: a1,
             sweepAngle: _signedAngleDiff(a1, a2),
@@ -993,17 +1484,36 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       }
     }
 
+    // Snap this joint's angle (against the previous segment) to the
+    // nearest 0.5° -- but not while snapping to close the polygon, which
+    // must land exactly on the first vertex regardless of angle.
+    if (_polygonVertices.length >= 2 && !_polygonWillClose) {
+      final vertex = _polygonVertices.last;
+      final prevVertex = _polygonVertices[_polygonVertices.length - 2];
+      endPoint = _snapAngleToHalfDegree(
+        vertex,
+        (prevVertex - vertex).direction,
+        endPoint,
+      );
+    }
+
     final start = _currentLine!.points.first.offset;
     _currentLine!.points
       ..clear()
       ..add(MathsPadStrokePoint(start))
       ..add(MathsPadStrokePoint(endPoint));
 
+    // Tracked for every segment (even the very first, which has no prior
+    // segment to form an angle with yet) so the live length badge always
+    // has somewhere to read its endpoint from.
+    _polygonLiveEnd = endPoint;
     if (_polygonVertices.length >= 2) {
       final vertex = _polygonVertices.last;
       final prevVertex = _polygonVertices[_polygonVertices.length - 2];
-      _polygonLiveEnd = endPoint;
-      _polygonLiveDegrees = _angleBetween(prevVertex - vertex, endPoint - vertex);
+      _polygonLiveDegrees = _angleBetween(
+        prevVertex - vertex,
+        endPoint - vertex,
+      );
     }
     _activeDrawingNotifier.value++;
   }
@@ -1025,7 +1535,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       final a1 = (prevVertex - vertex).direction;
       final a2 = (segmentEnd - vertex).direction;
       _fixedAngleLabels.add(
-        _FixedAngleLabel(
+        MathsPadFixedAngleLabel(
           vertex: vertex,
           startAngle: a1,
           sweepAngle: _signedAngleDiff(a1, a2),
@@ -1045,7 +1555,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       final closingDeg = _angleBetween(segmentStart - p0, p1 - p0);
       if (_polygonSegmentLines.isNotEmpty) {
         _fixedAngleLabels.add(
-          _FixedAngleLabel(
+          MathsPadFixedAngleLabel(
             vertex: p0,
             startAngle: a1,
             sweepAngle: _signedAngleDiff(a1, a2),
@@ -1076,6 +1586,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _circleHasStartedSweeping = false;
     _circleArcPoints = [];
     _circleLiveEnd = null;
+    _circleLastRawAngle = null;
+    _circleSweptAngle = 0;
   }
 
   void _handleCircleArcToolStart(Offset worldPos) {
@@ -1088,6 +1600,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _circleHasStartedSweeping = false;
     _circleArcPoints = [];
     _circleLiveEnd = null;
+    _circleLastRawAngle = null;
+    _circleSweptAngle = 0;
     _currentLine = MathsPadLine(
       points: [MathsPadStrokePoint(worldPos)],
       color: _selectedColor,
@@ -1107,6 +1621,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _circleStartAngle = (holdPos - _circleCenter!).direction;
       _circleMaxRadius = (holdPos - _circleCenter!).distance;
       _circleLiveEnd = null;
+      _circleLastRawAngle = _circleStartAngle;
+      _circleSweptAngle = 0;
       _circleArcPoints = [
         _circleCenter! +
             Offset(cos(_circleStartAngle!), sin(_circleStartAngle!)) *
@@ -1145,10 +1661,33 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
 
     if (_circleHasStartedSweeping) {
-      final tracedPoint =
-          _circleCenter! + Offset(cos(angle), sin(angle)) * _circleMaxRadius;
+      // Advance the unwrapped sweep angle by the shortest signed delta from
+      // the last raw sample -- this is what lets the sweep cross the
+      // -pi/pi boundary cleanly and know which direction it's turning.
+      final double rawDelta = _shortestAngleDelta(_circleLastRawAngle!, angle);
+      final double fromAngle = _circleStartAngle! + _circleSweptAngle;
+      _circleSweptAngle += rawDelta;
+      _circleLastRawAngle = angle;
+      final double toAngle = _circleStartAngle! + _circleSweptAngle;
+
+      // Densely fill in every point between the previous and new angle at a
+      // fixed arc-length spacing (~1.2 world px) -- independent of how far
+      // apart the two raw pointer samples actually were, so the traced arc
+      // is always smooth regardless of the input device's event rate.
+      final double span = toAngle - fromAngle;
+      final double angularStep = (1.2 / _circleMaxRadius).clamp(0.005, 0.2);
+      final int steps = (span.abs() / angularStep).floor();
+      for (int i = 1; i <= steps; i++) {
+        final double a = fromAngle + angularStep * i * span.sign;
+        _circleArcPoints.add(
+          _circleCenter! + Offset(cos(a), sin(a)) * _circleMaxRadius,
+        );
+      }
+      final Offset tracedPoint =
+          _circleCenter! +
+          Offset(cos(toAngle), sin(toAngle)) * _circleMaxRadius;
       if (_circleArcPoints.isEmpty ||
-          (tracedPoint - _circleArcPoints.last).distance >= 1.2) {
+          (tracedPoint - _circleArcPoints.last).distance >= 0.5) {
         _circleArcPoints.add(tracedPoint);
       }
       _currentLine!.points
@@ -1181,6 +1720,160 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // straight radius preview is discarded (nothing committed).
     _currentLine = null;
     _resetCircleArcTool();
+  }
+
+  // ─── Square Tool ─────────────────────────────────────────────────────────
+
+  void _resetSquareTool() {
+    _squareHoldTimer?.cancel();
+    _squareHoldTimer = null;
+    _squareHoldAnchor = null;
+    _squareBaseStart = null;
+    _squareBaseEnd = null;
+    _squareSideLength = 0;
+    _squareHasArmed = false;
+    _squareLivePoints = [];
+  }
+
+  /// If the line from [start] to [end] is within a few degrees of exactly
+  /// horizontal or vertical, snaps it to that exact axis (same length,
+  /// corrected angle) so a base side that's "close enough" to level/plumb
+  /// locks perfectly straight instead of the square coming out slightly
+  /// skewed.
+  Offset _snapToAxisIfClose(Offset start, Offset end) {
+    final Offset vec = end - start;
+    final double len = vec.distance;
+    if (len < 1) return end;
+    double angle = atan2(vec.dy, vec.dx);
+    const double snapToleranceRad = 5 * pi / 180;
+    const List<double> axisAngles = [0, pi / 2, pi, -pi / 2, -pi];
+    for (final double target in axisAngles) {
+      double diff = (angle - target).abs();
+      if (diff > pi) diff = 2 * pi - diff;
+      if (diff <= snapToleranceRad) {
+        angle = target;
+        break;
+      }
+    }
+    return start + Offset(cos(angle), sin(angle)) * len;
+  }
+
+  void _handleSquareToolStart(Offset worldPos) {
+    _squareHoldTimer?.cancel();
+    _squareHoldTimer = null;
+    _squareHoldAnchor = null;
+    _squareBaseStart = worldPos;
+    _squareBaseEnd = worldPos;
+    _squareSideLength = 0;
+    _squareHasArmed = false;
+    _squareLivePoints = [];
+    _currentLine = MathsPadLine(
+      points: [MathsPadStrokePoint(worldPos)],
+      color: _selectedColor,
+      strokeWidth: _penWidth,
+      isShape:
+          true, // closed quadrilateral -- crisp straight edges, no smoothing
+    );
+  }
+
+  /// Fires once the pointer has held still at [holdPos] for a full second --
+  /// locks the base side's length (and direction) and arms the tool to
+  /// extend a square from it. Same hold-to-arm mechanic as the Circle/Arc
+  /// Tool, for the same reason: a drag that never pauses never starts a
+  /// square at all.
+  void _armSquareHold(Offset holdPos) {
+    if (!mounted || _currentLine == null || _squareBaseStart == null) return;
+    setState(() {
+      _squareHasArmed = true;
+      _squareBaseEnd = holdPos;
+      _squareSideLength = (holdPos - _squareBaseStart!).distance;
+    });
+  }
+
+  void _handleSquareToolUpdate(Offset worldPos) {
+    if (_currentLine == null || _squareBaseStart == null) return;
+
+    if (!_squareHasArmed) {
+      // Still drawing the initial straight side -- track the live end so
+      // the dynamic length badge always matches exactly what's on screen.
+      if ((worldPos - _squareBaseStart!).distance < 1) return;
+      final Offset snappedEnd = _snapToAxisIfClose(_squareBaseStart!, worldPos);
+      _squareBaseEnd = snappedEnd;
+      _currentLine!.points
+        ..clear()
+        ..add(MathsPadStrokePoint(_squareBaseStart!))
+        ..add(MathsPadStrokePoint(snappedEnd));
+
+      // Restart the 1-second hold timer whenever the pointer moves away from
+      // wherever it's currently anchored -- identical logic to the Circle/
+      // Arc Tool's hold-to-arm. Hold-stillness is judged against the raw
+      // pointer position (not the snapped one) so snapping never resets the
+      // timer by itself, but the timer fires with the snapped endpoint so
+      // the armed square starts from the corrected axis-aligned side.
+      const double holdTolerance = 6.0;
+      if (_squareHoldAnchor == null ||
+          (worldPos - _squareHoldAnchor!).distance > holdTolerance) {
+        _squareHoldAnchor = worldPos;
+        _squareHoldTimer?.cancel();
+        final Offset anchorForThisHold = snappedEnd;
+        _squareHoldTimer = Timer(
+          const Duration(seconds: 1),
+          () => _armSquareHold(anchorForThisHold),
+        );
+      }
+    } else {
+      // Armed: the base side's length L and direction are locked. The two
+      // sides perpendicular to it grow LIVE with how far the pointer has
+      // moved off the base line (like normally dragging out a rectangle),
+      // but that extent is clamped to L -- so it can never overshoot into
+      // a rectangle, growth just stops once it's a true square, however
+      // far past that point the drag continues. The 4th side (parallel to
+      // the base) is simply wherever those two growing sides currently end.
+      final Offset baseStart = _squareBaseStart!;
+      final Offset baseEnd = _squareBaseEnd!;
+      final Offset baseVec = baseEnd - baseStart;
+      if (_squareSideLength < 1) return;
+      final Offset unitPerp =
+          Offset(-baseVec.dy, baseVec.dx) / _squareSideLength;
+      final Offset toPointer = worldPos - baseStart;
+      final double signedExtent =
+          toPointer.dx * unitPerp.dx + toPointer.dy * unitPerp.dy;
+      final double clampedExtent = signedExtent.clamp(
+        -_squareSideLength,
+        _squareSideLength,
+      );
+      final Offset offset = unitPerp * clampedExtent;
+
+      final Offset c1 = baseStart;
+      final Offset c2 = baseEnd;
+      final Offset c3 = baseEnd + offset;
+      final Offset c4 = baseStart + offset;
+      _squareLivePoints = [c1, c2, c3, c4, c1];
+
+      _currentLine!.points
+        ..clear()
+        ..addAll(_squareLivePoints.map((p) => MathsPadStrokePoint(p)));
+    }
+    _activeDrawingNotifier.value++;
+  }
+
+  void _handleSquareToolEnd() {
+    if (_currentLine == null) {
+      _resetSquareTool();
+      return;
+    }
+    if (_squareHasArmed && _squareLivePoints.length > 2) {
+      _currentLine!.points
+        ..clear()
+        ..addAll(_squareLivePoints.map((p) => MathsPadStrokePoint(p)));
+      _currentLine!.invalidateCache();
+      _lines.add(_currentLine!);
+      _finishedStrokesNotifier.value++;
+    }
+    // If the user never actually armed it (no hold), there's no square to
+    // keep -- the straight side preview is discarded (nothing committed).
+    _currentLine = null;
+    _resetSquareTool();
   }
 
   // ─── Fill Tool (MS Paint-style bucket fill) ──────────────────────────────
@@ -1258,12 +1951,36 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // (close enough to) the current color.
     if (closeEnoughToFillColor()) return;
 
+    // "Ink" here means "meaningfully covered by a stroke," not "fully
+    // opaque" -- every palette colour IS fully opaque, but a *thin* stroke
+    // (e.g. 2px) can still split its antialiased coverage across 2-3 pixel
+    // rows depending on exactly where it falls on the pixel grid, so no
+    // single pixel along it may ever reach anywhere near 255 alpha. A
+    // threshold up near 255 reads that whole stroke as "still background"
+    // and the flood leaks straight through it (and keeps going through
+    // whatever's next, however far that spreads). Kept low enough to
+    // reliably catch even a faint thin-stroke edge; the cost is the fill
+    // can stop a hair short of a thick stroke's outermost antialiased
+    // pixel or two, which is imperceptible at normal zoom.
+    const int solidInkAlpha = 90;
+
+    // Like MS Paint's bucket fill: tapping empty (background) space floods
+    // every pixel that isn't solidly inked yet, including the boundary
+    // stroke's own antialiased/soft edge -- so the fill reaches all the way
+    // up to the ink with no thin unfilled fringe left, regardless of how
+    // wide that stroke's antialiasing happens to be. Tapping an already
+    // solidly-coloured region (a recolour) instead matches that specific
+    // colour, same as a normal paint-bucket recolour.
+    final bool isBackgroundFill = targetA <= _fillColorTolerance;
+
     bool matchesTarget(int x, int y) {
       final int i = idx(x, y);
-      return (pixels[i] - targetR).abs() <= _fillColorTolerance &&
-          (pixels[i + 1] - targetG).abs() <= _fillColorTolerance &&
-          (pixels[i + 2] - targetB).abs() <= _fillColorTolerance &&
-          (pixels[i + 3] - targetA).abs() <= _fillColorTolerance;
+      return isBackgroundFill
+          ? pixels[i + 3] < solidInkAlpha
+          : (pixels[i] - targetR).abs() <= _fillColorTolerance &&
+                (pixels[i + 1] - targetG).abs() <= _fillColorTolerance &&
+                (pixels[i + 2] - targetB).abs() <= _fillColorTolerance &&
+                (pixels[i + 3] - targetA).abs() <= _fillColorTolerance;
     }
 
     // Scanline span flood fill -- much faster than a naive per-pixel
@@ -1312,8 +2029,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         if (y > maxY) maxY = y;
 
         if (y > 0) {
-          final bool match = visited[(y - 1) * width + sx] == 0 &&
-              matchesTarget(sx, y - 1);
+          final bool match =
+              visited[(y - 1) * width + sx] == 0 && matchesTarget(sx, y - 1);
           if (match && !aboveAdded) {
             stack.add((y - 1) * width + sx);
             aboveAdded = true;
@@ -1322,8 +2039,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           }
         }
         if (y < height - 1) {
-          final bool match = visited[(y + 1) * width + sx] == 0 &&
-              matchesTarget(sx, y + 1);
+          final bool match =
+              visited[(y + 1) * width + sx] == 0 && matchesTarget(sx, y + 1);
           if (match && !belowAdded) {
             stack.add((y + 1) * width + sx);
             belowAdded = true;
@@ -1387,6 +2104,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
 
     setState(() {
+      // Stays appended in true chronological order -- `_undo()` relies on
+      // `_lines.removeLast()` picking whatever was actually added most
+      // recently. Drawing this fill *beneath* the ink strokes is instead
+      // handled purely at paint time (see `_drawStrokes`), so the boundary
+      // stroke's own antialiasing draws on top of the fill colour there.
       _lines.add(fillLine);
     });
     _finishedStrokesNotifier.value++;
@@ -1458,6 +2180,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // hit tests correctly.  The Text itself is nudged back down/right by the
     // same amount to keep it anchored at label.position.
     const double overhang = 10;
+    final bool isSelected = _selectedTextLabelIndex == index;
     return Positioned(
       left: label.position.dx - overhang,
       top: label.position.dy - overhang,
@@ -1480,36 +2203,71 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ),
             ),
           ),
-          // Close button in the top-right corner, now INSIDE the Stack bounds.
-          Positioned(
-            right: 0,
-            top: 0,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => _deleteTextLabel(index),
-              child: Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEF4444),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.25),
-                      blurRadius: 3,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.close_rounded,
-                  size: 12,
-                  color: Colors.white,
+          // Close button and resize handle only show once this label has
+          // been tapped -- not on every label all the time.
+          if (isSelected) ...[
+            Positioned(
+              right: 0,
+              top: 0,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _deleteTextLabel(index),
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.25),
+                        blurRadius: 3,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.close_rounded,
+                    size: 12,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ),
-          ),
+            // Resize handle, bottom-right -- drag to scale the font size.
+            // Purely visual here; the actual drag is driven by world-space
+            // hit-testing in `_tryStartTextResizeHandle` (same pattern as
+            // the geometry instrument handles), so it deliberately doesn't
+            // carry its own GestureDetector.
+            Positioned(
+              right: -6,
+              bottom: -6,
+              child: IgnorePointer(
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6366F1),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.25),
+                        blurRadius: 3,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.zoom_out_map_rounded,
+                    size: 11,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1702,7 +2460,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               borderRadius: BorderRadius.circular(14),
               border: live
                   ? null
-                  : Border.all(color: const Color(0xFF1E293B).withOpacity(0.12)),
+                  : Border.all(
+                      color: const Color(0xFF1E293B).withOpacity(0.12),
+                    ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.2),
@@ -1727,11 +2487,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   /// World position along the bisector of an angle at [vertex] between ray
   /// [startAngle] and the ray reached by sweeping [sweepAngle] further --
-  /// i.e. a point inside the wedge, matching [_FixedAngleLabel.labelPosition].
+  /// i.e. a point inside the wedge, matching [MathsPadFixedAngleLabel.labelPosition].
   Offset _bisectorPoint(Offset vertex, double startAngle, double sweepAngle) {
     final bisector = startAngle + sweepAngle / 2;
     return vertex +
-        Offset(cos(bisector), sin(bisector)) * _FixedAngleLabel.labelRadius;
+        Offset(cos(bisector), sin(bisector)) *
+            MathsPadFixedAngleLabel.labelRadius;
   }
 
   /// Point just off the midpoint of segment [a]-[b], offset perpendicular by
@@ -1813,7 +2574,23 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Offset? _instrumentDragStartPivot;
   double? _instrumentDragStartRotation;
   double? _instrumentDragStartRadiusOrScale;
+  // The compass's armAngle at the moment a *hinge* drag started -- the
+  // hinge point isn't on the tip's radius circle (see `hingePoint`'s
+  // perpendicular "bulge" offset), so unlike the tip handle its raw
+  // world position can't be mapped to a pencil angle directly. Instead the
+  // hinge drag rotates the whole compass by whatever angle the pointer
+  // itself has swept (relative to pivot) since the drag started, applied
+  // on top of this starting angle.
+  double? _instrumentDragStartArmAngle;
   Offset? _lastCompassTracePoint;
+  // Tracks the compass's arc sweep as a continuously-unwrapped angle (not
+  // the wrapped -pi..pi `Offset.direction` sample) so points can be
+  // densely interpolated between two consecutive pointer events -- same
+  // fix as the Circle/Arc Tool's sweep tracking, for the same reason (a
+  // coarser input event rate otherwise leaves visible gaps that read as a
+  // jagged/faceted arc instead of a smooth circle).
+  double? _lastCompassRawAngle;
+  double _compassCumulativeAngle = 0;
   bool _pencilDragMoved = false;
 
   /// Ruler/Set Square straight-edge for the pencil attached to them. For a
@@ -1827,7 +2604,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       int bestIdx = inst.pencilEdgeIndex.clamp(0, 2);
       double bestDist = double.infinity;
       for (int i = 0; i < edges.length; i++) {
-        final proj = _projectPointOntoSegment(worldPos, edges[i].$1, edges[i].$2);
+        final proj = _projectPointOntoSegment(
+          worldPos,
+          edges[i].$1,
+          edges[i].$2,
+        );
         final d = (proj - worldPos).distance;
         if (d < bestDist) {
           bestDist = d;
@@ -1863,7 +2644,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // along its solid pivot leg (pivot -> hinge) also moves the whole
       // compass, matching how you'd actually pick one up.
       if (inst is CompassState) {
-        final onLeg = _projectPointOntoSegment(worldPos, inst.pivot, inst.hingePoint);
+        final onLeg = _projectPointOntoSegment(
+          worldPos,
+          inst.pivot,
+          inst.hingePoint,
+        );
         if ((onLeg - worldPos).distance <= tolerance) {
           return (inst, 'pivot');
         }
@@ -1886,11 +2671,61 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   bool _tryStartTextLabelDrag(Offset worldPos) {
     final int? idx = _hitTestTextLabel(worldPos);
     if (idx == null) return false;
+    _textLabelWasAlreadySelected = _selectedTextLabelIndex == idx;
     _draggedTextLabelIndex = idx;
     _textDragPointerStart = worldPos;
     _textDragLabelStart = _textLabels[idx].position;
     _textDragMoved = false;
+    if (!_textLabelWasAlreadySelected) {
+      setState(() => _selectedTextLabelIndex = idx);
+    }
     return true;
+  }
+
+  /// Bottom-right resize handle -- only hit-testable while its label is
+  /// already selected (matching the handle only being drawn then).
+  bool _tryStartTextResizeHandle(Offset worldPos) {
+    final int? idx = _selectedTextLabelIndex;
+    if (idx == null || idx >= _textLabels.length) return false;
+    final MathsPadTextLabel label = _textLabels[idx];
+    final Offset handlePos = label.worldBounds.bottomRight;
+    const double toleranceScreenPx = 16.0;
+    if ((worldPos - handlePos).distance > toleranceScreenPx / _scale) {
+      return false;
+    }
+    _resizingTextLabelIndex = idx;
+    _resizeStartFontSize = label.fontSize;
+    _resizeStartCornerDist = max(
+      (handlePos - label.position).distance,
+      1.0,
+    );
+    return true;
+  }
+
+  void _updateTextResizeHandle(Offset worldPos) {
+    final int? idx = _resizingTextLabelIndex;
+    if (idx == null ||
+        _resizeStartFontSize == null ||
+        _resizeStartCornerDist == null) {
+      return;
+    }
+    final double dist = max(
+      (worldPos - _textLabels[idx].position).distance,
+      1.0,
+    );
+    final double factor = (dist / _resizeStartCornerDist!).clamp(0.3, 6.0);
+    setState(() {
+      _textLabels[idx].fontSize = (_resizeStartFontSize! * factor).clamp(
+        8.0,
+        160.0,
+      );
+    });
+  }
+
+  void _endTextResizeHandle() {
+    _resizingTextLabelIndex = null;
+    _resizeStartFontSize = null;
+    _resizeStartCornerDist = null;
   }
 
   void _updateTextLabelDrag(Offset worldPos) {
@@ -1902,22 +2737,26 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final Offset delta = worldPos - _textDragPointerStart!;
     if (delta.distance > 4) _textDragMoved = true;
     setState(() {
-      _textLabels[_draggedTextLabelIndex!].position = _textDragLabelStart! + delta;
+      _textLabels[_draggedTextLabelIndex!].position =
+          _textDragLabelStart! + delta;
     });
   }
 
-  /// If the pointer never actually moved, treat it as a tap instead of a
-  /// drag and open that label for editing rather than just "moving" it in
-  /// place.
+  /// If the pointer never actually moved, treat it as a tap. The first tap
+  /// on a label just selects it (revealing its close button and resize
+  /// handle); a second tap on an already-selected label opens it for
+  /// editing.
   void _endTextLabelDrag() {
     if (_draggedTextLabelIndex == null) return;
     final int idx = _draggedTextLabelIndex!;
     final bool moved = _textDragMoved;
+    final bool wasAlreadySelected = _textLabelWasAlreadySelected;
     _draggedTextLabelIndex = null;
     _textDragPointerStart = null;
     _textDragLabelStart = null;
     _textDragMoved = false;
-    if (!moved) {
+    _textLabelWasAlreadySelected = false;
+    if (!moved && wasAlreadySelected) {
       _openTextEditor(editingIndex: idx);
     }
   }
@@ -1944,8 +2783,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       if (editingIndex != null) {
         if (value.isEmpty) {
           _textLabels.removeAt(editingIndex);
+          if (_selectedTextLabelIndex == editingIndex) {
+            _selectedTextLabelIndex = null;
+          }
         } else {
           _textLabels[editingIndex].text = value;
+          _selectedTextLabelIndex = editingIndex;
         }
       } else if (value.isNotEmpty && newPosition != null) {
         _textLabels.add(
@@ -1955,6 +2798,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             color: _selectedColor,
           ),
         );
+        _selectedTextLabelIndex = _textLabels.length - 1;
       }
       _textEditorController?.dispose();
       _textEditorController = null;
@@ -1967,6 +2811,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void _deleteTextLabel(int index) {
     setState(() {
       _textLabels.removeAt(index);
+      if (_selectedTextLabelIndex != null) {
+        if (_selectedTextLabelIndex == index) {
+          _selectedTextLabelIndex = null;
+        } else if (_selectedTextLabelIndex! > index) {
+          _selectedTextLabelIndex = _selectedTextLabelIndex! - 1;
+        }
+      }
     });
   }
 
@@ -1981,33 +2832,69 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _instrumentDragStartPivot = inst.pivot;
     _instrumentDragStartRotation = inst.rotation;
     _pencilDragMoved = false;
-    if (inst is ProtractorState) _instrumentDragStartRadiusOrScale = inst.radius;
+    if (inst is ProtractorState)
+      _instrumentDragStartRadiusOrScale = inst.radius;
     if (inst is SetSquareState) _instrumentDragStartRadiusOrScale = inst.scale;
-    if (inst is CompassState && handle == 'tip' && inst.locked) {
+    if (inst is CompassState) _instrumentDragStartArmAngle = inst.armAngle;
+    if (inst is CompassState &&
+        (handle == 'tip' || handle == 'hinge') &&
+        inst.locked) {
       inst.tracedArcPoints = [inst.tipWorldPosition];
       _lastCompassTracePoint = inst.tipWorldPosition;
+      _lastCompassRawAngle = inst.armAngle;
+      _compassCumulativeAngle = inst.armAngle;
     }
     return true;
   }
 
+  /// Applies [rawAngle] (radians, already resolved by the caller -- see the
+  /// 'tip' vs 'hinge' handling in `_updateInstrumentDrag`, since the two
+  /// handles need different math to arrive at the pencil's actual target
+  /// angle) as the compass's new arm angle, tracing a dense arc between the
+  /// previous and new angle while locked. [newRadiusCm], if given, only
+  /// applies while unlocked (dragging the tip itself changes the radius;
+  /// dragging the hinge never should).
   void _updateCompassAngle(
     CompassState c,
-    Offset worldPos, {
+    double rawAngle, {
     required bool allowRadiusChange,
+    double? newRadiusCm,
   }) {
-    final vector = worldPos - c.pivot;
-    if (vector.distance < 1) return;
-    c.armAngle = vector.direction;
+    c.armAngle = rawAngle;
 
     if (c.locked) {
-      final tip = c.tipWorldPosition;
-      if (_lastCompassTracePoint == null ||
-          (tip - _lastCompassTracePoint!).distance >= 1.2) {
-        c.tracedArcPoints.add(tip);
-        _lastCompassTracePoint = tip;
+      // Advance the unwrapped sweep angle by the shortest signed delta from
+      // the last raw sample, then densely fill in every point between the
+      // previous and new angle at a fixed arc-length spacing (~0.5-1.2
+      // world px) -- independent of how far apart the two raw pointer
+      // samples actually were, so the traced arc is always smooth
+      // regardless of the input device's event rate (identical fix to the
+      // Circle/Arc Tool).
+      final double fromAngle = _compassCumulativeAngle;
+      final double rawDelta = _shortestAngleDelta(
+        _lastCompassRawAngle ?? rawAngle,
+        rawAngle,
+      );
+      _compassCumulativeAngle += rawDelta;
+      _lastCompassRawAngle = rawAngle;
+      final double toAngle = _compassCumulativeAngle;
+
+      final double span = toAngle - fromAngle;
+      final double angularStep = (1.2 / c.radiusPx).clamp(0.005, 0.2);
+      final int steps = (span.abs() / angularStep).floor();
+      for (int i = 1; i <= steps; i++) {
+        final double a = fromAngle + angularStep * i * span.sign;
+        c.tracedArcPoints.add(c.pivot + Offset(cos(a), sin(a)) * c.radiusPx);
       }
-    } else if (allowRadiusChange) {
-      c.radiusCm = (vector.distance / kPxPerCm).clamp(0.5, 30.0);
+      final Offset tip =
+          c.pivot + Offset(cos(toAngle), sin(toAngle)) * c.radiusPx;
+      if (c.tracedArcPoints.isEmpty ||
+          (tip - c.tracedArcPoints.last).distance >= 0.5) {
+        c.tracedArcPoints.add(tip);
+      }
+      _lastCompassTracePoint = tip;
+    } else if (allowRadiusChange && newRadiusCm != null) {
+      c.radiusCm = newRadiusCm.clamp(0.5, 30.0);
     }
   }
 
@@ -2021,14 +2908,45 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         final delta = worldPos - _instrumentDragStartWorld!;
         inst.pivot = _instrumentDragStartPivot! + delta;
       } else if (inst is CompassState && handle == 'hinge') {
-        _updateCompassAngle(inst, worldPos, allowRadiusChange: false);
+        // The hinge point isn't on the tip's radius circle (it bulges off
+        // to the side of the pivot-tip line -- see `hingePoint`), so its
+        // raw position can't be read as the pencil's angle directly like
+        // the tip's can. Instead rotate the whole compass by however much
+        // the pointer itself has swept around the pivot since the drag
+        // started, applied on top of the arm angle it started at -- this
+        // is what keeps the pencil tracking accurately from wherever it
+        // actually was, instead of snapping to whatever raw angle the
+        // hinge's own position happens to sit at.
+        final startVec =
+            _instrumentDragStartWorld! - _instrumentDragStartPivot!;
+        final currentVec = worldPos - inst.pivot;
+        if (currentVec.distance >= 1) {
+          final double angleDelta = _signedAngleDiff(
+            startVec.direction,
+            currentVec.direction,
+          );
+          _updateCompassAngle(
+            inst,
+            _instrumentDragStartArmAngle! + angleDelta,
+            allowRadiusChange: false,
+          );
+        }
       } else if (inst is CompassState && handle == 'tip') {
-        _updateCompassAngle(inst, worldPos, allowRadiusChange: !inst.locked);
+        final vector = worldPos - inst.pivot;
+        if (vector.distance >= 1) {
+          _updateCompassAngle(
+            inst,
+            vector.direction,
+            allowRadiusChange: !inst.locked,
+            newRadiusCm: vector.distance / kPxPerCm,
+          );
+        }
       } else if (handle == 'move') {
         final delta = worldPos - _instrumentDragStartWorld!;
         inst.pivot = _instrumentDragStartPivot! + delta;
       } else if (handle == 'rotate') {
-        final startVec = _instrumentDragStartWorld! - _instrumentDragStartPivot!;
+        final startVec =
+            _instrumentDragStartWorld! - _instrumentDragStartPivot!;
         final currentVec = worldPos - inst.pivot;
         inst.rotation =
             _instrumentDragStartRotation! +
@@ -2040,11 +2958,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         if (startDist > 1) {
           final factor = currentDist / startDist;
           if (inst is ProtractorState) {
-            inst.radius =
-                (_instrumentDragStartRadiusOrScale! * factor).clamp(50.0, 400.0);
+            inst.radius = (_instrumentDragStartRadiusOrScale! * factor).clamp(
+              50.0,
+              400.0,
+            );
           } else if (inst is SetSquareState) {
-            inst.scale =
-                (_instrumentDragStartRadiusOrScale! * factor).clamp(0.4, 3.0);
+            inst.scale = (_instrumentDragStartRadiusOrScale! * factor).clamp(
+              0.4,
+              3.0,
+            );
           }
         }
       } else if (handle == 'pencil') {
@@ -2056,7 +2978,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         // angle.
         final edge = _resolvePencilEdge(inst, worldPos);
         if (edge != null) {
-          final onSegment = _projectPointOntoSegment(worldPos, edge.$1, edge.$2);
+          final onSegment = _projectPointOntoSegment(
+            worldPos,
+            edge.$1,
+            edge.$2,
+          );
           final distFromEdgeStart = (onSegment - edge.$1).distance;
           if (inst is RulerState) inst.pencilOffsetPx = distFromEdgeStart;
           if (inst is SetSquareState) inst.pencilOffsetPx = distFromEdgeStart;
@@ -2100,7 +3026,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final inst = _draggedInstrument;
     final handle = _draggedHandle;
 
-    if (inst is CompassState && inst.locked && inst.tracedArcPoints.length > 1) {
+    if (inst is CompassState &&
+        inst.locked &&
+        inst.tracedArcPoints.length > 1) {
       _commitCompassArc(List<Offset>.from(inst.tracedArcPoints));
     }
     if (inst is CompassState) {
@@ -2122,6 +3050,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _draggedInstrument = null;
       _draggedHandle = null;
       _lastCompassTracePoint = null;
+      _lastCompassRawAngle = null;
+      _compassCumulativeAngle = 0;
       _snappedEdgeStart = null;
       _snappedEdgeVector = null;
       _pencilDragMoved = false;
@@ -2129,6 +3059,33 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   // Calculate Group Bounding Box Rect for active selection
+  /// The single selected image's rotation, when there's exactly one line
+  /// selected and it's an image (Fill Tool result or pasted image) --
+  /// otherwise 0. The selection box/handles are drawn and hit-tested
+  /// rotated by this amount so they visually track the image instead of
+  /// staying axis-aligned while only the image itself spins (freehand
+  /// strokes don't need this: their own points already rotate in place, so
+  /// their bounds naturally follow).
+  double get _selectedImageRotation {
+    if (_selectedLines.length == 1) {
+      final line = _selectedLines.first;
+      if (line.fillImage != null) return line.rotation;
+    }
+    return 0;
+  }
+
+  Offset _rotatePointAround(Offset point, Offset center, double angle) {
+    if (angle == 0) return point;
+    final double cosA = cos(angle);
+    final double sinA = sin(angle);
+    final Offset local = point - center;
+    return center +
+        Offset(
+          local.dx * cosA - local.dy * sinA,
+          local.dx * sinA + local.dy * cosA,
+        );
+  }
+
   Rect? _getSelectionBounds() {
     if (_selectedLines.isEmpty) return null;
     double minX = double.infinity;
@@ -2149,8 +3106,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return Rect.fromLTRB(minX, minY, maxX, maxY).inflate(16.0);
   }
 
-  // Hit-test selection controls (Rotation Handle, 4 Corner Resize Handles, Move Area)
-  SelectionHandleType _hitTestSelectionHandles(Offset worldPos, Rect bounds) {
+  // Hit-test selection controls (Rotation Handle, 4 Corner Resize Handles, Move Area).
+  // [selectionRotation] un-rotates [worldPos] into the box's own local
+  // (unrotated) frame first, so handles that are drawn rotated (see
+  // `_drawSelectionOverlay`) are still grabbable where they visually are.
+  SelectionHandleType _hitTestSelectionHandles(
+    Offset worldPos,
+    Rect bounds, [
+    double selectionRotation = 0,
+  ]) {
+    worldPos = _rotatePointAround(worldPos, bounds.center, -selectionRotation);
     final double hitR = 18.0 / _scale;
 
     // Check Rotation Handle (Top Center, 28px above top border)
@@ -2255,6 +3220,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _updatePointerPos(event.localPosition);
     _activePointers[event.pointer] = event.localPosition;
     _lastCentroid = _calculateCentroid();
+    _currentPointerPressure = event.pressure;
 
     // Arm the long-press-to-paste timer for a single-finger press. If a
     // second pointer joins (2-finger pan) or the finger moves too far
@@ -2283,6 +3249,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   void _onPointerMove(PointerMoveEvent event) {
     _updatePointerPos(event.localPosition);
+    _currentPointerPressure = event.pressure;
 
     if (_longPressPasteTimer != null && _longPressPasteDownScreenPos != null) {
       const double moveTolerance = 10.0;
@@ -2435,6 +3402,22 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         return;
       }
 
+      // Tapping the canvas while the full-screen quick-tools box is open
+      // just folds it back, the same as tapping the box itself -- this
+      // tap doesn't also act as a drawing/tool action.
+      if (_quickToolsExpanded) {
+        setState(() => _quickToolsExpanded = false);
+        return;
+      }
+
+      // Laser Pointer: purely a pointing aid, never touches instruments,
+      // strokes, or selection -- handled before any of those so it can
+      // point AT them without accidentally grabbing/dragging one.
+      if (_toolMode == CanvasToolMode.laser) {
+        _addLaserPoint(worldPos);
+        return;
+      }
+
       // Geometry instrument handles (move/rotate/resize, or the compass's
       // pivot/hinge/tip) always take priority over the current drawing
       // tool, so instruments stay adjustable no matter what's selected.
@@ -2442,10 +3425,22 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         return;
       }
 
+      // A selected label's resize handle takes priority over starting a
+      // plain drag on it.
+      if (_tryStartTextResizeHandle(worldPos)) {
+        return;
+      }
+
       // Existing text labels are always draggable/editable too, regardless
       // of the active tool -- same priority as instruments.
       if (_tryStartTextLabelDrag(worldPos)) {
         return;
+      }
+
+      // Tapped anywhere else -- deselect whichever label's close
+      // button/resize handle was showing.
+      if (_selectedTextLabelIndex != null) {
+        setState(() => _selectedTextLabelIndex = null);
       }
 
       if (_toolMode == CanvasToolMode.text) {
@@ -2492,6 +3487,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         return;
       }
 
+      if (_toolMode == CanvasToolMode.square) {
+        _handleSquareToolStart(worldPos);
+        _undoHistory.clear();
+        _selectedLines.clear();
+        _activeDrawingNotifier.value++;
+        return;
+      }
+
       if (_toolMode == CanvasToolMode.fill) {
         // A tap-and-release action, not a drag -- handled entirely here.
         _undoHistory.clear();
@@ -2510,7 +3513,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // Check if user is touching selection bounds or control handles (Move, Resize, Rotate)
       final selectionBounds = _getSelectionBounds();
       if (selectionBounds != null) {
-        final handle = _hitTestSelectionHandles(worldPos, selectionBounds);
+        final double selRotation = _selectedImageRotation;
+        final handle = _hitTestSelectionHandles(
+          worldPos,
+          selectionBounds,
+          selRotation,
+        );
         if (handle != SelectionHandleType.none) {
           _activeHandle = handle;
           _transformStartPos = worldPos;
@@ -2523,7 +3531,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             );
           } else if (handle != SelectionHandleType.move) {
             final Offset anchor = _getResizeAnchor(handle, selectionBounds);
-            _initialScaleDist = (worldPos - anchor).distance;
+            final Offset localWorldPos = _rotatePointAround(
+              worldPos,
+              selectionBounds.center,
+              -selRotation,
+            );
+            _initialScaleDist = (localWorldPos - anchor).distance;
             if (_initialScaleDist == 0) _initialScaleDist = 1.0;
           }
           return;
@@ -2538,10 +3551,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         final hitLine = _findLineAt(worldPos);
         setState(() {
           if (hitLine != null) {
+            final group = hitLine.groupId != null
+                ? _lines.where((l) => l.groupId == hitLine.groupId).toSet()
+                : {hitLine};
             if (_selectedLines.contains(hitLine)) {
-              _selectedLines.remove(hitLine);
+              _selectedLines.removeAll(group);
             } else {
-              _selectedLines.add(hitLine);
+              _selectedLines.addAll(group);
             }
           } else {
             _selectedLines.clear();
@@ -2559,16 +3575,30 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         final hitLine = _findLineAt(worldPos);
         if (hitLine != null) {
           setState(() {
-            _undoHistory.add(hitLine);
-            _lines.remove(hitLine);
-            _selectedLines.remove(hitLine);
-            _removeOrphanedAngleLabels([hitLine]);
+            final group = hitLine.groupId != null
+                ? _lines.where((l) => l.groupId == hitLine.groupId).toSet()
+                : {hitLine};
+            _undoHistory.addAll(group);
+            _lines.removeWhere((l) => group.contains(l));
+            _selectedLines.removeAll(group);
+            _removeOrphanedAngleLabels(group);
           });
         }
       } else {
         final bool isEraserStroke =
             _toolMode == CanvasToolMode.eraser || _isStylusBarrelPressed;
-        final double activeWidth = isEraserStroke ? _eraserWidth : _penWidth;
+        // Pressure-sensitive width, ink only (not the eraser) -- fixed for
+        // the whole stroke from how hard the pen first touched down,
+        // rather than continuously tapering, so an already-drawn part of
+        // the line never visibly changes width later in the same stroke.
+        // At the default pressure of 1.0 (every non-stylus device: mouse,
+        // plain touch) this multiplier is exactly 1.0, so nothing changes
+        // for anyone without a pressure-sensitive pen.
+        final double pressureMultiplier = (0.5 + _currentPointerPressure * 0.5)
+            .clamp(0.4, 1.6);
+        final double activeWidth = isEraserStroke
+            ? _eraserWidth
+            : _penWidth * pressureMultiplier;
 
         final newLine = MathsPadLine(
           points: [MathsPadStrokePoint(worldPos)],
@@ -2577,6 +3607,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           isEraser: isEraserStroke,
         );
         _currentLine = newLine;
+        _resetPenAutoStraighten();
         _undoHistory.clear();
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
@@ -2607,6 +3638,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return;
     } else if (_draggedInstrument != null) {
       _updateInstrumentDrag(_screenToWorld(details.localFocalPoint));
+      return;
+    } else if (_resizingTextLabelIndex != null) {
+      _updateTextResizeHandle(_screenToWorld(details.localFocalPoint));
       return;
     } else if (_draggedTextLabelIndex != null) {
       _updateTextLabelDrag(_screenToWorld(details.localFocalPoint));
@@ -2646,30 +3680,25 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
         for (final line in _selectedLines) {
           if (line.points.isEmpty) continue;
-          // A Fill Tool region is a raster image, not a real stroke -- there's
-          // no way to rotate its pixels here, so leave it stationary rather
-          // than rotating just its bounding corner points (which would only
-          // skew the rect, not actually rotate the image).
-          if (line.fillImage != null) continue;
-
-          // Calculate individual stroke center (centroid of this line's points)
-          double sumX = 0;
-          double sumY = 0;
-          for (final p in line.points) {
-            sumX += p.offset.dx;
-            sumY += p.offset.dy;
+          // A Fill Tool region (or pasted image) is a raster image, not a
+          // real stroke -- rotating its two bounding corner points would
+          // only skew the (still axis-aligned) rect, not actually rotate
+          // the image. Instead spin it in place around its own bounding-box
+          // center by accumulating an angle applied at paint time, leaving
+          // its points/bounds (used for hit-testing/selection) untouched --
+          // matching how a freehand stroke rotates around its own center.
+          if (line.fillImage != null) {
+            line.rotation += angleDelta;
+            continue;
           }
-          final Offset lineCenter = Offset(
-            sumX / line.points.length,
-            sumY / line.points.length,
-          );
 
-          // Rotate each stroke around its OWN individual center!
+          // Rotate all points around the shared group center (_transformCenter)
+          // so every stroke in the selection moves as one rigid entity.
           for (int i = 0; i < line.points.length; i++) {
-            final loc = line.points[i].offset - lineCenter;
+            final loc = line.points[i].offset - _transformCenter!;
             final rotX = loc.dx * cosA - loc.dy * sinA;
             final rotY = loc.dx * sinA + loc.dy * cosA;
-            line.points[i].offset = lineCenter + Offset(rotX, rotY);
+            line.points[i].offset = _transformCenter! + Offset(rotX, rotY);
           }
           line.invalidateCache();
         }
@@ -2683,7 +3712,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             _activeHandle,
             selectionBounds,
           );
-          final double currentDist = (worldPos - anchor).distance;
+          final Offset localWorldPos = _rotatePointAround(
+            worldPos,
+            selectionBounds.center,
+            -_selectedImageRotation,
+          );
+          final double currentDist = (localWorldPos - anchor).distance;
           final double scaleFactor =
               (currentDist / (_initialScaleDist == 0 ? 1.0 : _initialScaleDist))
                   .clamp(0.05, 20.0);
@@ -2707,10 +3741,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       final worldPos = _screenToWorld(details.localFocalPoint);
       final hitLine = _findLineAt(worldPos);
       if (hitLine != null) {
-        _undoHistory.add(hitLine);
-        _lines.remove(hitLine);
-        _selectedLines.remove(hitLine);
-        _removeOrphanedAngleLabels([hitLine]);
+        final group = hitLine.groupId != null
+            ? _lines.where((l) => l.groupId == hitLine.groupId).toSet()
+            : {hitLine};
+        _undoHistory.addAll(group);
+        _lines.removeWhere((l) => group.contains(l));
+        _selectedLines.removeAll(group);
+        _removeOrphanedAngleLabels(group);
         _finishedStrokesNotifier.value++;
         _activeDrawingNotifier.value++;
       }
@@ -2728,6 +3765,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _lastDragWorldPos = worldPos;
       _finishedStrokesNotifier.value++;
       _activeDrawingNotifier.value++;
+    } else if (_toolMode == CanvasToolMode.laser) {
+      _addLaserPoint(_screenToWorld(details.localFocalPoint));
     } else if (_toolMode == CanvasToolMode.lasso && _lassoPoints.isNotEmpty) {
       final worldPos = _screenToWorld(details.localFocalPoint);
       _lassoPoints.add(worldPos);
@@ -2753,7 +3792,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       setState(() {
         _handleAngleToolUpdate(_screenToWorld(details.localFocalPoint));
       });
-    } else if (_toolMode == CanvasToolMode.polygonAngle && _currentLine != null) {
+    } else if (_toolMode == CanvasToolMode.polygonAngle &&
+        _currentLine != null) {
       setState(() {
         _handlePolygonToolUpdate(_screenToWorld(details.localFocalPoint));
       });
@@ -2764,9 +3804,29 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       setState(() {
         _handleCircleArcToolUpdate(_screenToWorld(details.localFocalPoint));
       });
+    } else if (_toolMode == CanvasToolMode.square && _currentLine != null) {
+      // setState needed (same reason as the circle/arc tool above): the
+      // live length badge lives in the instruments-overlay Stack.
+      setState(() {
+        _handleSquareToolUpdate(_screenToWorld(details.localFocalPoint));
+      });
     } else if (_currentLine != null) {
       // 1-finger freehand drawing stroke update
       final worldPos = _screenToWorld(details.localFocalPoint);
+
+      if (_penAutoStraightened) {
+        // Already snapped to a straight line by the hold -- keep its
+        // endpoint following the pointer, same as the Straight Line Tool,
+        // instead of resuming freehand point sampling.
+        final Offset start = _currentLine!.points.first.offset;
+        _currentLine!.points
+          ..clear()
+          ..add(MathsPadStrokePoint(start))
+          ..add(MathsPadStrokePoint(worldPos));
+        _activeDrawingNotifier.value++;
+        return;
+      }
+
       if (_currentLine!.points.isEmpty ||
           (worldPos - _currentLine!.points.last.offset).distance >= 1.2) {
         _currentLine!.points.add(MathsPadStrokePoint(worldPos));
@@ -2775,12 +3835,40 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         }
         _activeDrawingNotifier.value++;
       }
+
+      // Hold-to-straighten: ink only, and only restart the timer once the
+      // pointer has actually moved away from wherever it's currently
+      // anchored -- same hold-to-arm pattern the Circle/Arc, Compass, and
+      // Square tools already use.
+      if (!_currentLine!.isEraser) {
+        const double holdTolerance = 6.0;
+        if (_penHoldAnchor == null ||
+            (worldPos - _penHoldAnchor!).distance > holdTolerance) {
+          _penHoldAnchor = worldPos;
+          _penHoldTimer?.cancel();
+          final MathsPadLine lineAtArm = _currentLine!;
+          final Offset anchorForThisHold = worldPos;
+          _penHoldTimer = Timer(const Duration(seconds: 1), () {
+            if (!mounted || _currentLine != lineAtArm) return;
+            _tryAutoStraightenPenLine(anchorForThisHold);
+          });
+        }
+      }
     }
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
+    if (_toolMode == CanvasToolMode.laser) {
+      // The trail keeps fading on its own via `_laserFadeTimer` -- nothing
+      // to commit or clean up on release.
+      return;
+    }
     if (_draggedInstrument != null) {
       _endInstrumentDrag();
+      return;
+    }
+    if (_resizingTextLabelIndex != null) {
+      _endTextResizeHandle();
       return;
     }
     if (_draggedTextLabelIndex != null) {
@@ -2814,6 +3902,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_toolMode == CanvasToolMode.circleArc) {
       setState(() {
         _handleCircleArcToolEnd();
+      });
+      return;
+    }
+    if (_toolMode == CanvasToolMode.square) {
+      setState(() {
+        _handleSquareToolEnd();
       });
       return;
     }
@@ -2880,7 +3974,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       for (final line in _lines) {
         for (final point in line.points) {
           if (lassoPath.contains(point.offset)) {
-            selectedContained.add(line);
+            final group = line.groupId != null
+                ? _lines.where((l) => l.groupId == line.groupId).toSet()
+                : {line};
+            selectedContained.addAll(group);
             break;
           }
         }
@@ -2904,6 +4001,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _buildAndCachePath(_currentLine!);
       _lines.add(_currentLine!);
       _currentLine = null;
+      _resetPenAutoStraighten();
       _finishedStrokesNotifier.value++;
       _activeDrawingNotifier.value++;
     }
@@ -2941,13 +4039,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     setState(() {
       _clipboard = _selectedLines.map((line) {
         return MathsPadLine(
-          points: line.points.map((p) => MathsPadStrokePoint(p.offset)).toList(),
+          points: line.points
+              .map((p) => MathsPadStrokePoint(p.offset))
+              .toList(),
           color: line.color,
           strokeWidth: line.strokeWidth,
           isEraser: line.isEraser,
           isShape: line.isShape,
           fillImage: line.fillImage,
           fillWorldBounds: line.fillWorldBounds,
+          rotation: line.rotation,
         );
       }).toList();
     });
@@ -2995,7 +4096,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
     final Offset translation = (targetCenter + stepOffset) - clipboardCenter;
 
-    final List<MathsPadLine> pasted = _clipboard.map((line) {
+    final Map<String, String> groupMapping = {};
+
+    final List<MathsPadLine> pasted = _clipboard.map<MathsPadLine>((line) {
+      String? newGroupId;
+      if (line.groupId != null) {
+        newGroupId = groupMapping.putIfAbsent(
+          line.groupId!,
+          () => '${DateTime.now().microsecondsSinceEpoch}_${line.groupId}',
+        );
+      }
+
       final newLine = MathsPadLine(
         points: line.points
             .map((p) => MathsPadStrokePoint(p.offset + translation))
@@ -3006,6 +4117,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         isShape: line.isShape,
         fillImage: line.fillImage,
         fillWorldBounds: line.fillWorldBounds?.shift(translation),
+        rotation: line.rotation,
+        groupId: newGroupId,
       );
       _buildAndCachePath(newLine);
       return newLine;
@@ -3033,9 +4146,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _screenToWorld(Offset(_canvasSize.width / 2, _canvasSize.height / 2));
 
     try {
-      final ClipboardReader reader = await ClipboardReader.readClipboard();
+      final SystemClipboard? clipboard = SystemClipboard.instance;
+      if (clipboard == null) {
+        _pasteClipboard();
+        return;
+      }
+      final ClipboardReader reader = await clipboard.read();
 
-      const List<SimpleDataFormat<Uint8List>> imageFormats = [
+      const List<SimpleFileFormat> imageFormats = [
         Formats.png,
         Formats.jpeg,
         Formats.gif,
@@ -3043,8 +4161,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         Formats.tiff,
       ];
       for (final format in imageFormats) {
-        if (reader.hasValue(format)) {
-          final Uint8List? bytes = await reader.readValue(format);
+        if (reader.canProvide(format)) {
+          final Uint8List? bytes = await _readClipboardFileBytes(
+            reader,
+            format,
+          );
           if (bytes != null && bytes.isNotEmpty) {
             await _insertPastedImageBytes(bytes, placementPos);
             return;
@@ -3056,7 +4177,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // Explorer, or a file dragged from Finder) put a file reference on
       // the clipboard instead of raw image bytes. Read the file from disk
       // in that case. Not applicable on web (no filesystem access there).
-      if (!kIsWeb && reader.hasValue(Formats.fileUri)) {
+      if (!kIsWeb && reader.canProvide(Formats.fileUri)) {
         final Uri? fileUri = await reader.readValue(Formats.fileUri);
         if (fileUri != null && fileUri.isScheme('file')) {
           const imageExtensions = {
@@ -3086,7 +4207,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         }
       }
 
-      if (reader.hasValue(Formats.plainText)) {
+      if (reader.canProvide(Formats.plainText)) {
         final String? text = await reader.readValue(Formats.plainText);
         final String trimmed = text?.trim() ?? '';
         if (trimmed.isNotEmpty) {
@@ -3109,6 +4230,31 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
 
     _pasteClipboard();
+  }
+
+  /// Reads the full bytes of a clipboard [FileFormat] entry (e.g. a pasted
+  /// image). `super_clipboard`'s [ClipboardReader.readValue] only supports
+  /// small in-memory [ValueFormat]s (text/URIs); file-backed formats like
+  /// images are delivered through the callback-based [DataReader.getFile]
+  /// instead, so this wraps that into a plain awaitable result.
+  Future<Uint8List?> _readClipboardFileBytes(
+    ClipboardReader reader,
+    FileFormat format,
+  ) {
+    final completer = Completer<Uint8List?>();
+    final progress = reader.getFile(
+      format,
+      (file) async {
+        final bytes = await file.readAll();
+        if (!completer.isCompleted) completer.complete(bytes);
+      },
+      onError: (e) {
+        debugPrint('Mathpad paste: failed to read clipboard file: $e');
+        if (!completer.isCompleted) completer.complete(null);
+      },
+    );
+    if (progress == null) return Future.value(null);
+    return completer.future;
   }
 
   /// Decodes pasted image [bytes] and adds them as an image-backed
@@ -3164,17 +4310,32 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final List<MathsPadLine> duplicatedLines = [];
     const Offset copyOffset = Offset(25.0, 25.0);
 
+    final Map<String, String> groupMapping = {};
+
     for (final line in _selectedLines) {
+      String? newGroupId;
+      if (line.groupId != null) {
+        newGroupId = groupMapping.putIfAbsent(
+          line.groupId!,
+          () => '${DateTime.now().microsecondsSinceEpoch}_${line.groupId}',
+        );
+      }
+
       final newPoints = line.points
-          .map((p) => MathsPadStrokePoint(p.offset + copyOffset))
+          .map<MathsPadStrokePoint>(
+            (p) => MathsPadStrokePoint(p.offset + copyOffset),
+          )
           .toList();
       final newLine = MathsPadLine(
         points: newPoints,
         color: line.color,
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
+        isShape: line.isShape,
         fillImage: line.fillImage,
         fillWorldBounds: line.fillWorldBounds?.shift(copyOffset),
+        rotation: line.rotation,
+        groupId: newGroupId,
       );
       _buildAndCachePath(newLine);
       duplicatedLines.add(newLine);
@@ -3185,6 +4346,23 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _undoHistory.addAll(duplicatedLines);
       _selectedLines.clear();
       _selectedLines.addAll(duplicatedLines);
+    });
+    _finishedStrokesNotifier.value++;
+  }
+
+  /// Recolours every currently-selected stroke/shape in place (mutating
+  /// `MathsPadLine.color` rather than swapping in new line objects, so
+  /// `_selectedLines` membership and any fixed angle label's `sourceLines`
+  /// reference stay valid). Fill Tool results are skipped -- their colour
+  /// lives in already-rasterized pixels, not this field, so setting it
+  /// wouldn't visibly do anything.
+  void _recolorSelectedLines(Color newColor) {
+    if (_selectedLines.isEmpty) return;
+    setState(() {
+      for (final line in _selectedLines) {
+        if (line.fillImage != null) continue;
+        line.color = newColor;
+      }
     });
     _finishedStrokesNotifier.value++;
   }
@@ -3218,7 +4396,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         for (int i = 0; i <= 64; i++) {
           final double a = (i / 64) * 2 * pi;
           pts.add(
-            MathsPadStrokePoint(center + Offset(cos(a) * radiusX, sin(a) * radiusY)),
+            MathsPadStrokePoint(
+              center + Offset(cos(a) * radiusX, sin(a) * radiusY),
+            ),
           );
         }
         createdLines.add(
@@ -3308,7 +4488,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         for (int i = 0; i <= 5; i++) {
           final double a = (i / 5) * 2 * pi - pi / 2;
           pts.add(
-            MathsPadStrokePoint(center + Offset(cos(a) * radiusX, sin(a) * radiusY)),
+            MathsPadStrokePoint(
+              center + Offset(cos(a) * radiusX, sin(a) * radiusY),
+            ),
           );
         }
         createdLines.add(
@@ -3326,7 +4508,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         for (int i = 0; i <= 6; i++) {
           final double a = (i / 6) * 2 * pi;
           pts.add(
-            MathsPadStrokePoint(center + Offset(cos(a) * radiusX, sin(a) * radiusY)),
+            MathsPadStrokePoint(
+              center + Offset(cos(a) * radiusX, sin(a) * radiusY),
+            ),
           );
         }
         createdLines.add(
@@ -3363,7 +4547,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           final double rx = i.isEven ? radiusX : radiusX * 0.45;
           final double ry = i.isEven ? radiusY : radiusY * 0.45;
           final double a = (i / 10) * 2 * pi - pi / 2;
-          pts.add(MathsPadStrokePoint(center + Offset(cos(a) * rx, sin(a) * ry)));
+          pts.add(
+            MathsPadStrokePoint(center + Offset(cos(a) * rx, sin(a) * ry)),
+          );
         }
         pts.add(pts.first);
         createdLines.add(
@@ -3570,6 +4756,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         break;
     }
 
+    final String shapeGroupId = DateTime.now().microsecondsSinceEpoch
+        .toString();
+    for (final line in createdLines) {
+      line.groupId = shapeGroupId;
+    }
+
     return createdLines;
   }
 
@@ -3651,12 +4843,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   @override
   Widget build(BuildContext context) {
-    final isDark = context.isDark;
+    final bool isDark =
+        _themeMode == MathPadTheme.cosmos ||
+        _themeMode == MathPadTheme.dark ||
+        _themeMode == MathPadTheme.aswadLail;
+
     final bgColor = widget.isTransparentBg
         ? Colors.transparent
-        : (_bgMode == CanvasBgMode.jyamitiCosmos
+        : (_themeMode == MathPadTheme.cosmos
               ? const Color(0xFF0F2B52)
-              : (isDark ? const Color(0xFF0F172A) : const Color(0xFFFCFDFE)));
+              : (_themeMode == MathPadTheme.aswadLail
+                    ? const Color(0xFF000000)
+                    : (isDark ? const Color(0xFF0F172A) : const Color(0xFFFCFDFE))));
 
     return Focus(
       focusNode: _canvasFocusNode,
@@ -3697,22 +4895,293 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   ),
                 ],
         ),
-        child: Column(
-          children: [
-            // Whiteboard Header Controls Toolbar
-            _buildToolbar(context, isDark),
+        child: _buildToolbarAndCanvas(context, isDark, bgColor),
+      ),
+    );
+  }
 
-            // Infinite Writing Canvas Body
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // Track the canvas's own size (excluding the toolbar
-                  // above it) so newly-added instruments can be centered
-                  // in the actually-visible canvas area.
-                  _canvasSize = constraints.biggest;
-                  return _buildCanvasStack(context, isDark, bgColor);
-                },
+  Widget _buildToolbarAndCanvas(
+    BuildContext context,
+    bool isDark,
+    Color bgColor,
+  ) {
+    // Infinite Writing Canvas Body -- shared between both toolbar layouts
+    // below, since only where it sits (not how it's built) changes with
+    // `_toolbarOnLeft`.
+    final Widget canvasArea = Expanded(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Track the canvas's own size (excluding the toolbar beside/
+          // above it) so newly-added instruments can be centered in the
+          // actually-visible canvas area.
+          _canvasSize = constraints.biggest;
+          return _buildCanvasStack(context, isDark, bgColor);
+        },
+      ),
+    );
+
+    if (_isFullScreenMode) {
+      // Matches whichever edge the toolbar was already docked to -- the
+      // pull-handle and reveal direction follow `_toolbarOnLeft` instead
+      // of always defaulting to the top.
+      final Widget slidingToolbar = AnimatedSlide(
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        offset: _toolbarRevealedInFullScreen
+            ? Offset.zero
+            : (_toolbarOnLeft ? const Offset(-1.2, 0) : const Offset(0, -1.2)),
+        child: _toolbarOnLeft
+            ? RotatedBox(quarterTurns: 1, child: _buildToolbar(context, isDark))
+            : _buildToolbar(context, isDark),
+      );
+      final Widget handle = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => setState(
+          () => _toolbarRevealedInFullScreen = !_toolbarRevealedInFullScreen,
+        ),
+        child: Container(
+          width: _toolbarOnLeft ? 5 : 48,
+          height: _toolbarOnLeft ? 48 : 5,
+          decoration: BoxDecoration(
+            color: (isDark ? Colors.white : Colors.black).withValues(
+              alpha: 0.28,
+            ),
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+      );
+
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                _canvasSize = constraints.biggest;
+                return _buildCanvasStack(context, isDark, bgColor);
+              },
+            ),
+          ),
+          // The full toolbar -- hidden off-screen by default, sliding into
+          // view when the pull-handle is tapped, instead of permanently
+          // costing any canvas space. Positioned just clear of the
+          // always-visible handle strip so the two never overlap once
+          // revealed.
+          if (_toolbarOnLeft)
+            Positioned(top: 0, bottom: 0, left: 22, child: slidingToolbar)
+          else
+            Positioned(left: 0, right: 0, top: 22, child: slidingToolbar),
+          // Small always-visible pull-handle standing in for the topbar --
+          // tap to reveal/hide the full toolbar.
+          if (_toolbarOnLeft)
+            Positioned(top: 0, bottom: 0, left: 8, child: Center(child: handle))
+          else
+            Positioned(left: 0, right: 0, top: 8, child: Center(child: handle)),
+          // Floating glass quick-tools box -- bottom-centre, clear of the
+          // pull-handle above regardless of which edge it's docked to.
+          // Centering it here (rather than pinning to one side) is what
+          // makes the expand animation below grow outward in both
+          // directions instead of just widening off to one side.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 16,
+            child: Center(child: _buildFullScreenQuickTools(isDark)),
+          ),
+        ],
+      );
+    }
+    if (_toolbarOnLeft) {
+      return Row(
+        children: [
+          // Same 90° clockwise rotation as before -- it's what keeps the
+          // button order reading top-to-bottom (matching the un-rotated
+          // layout) instead of reversing it. `_buildToolbar` itself builds
+          // its rounded-corner/border decoration pre-inverted when
+          // `_toolbarOnLeft` is true specifically so that, after this same
+          // rotation, the corners/border land correctly for a left dock
+          // (rounded on the outer left edge, bordered on the canvas-facing
+          // right edge) instead of needing a different rotation direction
+          // that would reverse the button order to get there.
+          RotatedBox(quarterTurns: 1, child: _buildToolbar(context, isDark)),
+          canvasArea,
+        ],
+      );
+    }
+    return Column(
+      children: [
+        // Whiteboard Header Controls Toolbar
+        _buildToolbar(context, isDark),
+        canvasArea,
+      ],
+    );
+  }
+
+  /// Full-screen-only floating quick-tools bubble, styled like Apple's
+  /// frosted "liquid glass" -- a small translucent blurred droplet that
+  /// widens into a pill of a few essentials (pen, lasso, 3 quick colours,
+  /// undo) when tapped, so the tutor doesn't have to pull the whole
+  /// toolbar into view for the handful of actions used most while
+  /// actively teaching. Collapsed and expanded states each own their tap
+  /// target directly (rather than one wrapping the other) so a tap on an
+  /// inner button while expanded can't also re-trigger the outer toggle.
+  Widget _buildFullScreenQuickTools(bool isDark) {
+    final Color iconColor = isDark ? Colors.white : const Color(0xFF1E293B);
+
+    Widget glassShell({required double width, required Widget child}) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+            width: width,
+            height: 56,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isDark
+                    ? [
+                        Colors.white.withValues(alpha: 0.22),
+                        Colors.white.withValues(alpha: 0.06),
+                      ]
+                    : [
+                        Colors.white.withValues(alpha: 0.55),
+                        Colors.white.withValues(alpha: 0.22),
+                      ],
               ),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: isDark ? 0.28 : 0.65),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.22),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: child,
+          ),
+        ),
+      );
+    }
+
+    // The box toggle itself -- centre element both collapsed and expanded,
+    // so the container growing wider around it (it's laid out via
+    // `Center` at the call site) reads as tools sliding out to either
+    // side of the box rather than the box itself moving.
+    final Widget box = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () =>
+          setState(() => _quickToolsExpanded = !_quickToolsExpanded),
+      child: Container(
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(9),
+          color: _quickToolsExpanded
+              ? const Color(0xFF6366F1).withValues(alpha: 0.85)
+              : Colors.transparent,
+        ),
+        child: Icon(
+          Icons.crop_square_rounded,
+          size: 20,
+          color: _quickToolsExpanded ? Colors.white : iconColor,
+        ),
+      ),
+    );
+
+    if (!_quickToolsExpanded) {
+      return glassShell(width: 56, child: box);
+    }
+
+    final List<Color> quickColors = [_palette[0], _palette[1], _palette[2]];
+    Widget colorDot(Color c) {
+      return GestureDetector(
+        onTap: () {
+          // Same as the main palette: recolour an existing selection in
+          // place instead of just arming the pen.
+          if (_selectedLines.isNotEmpty) {
+            _recolorSelectedLines(c);
+            setState(() => _selectedColor = c);
+            return;
+          }
+          setState(() {
+            _selectedColor = c;
+            _toolMode = CanvasToolMode.pen;
+            _activeShapeTool = null;
+          });
+        },
+        child: Container(
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            color: c,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white,
+              width: _selectedColor.value == c.value ? 2.6 : 1.4,
+            ),
+            boxShadow: const [
+              BoxShadow(color: Colors.black26, blurRadius: 2, offset: Offset(0, 1)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return glassShell(
+      width: 296,
+      // Clamped to its own full 296-wide layout regardless of what width
+      // the AnimatedContainer above has actually reached at this frame --
+      // it starts the 320ms width tween at 56 the instant this branch is
+      // returned, so without this the Row (mainAxisSize.max, spaceEvenly)
+      // would overflow every narrower in-between frame of the expand
+      // animation, not just the very first one.
+      child: OverflowBox(
+        minWidth: 296,
+        maxWidth: 296,
+        minHeight: 56,
+        maxHeight: 56,
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            // Left of the box.
+            _quickToolIconButton(
+              icon: Icons.edit_rounded,
+              iconColor: iconColor,
+              isSelected: _toolMode == CanvasToolMode.pen,
+              onTap: () => setState(() {
+                _toolMode = CanvasToolMode.pen;
+                _activeShapeTool = null;
+              }),
+            ),
+            _quickToolIconButton(
+              icon: Icons.gesture_rounded,
+              iconColor: iconColor,
+              isSelected: _toolMode == CanvasToolMode.lasso,
+              onTap: () => setState(() {
+                _toolMode = CanvasToolMode.lasso;
+                _activeShapeTool = null;
+                _selectedLines.clear();
+              }),
+            ),
+            colorDot(quickColors[0]),
+            box,
+            // Right of the box.
+            colorDot(quickColors[1]),
+            colorDot(quickColors[2]),
+            _quickToolIconButton(
+              icon: Icons.undo_rounded,
+              iconColor: iconColor,
+              isSelected: false,
+              onTap: _undo,
             ),
           ],
         ),
@@ -3720,636 +5189,777 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
+  Widget _quickToolIconButton({
+    required IconData icon,
+    required Color iconColor,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: isSelected
+              ? const Color(0xFF6366F1).withValues(alpha: 0.85)
+              : Colors.transparent,
+        ),
+        child: Icon(
+          icon,
+          size: 17,
+          color: isSelected ? Colors.white : iconColor,
+        ),
+      ),
+    );
+  }
+
   Widget _buildCanvasStack(BuildContext context, bool isDark, Color bgColor) {
     return ClipRRect(
-                borderRadius: const BorderRadius.vertical(
-                  bottom: Radius.circular(18),
+      // Full screen: the canvas touches all four edges of the
+      // outer rounded container directly (no adjacent toolbar
+      // edge left flat), so every corner rounds.
+      borderRadius: _isFullScreenMode
+          ? const BorderRadius.all(Radius.circular(18))
+          : (_toolbarOnLeft
+                ? const BorderRadius.horizontal(right: Radius.circular(18))
+                : const BorderRadius.vertical(bottom: Radius.circular(18))),
+      child: Stack(
+        children: [
+          _buildCanvasCaptureArea(context, isDark, bgColor),
+          if (_recordingState != MathPadRecordingState.idle)
+            _buildRecordingBadge(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecordingBadge(BuildContext context) {
+    final bool encoding = _recordingState == MathPadRecordingState.encoding;
+    return Positioned(
+      top: 16,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.75),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (encoding)
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              else
+                const Icon(
+                  Icons.fiber_manual_record_rounded,
+                  size: 14,
+                  color: Colors.redAccent,
                 ),
-                child: Stack(
-                  children: [
-                    Listener(
-                      onPointerDown: _onPointerDown,
-                      onPointerMove: _onPointerMove,
-                      onPointerUp: _onPointerUp,
-                      onPointerCancel: _onPointerCancel,
-                      onPointerSignal: _onPointerSignal,
-                      onPointerHover: _onPointerHover,
-                      child: GestureDetector(
-                        onScaleStart: _onScaleStart,
-                        onScaleUpdate: _onScaleUpdate,
-                        onScaleEnd: _onScaleEnd,
-                        // ValueListenableBuilder Dual-Layer Stack:
-                        // Layer 1 (Finished Strokes): Repaints ONLY when _lines updates (0 repaints during live drag)
-                        // Layer 2 (Active Drawing): Repaints live stroke overlay at 120 FPS
-                        child: ValueListenableBuilder<Offset>(
-                          valueListenable: _panNotifier,
-                          builder: (_, pan, child) {
-                            return ValueListenableBuilder<double>(
-                              valueListenable: _scaleNotifier,
-                              builder: (_, sc, child) {
-                                return Stack(
-                                  children: [
-                                    // Layer 1: Finished Strokes & Background
-                                    ValueListenableBuilder<int>(
-                                      valueListenable: _finishedStrokesNotifier,
-                                      builder: (_, _, child) {
-                                        return RepaintBoundary(
-                                          child: CustomPaint(
-                                            size: Size.infinite,
-                                            painter: _MathsPadFinishedStrokesPainter(
-                                              lines: _lines,
-                                              bgMode: _bgMode,
-                                              isDark: isDark,
-                                              canvasBgColor: bgColor,
-                                              panOffset: pan,
-                                              scale: sc,
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    ),
+              const SizedBox(width: 8),
+              Text(
+                encoding
+                    ? 'Encoding…'
+                    : 'REC ${_formatRecordingElapsed(_recordingElapsed)}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-                                    // Layer 2: Active Drawing Overlay & Handles
-                                    ValueListenableBuilder<int>(
-                                      valueListenable: _activeDrawingNotifier,
-                                      builder: (_, _, child) {
-                                        return RepaintBoundary(
-                                          child: CustomPaint(
-                                            size: Size.infinite,
-                                            painter:
-                                                _MathsPadActiveOverlayPainter(
-                                                  currentLine: _currentLine,
-                                                  selectedLines: _selectedLines,
-                                                  lassoPoints: _lassoPoints,
-                                                  panOffset: pan,
-                                                  scale: sc,
-                                                  activeShapeTool:
-                                                      _activeShapeTool,
-                                                  shapeDragStartPos:
-                                                      _shapeDragStartPos,
-                                                  shapeDragCurrentPos:
-                                                      _shapeDragCurrentPos,
-                                                  selectedColor: _selectedColor,
-                                                  penWidth: _penWidth,
-                                                  isDark: isDark,
-                                                ),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ],
-                                );
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-
-                    // Geometry Instruments Overlay (Ruler/Protractor/Compass/Set Squares).
-                    // Lives inside the same pan/zoom transform as the canvas layers above,
-                    // so instruments stay attached to the drawing plane as the user
-                    // pans/zooms. Each instrument widget manages its own small handle
-                    // GestureDetectors; empty overlay space falls through to the
-                    // drawing Listener/GestureDetector beneath it.
-                    IgnorePointer(
-                      ignoring:
-                          _instruments.isEmpty &&
-                          _textLabels.isEmpty &&
-                          !_textEditorOpen &&
-                          _pastePopupWorldPos == null,
-                      child: ValueListenableBuilder<Offset>(
-                        valueListenable: _panNotifier,
-                        builder: (_, pan, child) {
-                          return ValueListenableBuilder<double>(
-                            valueListenable: _scaleNotifier,
-                            builder: (_, sc, child) {
-                              return Transform(
-                                transform: Matrix4.identity()
-                                  ..translate(pan.dx, pan.dy)
-                                  ..scale(sc),
-                                child: Stack(
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    ..._instruments.map(_buildInstrumentWidget),
-                                    IgnorePointer(
-                                      child: CustomPaint(
-                                        size: Size.infinite,
-                                        painter: _AngleArcPainter(_currentAngleArcs()),
-                                      ),
-                                    ),
-                                    ..._fixedAngleLabels.map(
-                                      (l) => _buildAngleBadge(
-                                        l.labelPosition,
-                                        l.text,
-                                        live: false,
-                                      ),
-                                    ),
-                                    if (_toolMode == CanvasToolMode.angle &&
-                                        _angleWaitingForSecondLine &&
-                                        _angleVertex != null &&
-                                        _angleOtherEndOfA != null &&
-                                        _angleLiveEnd != null &&
-                                        _angleLiveDegrees != null)
-                                      _buildAngleBadge(
-                                        _bisectorPoint(
-                                          _angleVertex!,
-                                          (_angleOtherEndOfA! - _angleVertex!).direction,
-                                          _signedAngleDiff(
-                                            (_angleOtherEndOfA! - _angleVertex!).direction,
-                                            (_angleLiveEnd! - _angleVertex!).direction,
-                                          ),
-                                        ),
-                                        '${_angleLiveDegrees!.toStringAsFixed(1)}°',
-                                        live: true,
-                                      ),
-                                    if (_toolMode ==
-                                            CanvasToolMode.polygonAngle &&
-                                        _polygonVertices.length >= 2 &&
-                                        _polygonLiveEnd != null &&
-                                        _polygonLiveDegrees != null)
-                                      _buildAngleBadge(
-                                        _bisectorPoint(
-                                          _polygonVertices.last,
-                                          (_polygonVertices[_polygonVertices.length - 2] -
-                                                  _polygonVertices.last)
-                                              .direction,
-                                          _signedAngleDiff(
-                                            (_polygonVertices[_polygonVertices.length - 2] -
-                                                    _polygonVertices.last)
-                                                .direction,
-                                            (_polygonLiveEnd! - _polygonVertices.last)
-                                                .direction,
-                                          ),
-                                        ),
-                                        '${_polygonLiveDegrees!.toStringAsFixed(1)}°',
-                                        live: true,
-                                      ),
-                                    if (_toolMode ==
-                                            CanvasToolMode.circleArc &&
-                                        _circleCenter != null &&
-                                        _circleLiveEnd != null &&
-                                        !_circleHasStartedSweeping)
-                                      _buildAngleBadge(
-                                        _perpendicularMidpoint(
-                                          _circleCenter!,
-                                          _circleLiveEnd!,
-                                          20,
-                                        ),
-                                        '${((_circleLiveEnd! - _circleCenter!).distance / kPxPerCm).toStringAsFixed(1)} cm',
-                                        live: true,
-                                      ),
-                                    if (_toolMode ==
-                                            CanvasToolMode.straightLine &&
-                                        _currentLine != null &&
-                                        _straightLineLiveEnd != null)
-                                      _buildAngleBadge(
-                                        _perpendicularMidpoint(
-                                          _currentLine!.points.first.offset,
-                                          _straightLineLiveEnd!,
-                                          20,
-                                        ),
-                                        '${((_straightLineLiveEnd! - _currentLine!.points.first.offset).distance / kPxPerCm).toStringAsFixed(1)} cm',
-                                        live: true,
-                                      ),
-                                    if (_toolMode == CanvasToolMode.spacer &&
-                                        _spacerDrag != null)
-                                      _buildAngleBadge(
-                                        _spacerDrag!.isVertical
-                                            ? _spacerDrag!.startWorld +
-                                                  Offset(
-                                                    24,
-                                                    _spacerLiveShift / 2,
-                                                  )
-                                            : _spacerDrag!.startWorld +
-                                                  Offset(
-                                                    _spacerLiveShift / 2,
-                                                    24,
-                                                  ),
-                                        '${(_spacerLiveShift / kPxPerCm).toStringAsFixed(1)} cm',
-                                        live: true,
-                                      ),
-                                    ..._textLabels.asMap().entries.map(
-                                      (e) => _buildTextLabelWidget(e.key, e.value),
-                                    ),
-                                    _buildTextEditorOverlay(isDark),
-                                    _buildPastePopup(isDark),
-                                  ],
+  /// Everything actually captured into the recorded video -- kept as its
+  /// own `RepaintBoundary` (distinct from the inner "Layer 1" one below,
+  /// which exists purely as a repaint-scoping optimization) so
+  /// `MathPadRecordingService` can snapshot exactly what's on the board
+  /// and nothing else (not the REC badge above, not the toolbar, not other
+  /// windows).
+  Widget _buildCanvasCaptureArea(
+    BuildContext context,
+    bool isDark,
+    Color bgColor,
+  ) {
+    return RepaintBoundary(
+      key: _canvasCaptureKey,
+      child: Stack(
+        children: [
+          // Guaranteed full-bleed opaque backdrop so the recorder's capture
+          // (a single `toImage()` snapshot of this whole RepaintBoundary)
+          // never contains a transparent pixel -- previously that showed up
+          // as a black background in recorded video since video has no
+          // alpha channel. Painting it here, as the actual bottom Stack
+          // layer, fixes it at the source instead of the recorder having to
+          // re-composite every captured frame over a background colour
+          // after the fact, which was costing a second full rasterization
+          // pass per frame and made it harder to sustain a high fps.
+          // Skipped for `isTransparentBg` (used to composite the live
+          // widget over something else, e.g. the slide viewer) since that
+          // use case wants real transparency, not a recording-friendly one.
+          if (!widget.isTransparentBg) Positioned.fill(child: ColoredBox(color: bgColor)),
+          Listener(
+            onPointerDown: _onPointerDown,
+            onPointerMove: _onPointerMove,
+            onPointerUp: _onPointerUp,
+            onPointerCancel: _onPointerCancel,
+            onPointerSignal: _onPointerSignal,
+            onPointerHover: _onPointerHover,
+            child: GestureDetector(
+              onScaleStart: _onScaleStart,
+              onScaleUpdate: _onScaleUpdate,
+              onScaleEnd: _onScaleEnd,
+              // ValueListenableBuilder Dual-Layer Stack:
+              // Layer 1 (Finished Strokes): Repaints ONLY when _lines updates (0 repaints during live drag)
+              // Layer 2 (Active Drawing): Repaints live stroke overlay at 120 FPS
+              child: ValueListenableBuilder<Offset>(
+                valueListenable: _panNotifier,
+                builder: (_, pan, child) {
+                  return ValueListenableBuilder<double>(
+                    valueListenable: _scaleNotifier,
+                    builder: (_, sc, child) {
+                      return Stack(
+                        children: [
+                          // Layer 1: Finished Strokes & Background
+                          ValueListenableBuilder<int>(
+                            valueListenable: _finishedStrokesNotifier,
+                            builder: (_, _, child) {
+                              return RepaintBoundary(
+                                child: CustomPaint(
+                                  size: Size.infinite,
+                                  painter: _MathsPadFinishedStrokesPainter(
+                                    lines: _lines,
+                                    bgMode: _bgMode,
+                                    isDark: isDark,
+                                    canvasBgColor: bgColor,
+                                    panOffset: pan,
+                                    scale: sc,
+                                  ),
                                 ),
                               );
                             },
-                          );
-                        },
+                          ),
+
+                          // Layer 2: Active Drawing Overlay & Handles
+                          ValueListenableBuilder<int>(
+                            valueListenable: _activeDrawingNotifier,
+                            builder: (_, _, child) {
+                              return RepaintBoundary(
+                                child: CustomPaint(
+                                  size: Size.infinite,
+                                  painter: _MathsPadActiveOverlayPainter(
+                                    currentLine: _currentLine,
+                                    selectedLines: _selectedLines,
+                                    lassoPoints: _lassoPoints,
+                                    panOffset: pan,
+                                    scale: sc,
+                                    activeShapeTool: _activeShapeTool,
+                                    shapeDragStartPos: _shapeDragStartPos,
+                                    shapeDragCurrentPos: _shapeDragCurrentPos,
+                                    selectedColor: _selectedColor,
+                                    penWidth: _penWidth,
+                                    isDark: isDark,
+                                    laserTrail: _laserTrail,
+                                    selectionGlowPhase: _selectionGlowPhase,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+
+          // Geometry Instruments Overlay (Ruler/Protractor/Compass/Set Squares).
+          // Lives inside the same pan/zoom transform as the canvas layers above,
+          // so instruments stay attached to the drawing plane as the user
+          // pans/zooms. Each instrument widget manages its own small handle
+          // GestureDetectors; empty overlay space falls through to the
+          // drawing Listener/GestureDetector beneath it.
+          IgnorePointer(
+            ignoring:
+                _instruments.isEmpty &&
+                _textLabels.isEmpty &&
+                !_textEditorOpen &&
+                _pastePopupWorldPos == null,
+            child: ValueListenableBuilder<Offset>(
+              valueListenable: _panNotifier,
+              builder: (_, pan, child) {
+                return ValueListenableBuilder<double>(
+                  valueListenable: _scaleNotifier,
+                  builder: (_, sc, child) {
+                    return Transform(
+                      transform: Matrix4.identity()
+                        ..translate(pan.dx, pan.dy)
+                        ..scale(sc),
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          ..._instruments.map(_buildInstrumentWidget),
+                          IgnorePointer(
+                            child: CustomPaint(
+                              size: Size.infinite,
+                              painter: _AngleArcPainter(_currentAngleArcs()),
+                            ),
+                          ),
+                          ..._fixedAngleLabels.map(
+                            (l) => _buildAngleBadge(
+                              l.labelPosition,
+                              l.text,
+                              live: false,
+                            ),
+                          ),
+                          if (_toolMode == CanvasToolMode.angle &&
+                              _angleWaitingForSecondLine &&
+                              _angleVertex != null &&
+                              _angleOtherEndOfA != null &&
+                              _angleLiveEnd != null &&
+                              _angleLiveDegrees != null)
+                            _buildAngleBadge(
+                              _bisectorPoint(
+                                _angleVertex!,
+                                (_angleOtherEndOfA! - _angleVertex!).direction,
+                                _signedAngleDiff(
+                                  (_angleOtherEndOfA! - _angleVertex!)
+                                      .direction,
+                                  (_angleLiveEnd! - _angleVertex!).direction,
+                                ),
+                              ),
+                              '${_angleLiveDegrees!.toStringAsFixed(1)}°',
+                              live: true,
+                            ),
+                          if (_toolMode == CanvasToolMode.polygonAngle &&
+                              _polygonVertices.length >= 2 &&
+                              _polygonLiveEnd != null &&
+                              _polygonLiveDegrees != null)
+                            _buildAngleBadge(
+                              _bisectorPoint(
+                                _polygonVertices.last,
+                                (_polygonVertices[_polygonVertices.length - 2] -
+                                        _polygonVertices.last)
+                                    .direction,
+                                _signedAngleDiff(
+                                  (_polygonVertices[_polygonVertices.length -
+                                              2] -
+                                          _polygonVertices.last)
+                                      .direction,
+                                  (_polygonLiveEnd! - _polygonVertices.last)
+                                      .direction,
+                                ),
+                              ),
+                              '${_polygonLiveDegrees!.toStringAsFixed(1)}°',
+                              live: true,
+                            ),
+                          if (_toolMode == CanvasToolMode.polygonAngle &&
+                              _currentLine != null &&
+                              _polygonLiveEnd != null)
+                            _buildAngleBadge(
+                              _perpendicularMidpoint(
+                                _currentLine!.points.first.offset,
+                                _polygonLiveEnd!,
+                                20,
+                              ),
+                              '${((_polygonLiveEnd! - _currentLine!.points.first.offset).distance / kPxPerCm).toStringAsFixed(1)} cm',
+                              live: true,
+                            ),
+                          if (_toolMode == CanvasToolMode.circleArc &&
+                              _circleCenter != null &&
+                              _circleLiveEnd != null &&
+                              !_circleHasStartedSweeping)
+                            _buildAngleBadge(
+                              _perpendicularMidpoint(
+                                _circleCenter!,
+                                _circleLiveEnd!,
+                                20,
+                              ),
+                              '${((_circleLiveEnd! - _circleCenter!).distance / kPxPerCm).toStringAsFixed(1)} cm',
+                              live: true,
+                            ),
+                          if (_toolMode == CanvasToolMode.square &&
+                              _squareBaseStart != null &&
+                              _squareBaseEnd != null &&
+                              !_squareHasArmed)
+                            _buildAngleBadge(
+                              _perpendicularMidpoint(
+                                _squareBaseStart!,
+                                _squareBaseEnd!,
+                                20,
+                              ),
+                              '${((_squareBaseEnd! - _squareBaseStart!).distance / kPxPerCm).toStringAsFixed(1)} cm',
+                              live: true,
+                            ),
+                          if (_toolMode == CanvasToolMode.straightLine &&
+                              _currentLine != null &&
+                              _straightLineLiveEnd != null)
+                            _buildAngleBadge(
+                              _perpendicularMidpoint(
+                                _currentLine!.points.first.offset,
+                                _straightLineLiveEnd!,
+                                20,
+                              ),
+                              '${((_straightLineLiveEnd! - _currentLine!.points.first.offset).distance / kPxPerCm).toStringAsFixed(1)} cm',
+                              live: true,
+                            ),
+                          if (_toolMode == CanvasToolMode.spacer &&
+                              _spacerDrag != null)
+                            _buildAngleBadge(
+                              _spacerDrag!.isVertical
+                                  ? _spacerDrag!.startWorld +
+                                        Offset(24, _spacerLiveShift / 2)
+                                  : _spacerDrag!.startWorld +
+                                        Offset(_spacerLiveShift / 2, 24),
+                              '${(_spacerLiveShift / kPxPerCm).toStringAsFixed(1)} cm',
+                              live: true,
+                            ),
+                          ..._textLabels.asMap().entries.map(
+                            (e) => _buildTextLabelWidget(e.key, e.value),
+                          ),
+                          _buildTextEditorOverlay(isDark),
+                          _buildPastePopup(isDark),
+                        ],
                       ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+
+          // Top Question Banner Card overlay for Tutors (ONLY visible in Full Screen mode when questionText is provided)
+          Builder(
+            builder: (context) {
+              if (!widget.isFullScreen) return const SizedBox();
+              if (widget.questionText == null ||
+                  widget.questionText!.trim().isEmpty) {
+                return const SizedBox();
+              }
+
+              final String effectiveQText = widget.questionText!.trim();
+
+              return Positioned(
+                top: 10,
+                left: 16,
+                right: 16,
+                child: Center(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    constraints: const BoxConstraints(maxWidth: 800),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
                     ),
-
-                    // Top Question Banner Card overlay for Tutors (ONLY visible in Full Screen mode when questionText is provided)
-                    Builder(
-                      builder: (context) {
-                        if (!widget.isFullScreen) return const SizedBox();
-                        if (widget.questionText == null ||
-                            widget.questionText!.trim().isEmpty) {
-                          return const SizedBox();
-                        }
-
-                        final String effectiveQText = widget.questionText!
-                            .trim();
-
-                        return Positioned(
-                          top: 10,
-                          left: 16,
-                          right: 16,
-                          child: Center(
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 250),
-                              constraints: const BoxConstraints(maxWidth: 800),
+                    decoration: BoxDecoration(
+                      color: (isDark ? const Color(0xFF1E293B) : Colors.white)
+                          .withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: const Color(0xFF6366F1).withOpacity(0.5),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 8,
+                                horizontal: 8,
+                                vertical: 3,
                               ),
                               decoration: BoxDecoration(
-                                color:
-                                    (isDark
-                                            ? const Color(0xFF1E293B)
-                                            : Colors.white)
-                                        .withOpacity(0.95),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: const Color(
-                                    0xFF6366F1,
-                                  ).withOpacity(0.5),
-                                  width: 1.5,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    blurRadius: 16,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
+                                color: const Color(
+                                  0xFF6366F1,
+                                ).withOpacity(0.18),
+                                borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Column(
+                              child: const Row(
                                 mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 3,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(
-                                            0xFF6366F1,
-                                          ).withOpacity(0.18),
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                        ),
-                                        child: const Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              Icons.quiz_rounded,
-                                              size: 14,
-                                              color: Color(0xFF6366F1),
-                                            ),
-                                            SizedBox(width: 4),
-                                            Text(
-                                              'Question',
-                                              style: TextStyle(
-                                                color: Color(0xFF6366F1),
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 11,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      InkWell(
-                                        onTap: () => setState(
-                                          () => _isQuestionBannerExpanded =
-                                              !_isQuestionBannerExpanded,
-                                        ),
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(2.0),
-                                          child: Icon(
-                                            _isQuestionBannerExpanded
-                                                ? Icons
-                                                      .keyboard_arrow_up_rounded
-                                                : Icons
-                                                      .keyboard_arrow_down_rounded,
-                                            size: 20,
-                                            color: context.textColor60,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
+                                  Icon(
+                                    Icons.quiz_rounded,
+                                    size: 14,
+                                    color: Color(0xFF6366F1),
                                   ),
-                                  if (_isQuestionBannerExpanded) ...[
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      effectiveQText,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        color: context.textColor,
-                                        height: 1.35,
-                                      ),
-                                      maxLines: 4,
-                                      overflow: TextOverflow.ellipsis,
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Question',
+                                    style: TextStyle(
+                                      color: Color(0xFF6366F1),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
                                     ),
-                                  ],
+                                  ),
                                 ],
                               ),
                             ),
+                            const Spacer(),
+                            InkWell(
+                              onTap: () => setState(
+                                () => _isQuestionBannerExpanded =
+                                    !_isQuestionBannerExpanded,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Padding(
+                                padding: const EdgeInsets.all(2.0),
+                                child: Icon(
+                                  _isQuestionBannerExpanded
+                                      ? Icons.keyboard_arrow_up_rounded
+                                      : Icons.keyboard_arrow_down_rounded,
+                                  size: 20,
+                                  color: context.textColor60,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_isQuestionBannerExpanded) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            effectiveQText,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: context.textColor,
+                              height: 1.35,
+                            ),
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+
+          // Floating Active Stylus Barrel Eraser Alert
+          if (_isStylusBarrelPressed)
+            Positioned(
+              top: 12,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade700,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.amber.withOpacity(0.4),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.cleaning_services_rounded,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                      SizedBox(width: 6),
+                      Text(
+                        'Stylus Pen Button Pressed → ERASER ACTIVE',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          // Floating Action Bar for Selected Items (Move, Duplicate, Delete)
+          if (_selectedLines.isNotEmpty)
+            Positioned(
+              bottom: 16,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    borderRadius: BorderRadius.circular(25),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.25),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                    border: Border.all(
+                      color: const Color(0xFF6366F1).withOpacity(0.5),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.touch_app_rounded,
+                        size: 16,
+                        color: Color(0xFF6366F1),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${_selectedLines.length} selected • Drag box to move',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          color: context.textColor,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      // Copy button (Ctrl+C)
+                      ElevatedButton.icon(
+                        onPressed: _copySelectedLines,
+                        icon: const Icon(
+                          Icons.content_copy_rounded,
+                          size: 15,
+                          color: Colors.white,
+                        ),
+                        label: const Text(
+                          'Copy',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0EA5E9),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Duplicate button
+                      ElevatedButton.icon(
+                        onPressed: _duplicateSelectedLines,
+                        icon: const Icon(
+                          Icons.copy_rounded,
+                          size: 15,
+                          color: Colors.white,
+                        ),
+                        label: const Text(
+                          'Duplicate',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF6366F1),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      ElevatedButton.icon(
+                        onPressed: _deleteSelectedLines,
+                        icon: const Icon(
+                          Icons.delete_forever_rounded,
+                          size: 15,
+                          color: Colors.white,
+                        ),
+                        label: const Text(
+                          'Delete',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, size: 18),
+                        onPressed: () => setState(() => _selectedLines.clear()),
+                        tooltip: 'Deselect',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          // Floating Tool Hint Pill
+          if (_selectedLines.isEmpty && !_isStylusBarrelPressed)
+            Positioned(
+              bottom: 12,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: (isDark ? Colors.black : Colors.white).withOpacity(
+                    0.75,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: (isDark ? Colors.white : Colors.black).withOpacity(
+                      0.1,
+                    ),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Image.asset('assets/image/logo.png', height: 20, width: 20),
+                    Icon(
+                      _toolMode == CanvasToolMode.eraser
+                          ? (_eraserMode == EraserMode.stroke
+                                ? Icons.auto_fix_high_rounded
+                                : Icons.cleaning_services_rounded)
+                          : (_toolMode == CanvasToolMode.tapSelect
+                                ? Icons.touch_app_rounded
+                                : (_toolMode == CanvasToolMode.lasso
+                                      ? Icons.gesture_rounded
+                                      : (_toolMode == CanvasToolMode.pan
+                                            ? Icons.back_hand_rounded
+                                            : Icons.edit_rounded))),
+                      size: 14,
+                      color: context.textColor70,
+                    ),
+                    const SizedBox(width: 4),
+                    ValueListenableBuilder<double>(
+                      valueListenable: _scaleNotifier,
+                      builder: (_, sc, _c) {
+                        return Text(
+                          _toolMode == CanvasToolMode.eraser
+                              ? (_eraserMode == EraserMode.stroke
+                                    ? 'Stroke Eraser • Tap any stroke to erase whole line'
+                                    : 'Area Eraser • Drag to erase points')
+                              : (_toolMode == CanvasToolMode.tapSelect
+                                    ? 'Tap any line to select & move/duplicate'
+                                    : (_toolMode == CanvasToolMode.lasso
+                                          ? 'Draw loop around items to select & move/duplicate'
+                                          : 'Infinite Canvas • ${(sc * 100).round()}%')),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: context.textColor70,
                           ),
                         );
                       },
                     ),
-
-                    // Floating Active Stylus Barrel Eraser Alert
-                    if (_isStylusBarrelPressed)
-                      Positioned(
-                        top: 12,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.shade700,
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.amber.withOpacity(0.4),
-                                  blurRadius: 10,
-                                  spreadRadius: 1,
-                                ),
-                              ],
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.cleaning_services_rounded,
-                                  size: 16,
-                                  color: Colors.white,
-                                ),
-                                SizedBox(width: 6),
-                                Text(
-                                  'Stylus Pen Button Pressed → ERASER ACTIVE',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-
-                    // Floating Action Bar for Selected Items (Move, Duplicate, Delete)
-                    if (_selectedLines.isNotEmpty)
-                      Positioned(
-                        bottom: 16,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isDark
-                                  ? const Color(0xFF1E293B)
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(25),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.25),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                              border: Border.all(
-                                color: const Color(0xFF6366F1).withOpacity(0.5),
-                                width: 1.5,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.touch_app_rounded,
-                                  size: 16,
-                                  color: Color(0xFF6366F1),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  '${_selectedLines.length} selected • Drag box to move',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                    color: context.textColor,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                // Copy button (Ctrl+C)
-                                ElevatedButton.icon(
-                                  onPressed: _copySelectedLines,
-                                  icon: const Icon(
-                                    Icons.content_copy_rounded,
-                                    size: 15,
-                                    color: Colors.white,
-                                  ),
-                                  label: const Text(
-                                    'Copy',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF0EA5E9),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                // Duplicate button
-                                ElevatedButton.icon(
-                                  onPressed: _duplicateSelectedLines,
-                                  icon: const Icon(
-                                    Icons.copy_rounded,
-                                    size: 15,
-                                    color: Colors.white,
-                                  ),
-                                  label: const Text(
-                                    'Duplicate',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF6366F1),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                ElevatedButton.icon(
-                                  onPressed: _deleteSelectedLines,
-                                  icon: const Icon(
-                                    Icons.delete_forever_rounded,
-                                    size: 15,
-                                    color: Colors.white,
-                                  ),
-                                  label: const Text(
-                                    'Delete',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.redAccent,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.close_rounded,
-                                    size: 18,
-                                  ),
-                                  onPressed: () =>
-                                      setState(() => _selectedLines.clear()),
-                                  tooltip: 'Deselect',
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-
-                    // Floating Tool Hint Pill
-                    if (_selectedLines.isEmpty && !_isStylusBarrelPressed)
-                      Positioned(
-                        bottom: 12,
-                        right: 12,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: (isDark ? Colors.black : Colors.white)
-                                .withOpacity(0.75),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: (isDark ? Colors.white : Colors.black)
-                                  .withOpacity(0.1),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Image.asset(
-                                'assets/image/logo.png',
-                                height: 20,
-                                width: 20,
-                              ),
-                              Icon(
-                                _toolMode == CanvasToolMode.eraser
-                                    ? (_eraserMode == EraserMode.stroke
-                                          ? Icons.auto_fix_high_rounded
-                                          : Icons.cleaning_services_rounded)
-                                    : (_toolMode == CanvasToolMode.tapSelect
-                                          ? Icons.touch_app_rounded
-                                          : (_toolMode == CanvasToolMode.lasso
-                                                ? Icons.gesture_rounded
-                                                : (_toolMode ==
-                                                          CanvasToolMode.pan
-                                                      ? Icons.back_hand_rounded
-                                                      : Icons.edit_rounded))),
-                                size: 14,
-                                color: context.textColor70,
-                              ),
-                              const SizedBox(width: 4),
-                              ValueListenableBuilder<double>(
-                                valueListenable: _scaleNotifier,
-                                builder: (_, sc, _c) {
-                                  return Text(
-                                    _toolMode == CanvasToolMode.eraser
-                                        ? (_eraserMode == EraserMode.stroke
-                                              ? 'Stroke Eraser • Tap any stroke to erase whole line'
-                                              : 'Area Eraser • Drag to erase points')
-                                        : (_toolMode == CanvasToolMode.tapSelect
-                                              ? 'Tap any line to select & move/duplicate'
-                                              : (_toolMode ==
-                                                        CanvasToolMode.lasso
-                                                    ? 'Draw loop around items to select & move/duplicate'
-                                                    : 'Infinite Canvas • ${(sc * 100).round()}%')),
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: context.textColor70,
-                                    ),
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
                   ],
                 ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
   Widget _buildToolbar(BuildContext context, bool isDark) {
+    // Left-docked also goes through quarterTurns:1 (same as right-docked
+    // used to, and still does) so the button order always reads top-to-
+    // bottom regardless of which side it's on -- but that rotation maps
+    // pre-rotation TOP-rounded/BOTTOM-bordered into POST-rotation RIGHT-
+    // rounded/LEFT-bordered (see `_buildToolbarAndCanvas`), which is
+    // backwards for a left dock. Building it pre-inverted (rounded at the
+    // bottom, bordered at the top) here compensates, so after that same
+    // rotation it lands correctly: rounded on the left (outer edge),
+    // bordered on the right (canvas-facing edge).
+    final BorderRadius radius = _toolbarOnLeft
+        ? const BorderRadius.vertical(bottom: Radius.circular(18))
+        : const BorderRadius.vertical(top: Radius.circular(18));
+    final BorderSide edgeBorder = BorderSide(
+      color: isDark ? Colors.white10 : Colors.black12,
+    );
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-        border: Border(
-          bottom: BorderSide(color: isDark ? Colors.white10 : Colors.black12),
-        ),
+        borderRadius: radius,
+        border: _toolbarOnLeft
+            ? Border(top: edgeBorder)
+            : Border(bottom: edgeBorder),
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
+        // Clamp instead of the platform-default rubber-band/bounce physics
+        // -- most noticeable (and worst-looking) when this toolbar is
+        // rotated 90° into the left/right-docked layout, where scrolling
+        // to reach more tools produces a visible bounce/overshoot instead
+        // of stopping cleanly at the end of the row.
+        physics: const ClampingScrollPhysics(),
         child: Row(
           children: [
             // Pen, Stroke Eraser, Tap-to-Select, Lasso Select, & Pan Tool
@@ -4400,49 +6010,90 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     }),
                   ),
                   _buildIconButton(
-                    icon: Icons.call_split_rounded,
-                    tooltip:
-                        'Angle Tool: draw a line, then drag a second line '
-                        'from either of its ends to see the angle between '
-                        'them live -- release to fix it',
-                    isSelected: _toolMode == CanvasToolMode.angle,
+                    icon: _toolMode == CanvasToolMode.polygonAngle
+                        ? Icons.timeline_rounded
+                        : Icons.call_split_rounded,
+                    tooltip: _toolMode == CanvasToolMode.polygonAngle
+                        ? 'Polygon Angle Tool: ACTIVE — tap icon again to '
+                              'switch back to Angle Tool'
+                        : _toolMode == CanvasToolMode.angle
+                        ? 'Angle Tool: ACTIVE — tap icon again to switch '
+                              'to Polygon Angle Tool'
+                        : 'Angle Tool: draw a line, then drag a second '
+                              'line from either of its ends to see the '
+                              'angle between them live -- release to fix it '
+                              '(tap icon again while active to toggle '
+                              'Polygon Angle Tool)',
+                    isSelected:
+                        _toolMode == CanvasToolMode.angle ||
+                        _toolMode == CanvasToolMode.polygonAngle,
                     onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.angle;
-                      _activeShapeTool = null;
-                      _selectedWidth = _penWidth;
-                      _selectedLines.clear();
-                      _resetAngleTool();
+                      if (_toolMode == CanvasToolMode.angle) {
+                        // Toggle → Polygon Angle
+                        _toolMode = CanvasToolMode.polygonAngle;
+                        _activeShapeTool = null;
+                        _selectedWidth = _penWidth;
+                        _selectedLines.clear();
+                        _resetPolygonTool();
+                      } else if (_toolMode == CanvasToolMode.polygonAngle) {
+                        // Toggle back → Angle
+                        _toolMode = CanvasToolMode.angle;
+                        _activeShapeTool = null;
+                        _selectedWidth = _penWidth;
+                        _selectedLines.clear();
+                        _resetAngleTool();
+                      } else {
+                        // First tap → Angle (default)
+                        _toolMode = CanvasToolMode.angle;
+                        _activeShapeTool = null;
+                        _selectedWidth = _penWidth;
+                        _selectedLines.clear();
+                        _resetAngleTool();
+                      }
                     }),
                   ),
                   _buildIconButton(
-                    icon: Icons.timeline_rounded,
-                    tooltip:
-                        'Polygon Angle Tool: draw connected segments -- each '
-                        'one continues from the last point and shows the '
-                        'angle at that corner live; end back near the start '
-                        'to close the shape',
-                    isSelected: _toolMode == CanvasToolMode.polygonAngle,
+                    icon: _toolMode == CanvasToolMode.square
+                        ? Icons.crop_square_rounded
+                        : Icons.blur_circular_rounded,
+                    tooltip: _toolMode == CanvasToolMode.square
+                        ? 'Square Tool: ACTIVE — tap icon again to switch back '
+                              'to Circle/Arc Tool'
+                        : _toolMode == CanvasToolMode.circleArc
+                        ? 'Circle/Arc Tool: ACTIVE — tap icon again to '
+                              'switch to Square Tool'
+                        : 'Circle/Arc Tool: drag out to set the radius, '
+                              'then keep dragging in a curve around that '
+                              'same point — only the traced arc/circle '
+                              'stays when you release '
+                              '(tap icon again while active to toggle '
+                              'Square Tool)',
+                    isSelected:
+                        _toolMode == CanvasToolMode.circleArc ||
+                        _toolMode == CanvasToolMode.square,
                     onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.polygonAngle;
-                      _activeShapeTool = null;
-                      _selectedWidth = _penWidth;
-                      _selectedLines.clear();
-                      _resetPolygonTool();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.blur_circular_rounded,
-                    tooltip:
-                        'Circle/Arc Tool: drag out to set the radius, then '
-                        'keep dragging in a curve around that same point -- '
-                        'only the traced arc/circle stays when you release',
-                    isSelected: _toolMode == CanvasToolMode.circleArc,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.circleArc;
-                      _activeShapeTool = null;
-                      _selectedWidth = _penWidth;
-                      _selectedLines.clear();
-                      _resetCircleArcTool();
+                      if (_toolMode == CanvasToolMode.circleArc) {
+                        // Toggle → Square
+                        _toolMode = CanvasToolMode.square;
+                        _activeShapeTool = null;
+                        _selectedWidth = _penWidth;
+                        _selectedLines.clear();
+                        _resetSquareTool();
+                      } else if (_toolMode == CanvasToolMode.square) {
+                        // Toggle back → Circle/Arc
+                        _toolMode = CanvasToolMode.circleArc;
+                        _activeShapeTool = null;
+                        _selectedWidth = _penWidth;
+                        _selectedLines.clear();
+                        _resetCircleArcTool();
+                      } else {
+                        // First tap → Circle/Arc (default)
+                        _toolMode = CanvasToolMode.circleArc;
+                        _activeShapeTool = null;
+                        _selectedWidth = _penWidth;
+                        _selectedLines.clear();
+                        _resetCircleArcTool();
+                      }
                     }),
                   ),
                   _buildIconButton(
@@ -4534,6 +6185,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       _selectedLines.clear();
                     }),
                   ),
+                  _buildIconButton(
+                    icon: Icons.center_focus_strong_rounded,
+                    tooltip:
+                        'Laser Pointer: hold and move to point things out '
+                        'live -- leaves no permanent mark',
+                    isSelected: _toolMode == CanvasToolMode.laser,
+                    onTap: () => setState(() {
+                      _toolMode = CanvasToolMode.laser;
+                      _activeShapeTool = null;
+                      _selectedLines.clear();
+                    }),
+                  ),
                 ],
               ),
             ),
@@ -4557,7 +6220,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     ),
                   ),
                   _buildIconButton(
-                    icon: Icons.architecture_rounded,
+                    customIconBuilder: _buildProtractorIcon,
                     tooltip: 'Add Protractor',
                     onTap: () => _addInstrument(
                       (i) => i is ProtractorState,
@@ -4565,7 +6228,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     ),
                   ),
                   _buildIconButton(
-                    icon: Icons.radio_button_unchecked_rounded,
+                    icon: Icons.architecture_rounded,
                     tooltip: 'Add Compass',
                     onTap: () => _addInstrument(
                       (i) => i is CompassState,
@@ -4576,7 +6239,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     icon: Icons.change_history_rounded,
                     tooltip: 'Add Set Square (45-45-90)',
                     onTap: () => _addInstrument(
-                      (i) => i is SetSquareState && i.kind == SetSquareKind.fortyFive,
+                      (i) =>
+                          i is SetSquareState &&
+                          i.kind == SetSquareKind.fortyFive,
                       (center) => SetSquareState(
                         pivot: center,
                         kind: SetSquareKind.fortyFive,
@@ -4587,7 +6252,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     icon: Icons.change_history_outlined,
                     tooltip: 'Add Set Square (30-60-90)',
                     onTap: () => _addInstrument(
-                      (i) => i is SetSquareState && i.kind == SetSquareKind.thirtySixty,
+                      (i) =>
+                          i is SetSquareState &&
+                          i.kind == SetSquareKind.thirtySixty,
                       (center) => SetSquareState(
                         pivot: center,
                         kind: SetSquareKind.thirtySixty,
@@ -4608,6 +6275,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     _selectedColor.value == color.value;
                 return GestureDetector(
                   onTap: () {
+                    // With something already selected, picking a colour
+                    // recolours that selection in place instead of just
+                    // arming the pen with it -- selection stays as-is
+                    // (not cleared, tool mode untouched) so further
+                    // actions (another colour, width, delete, ...) can
+                    // still target the same selection right after.
+                    if (_selectedLines.isNotEmpty) {
+                      _recolorSelectedLines(color);
+                      setState(() => _selectedColor = color);
+                      return;
+                    }
                     setState(() {
                       _selectedColor = color;
                       _toolMode = CanvasToolMode.pen;
@@ -4672,6 +6350,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               itemBuilder: (ctx) => [
                 const PopupMenuItem(value: 2.0, child: Text('Fine (2px)')),
                 const PopupMenuItem(value: 4.0, child: Text('Medium (4px)')),
+                const PopupMenuItem(value: 6.0, child: Text('Bold (6px)')),
                 const PopupMenuItem(value: 8.0, child: Text('Thick (8px)')),
                 const PopupMenuItem(value: 14.0, child: Text('Marker (14px)')),
               ],
@@ -4799,9 +6478,53 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   value: CanvasBgMode.blank,
                   child: Text('📄 Blank Canvas'),
                 ),
+              ],
+            ),
+
+            const SizedBox(width: 6),
+
+            // Theme Mode Toggle
+            PopupMenuButton<MathPadTheme>(
+              tooltip: 'App Theme',
+              icon: Row(
+                children: [
+                  Icon(
+                    _themeMode == MathPadTheme.cosmos
+                        ? Icons.auto_awesome_rounded
+                        : (_themeMode == MathPadTheme.aswadLail
+                              ? Icons.brightness_1_rounded
+                              : (_themeMode == MathPadTheme.dark
+                                    ? Icons.dark_mode_rounded
+                                    : Icons.light_mode_rounded)),
+                    size: 18,
+                    color: context.textColor,
+                  ),
+                ],
+              ),
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              onSelected: (m) async {
+                setState(() {
+                  _themeMode = m;
+                });
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('mathpad_default_theme', m.name);
+              },
+              itemBuilder: (ctx) => [
                 const PopupMenuItem(
-                  value: CanvasBgMode.jyamitiCosmos,
+                  value: MathPadTheme.light,
+                  child: Text('☀️ Light Mode'),
+                ),
+                const PopupMenuItem(
+                  value: MathPadTheme.dark,
+                  child: Text('🌙 Dark Mode'),
+                ),
+                const PopupMenuItem(
+                  value: MathPadTheme.cosmos,
                   child: Text('🌌 Jyamiti Cosmos (#0F2B52)'),
+                ),
+                const PopupMenuItem(
+                  value: MathPadTheme.aswadLail,
+                  child: Text('⚫ Aswad Lail (#000000)'),
                 ),
               ],
             ),
@@ -4925,6 +6648,41 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ),
             ],
 
+            if (widget.onSaveRequested != null) ...[
+              const SizedBox(width: 6),
+              Tooltip(
+                message: 'Save Page',
+                child: InkWell(
+                  onTap: _savePage,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: const Color(0xFF10B981),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.save_rounded,
+                          size: 15,
+                          color: Color(0xFF10B981),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+
             // Paste Button – visible ONLY when clipboard has copied strokes
             if (_clipboard.isNotEmpty) ...[
               const SizedBox(width: 6),
@@ -4970,11 +6728,61 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ),
             ],
 
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.view_sidebar_rounded, size: 20),
+              onPressed: () => setState(() => _toolbarOnLeft = !_toolbarOnLeft),
+              tooltip: _toolbarOnLeft
+                  ? 'Move Toolbar to Top'
+                  : 'Move Toolbar to Left Side',
+            ),
+
+            if (!kIsWeb && MathPadRecordingService.isSupportedPlatform) ...[
+              const SizedBox(width: 8),
+              IconButton(
+                icon: Icon(
+                  _recordingState == MathPadRecordingState.recording
+                      ? Icons.stop_circle_rounded
+                      : Icons.fiber_manual_record_rounded,
+                  size: 20,
+                  color: _recordingState == MathPadRecordingState.recording
+                      ? Colors.redAccent
+                      : null,
+                ),
+                onPressed: _recordingState == MathPadRecordingState.encoding
+                    ? null
+                    : _toggleRecording,
+                tooltip: _recordingState == MathPadRecordingState.recording
+                    ? 'Stop Recording'
+                    : (_recordingState == MathPadRecordingState.encoding
+                          ? 'Encoding…'
+                          : 'Record Board + Voice'),
+              ),
+            ],
+
+            const SizedBox(width: 8),
+            IconButton(
+              icon: Icon(
+                _isFullScreenMode
+                    ? Icons.fullscreen_exit_rounded
+                    : Icons.fullscreen_rounded,
+                size: 20,
+              ),
+              onPressed: () => setState(() {
+                _isFullScreenMode = !_isFullScreenMode;
+                _toolbarRevealedInFullScreen = false;
+                widget.onCanvasOnlyModeChanged?.call(_isFullScreenMode);
+              }),
+              tooltip: _isFullScreenMode
+                  ? 'Exit Full Screen'
+                  : 'Full Screen (canvas only)',
+            ),
+
             if (widget.onClose != null) ...[
               const SizedBox(width: 8),
               IconButton(
                 icon: const Icon(Icons.close_rounded, size: 20),
-                onPressed: widget.onClose,
+                onPressed: _handleCloseTap,
                 tooltip: 'Close Writing Screen',
               ),
             ],
@@ -4985,13 +6793,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Widget _buildIconButton({
-    required IconData icon,
+    IconData? icon,
+    Widget Function(Color color)? customIconBuilder,
     required String tooltip,
     required VoidCallback onTap,
     bool isSelected = false,
     bool isDisabled = false,
     Color? color,
   }) {
+    final Color resolvedColor = isDisabled
+        ? Colors.grey.withOpacity(0.3)
+        : (isSelected ? const Color(0xFF6366F1) : (color ?? context.textColor));
     return Tooltip(
       message: tooltip,
       child: InkWell(
@@ -5005,18 +6817,72 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Icon(
-            icon,
-            size: 18,
-            color: isDisabled
-                ? Colors.grey.withOpacity(0.3)
-                : (isSelected
-                      ? const Color(0xFF6366F1)
-                      : (color ?? context.textColor)),
-          ),
+          child: customIconBuilder != null
+              ? customIconBuilder(resolvedColor)
+              : Icon(icon, size: 18, color: resolvedColor),
         ),
       ),
     );
+  }
+
+  /// A small hand-drawn protractor glyph (semicircle body + a few degree
+  /// ticks) for the "Add Protractor" toolbar button -- no stock Material
+  /// icon actually looks like a protractor, so this mirrors the real
+  /// `ProtractorWidget`'s shape/orientation at icon scale instead of using
+  /// an unrelated placeholder icon.
+  Widget _buildProtractorIcon(Color color) {
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: CustomPaint(painter: _ProtractorIconPainter(color: color)),
+    );
+  }
+
+  /// Hands the full current canvas content to `widget.onSaveRequested`
+  /// (the Math Pad Library's page editor, when opened from there).
+  Future<void> _savePage() async {
+    if (widget.onSaveRequested == null) return;
+    await widget.onSaveRequested!(
+      lines: _lines,
+      instruments: _instruments,
+      textLabels: _textLabels,
+      fixedAngleLabels: _fixedAngleLabels,
+      bgMode: _bgMode,
+      themeMode:
+          _themeMode ??
+          (context.isDark ? MathPadTheme.dark : MathPadTheme.light),
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Page saved'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    }
+  }
+
+  /// The ✕ button's handler. When this pad was opened with a save hook
+  /// (i.e. from the Math Pad Library), everything is already being
+  /// autosaved continuously -- so closing just does one last silent save
+  /// (to catch anything since the last autosave tick) and leaves, with no
+  /// interrupting prompt. Otherwise falls straight through to
+  /// `widget.onClose` unchanged, so every other/older caller's behavior is
+  /// exactly as before.
+  Future<void> _handleCloseTap() async {
+    if (widget.onSaveRequested != null) {
+      await widget.onSaveRequested!(
+        lines: _lines,
+        instruments: _instruments,
+        textLabels: _textLabels,
+        fixedAngleLabels: _fixedAngleLabels,
+        bgMode: _bgMode,
+        themeMode:
+            _themeMode ??
+            (context.isDark ? MathPadTheme.dark : MathPadTheme.light),
+      );
+    }
+    widget.onClose?.call();
   }
 
   Future<void> _saveNote() async {
@@ -5166,6 +7032,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       'isShape': line.isShape,
     };
   }
+}
+
+/// The signed angular delta from [from] to [to] (both in radians, any
+/// range), taking the shortest path and always in (-pi, pi] -- used to
+/// advance a continuously-unwrapped angle from repeated wrapped
+/// `Offset.direction` samples (e.g. the Circle/Arc Tool's sweep) without a
+/// discontinuity when the raw angle crosses the -pi/pi boundary.
+double _shortestAngleDelta(double from, double to) {
+  double delta = (to - from) % (2 * pi);
+  if (delta > pi) delta -= 2 * pi;
+  if (delta < -pi) delta += 2 * pi;
+  return delta;
 }
 
 // ── Top-Level Helper Utilities for High Performance Curve Smoothing ─────────────
@@ -5401,28 +7279,49 @@ class _MathsPadFinishedStrokesPainter extends CustomPainter {
     }
   }
 
+  void _drawFillImageLine(Canvas canvas, MathsPadLine line) {
+    final bool rotated = line.rotation != 0;
+    if (rotated) {
+      canvas.save();
+      final Offset center = line.fillWorldBounds!.center;
+      canvas.translate(center.dx, center.dy);
+      canvas.rotate(line.rotation);
+      canvas.translate(-center.dx, -center.dy);
+    }
+    canvas.drawImageRect(
+      line.fillImage!,
+      Rect.fromLTWH(
+        0,
+        0,
+        line.fillImage!.width.toDouble(),
+        line.fillImage!.height.toDouble(),
+      ),
+      line.fillWorldBounds!,
+      Paint(),
+    );
+    if (rotated) {
+      canvas.restore();
+    }
+  }
+
   void _drawStrokes(Canvas canvas, List<MathsPadLine> visibleLines) {
+    // Two passes so every Fill Tool result always renders *underneath*
+    // every ink stroke, regardless of which was actually drawn/filled most
+    // recently -- `_lines` itself stays strictly chronological (`_undo()`
+    // depends on `removeLast()` picking whatever was really added last),
+    // so this reordering is purely visual. The Fill Tool deliberately
+    // extends its filled pixels a little way under the boundary strokes
+    // (see `_performBucketFill`); drawing strokes second lets their own
+    // antialiased edge blend naturally on top of the fill colour there
+    // instead of the fill flatly overwriting it. Relative order is
+    // preserved within each pass, so a newer fill still shows above an
+    // older one wherever two fills overlap.
     for (final line in visibleLines) {
-      if (line.fillImage != null && line.fillWorldBounds != null) {
-        // Fill Tool result: draw the rasterized flood-fill image directly.
-        // It only ever contains pixels for the region that was actually
-        // filled (everything else in the cropped image is transparent), so
-        // draw order relative to boundary strokes doesn't matter -- the
-        // strokes that formed the boundary were never touched by the fill
-        // and remain visible on top (or underneath) regardless.
-        canvas.drawImageRect(
-          line.fillImage!,
-          Rect.fromLTWH(
-            0,
-            0,
-            line.fillImage!.width.toDouble(),
-            line.fillImage!.height.toDouble(),
-          ),
-          line.fillWorldBounds!,
-          Paint(),
-        );
-        continue;
-      }
+      if (line.fillImage == null || line.fillWorldBounds == null) continue;
+      _drawFillImageLine(canvas, line);
+    }
+    for (final line in visibleLines) {
+      if (line.fillImage != null && line.fillWorldBounds != null) continue;
       if (line.points.isEmpty) continue;
 
       final paint = Paint()
@@ -5486,6 +7385,8 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
   final Color selectedColor;
   final double penWidth;
   final bool isDark;
+  final List<_LaserTrailPoint> laserTrail;
+  final double selectionGlowPhase;
 
   _MathsPadActiveOverlayPainter({
     required this.currentLine,
@@ -5499,7 +7400,21 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
     this.selectedColor = const Color(0xFF6366F1),
     this.penWidth = 3.0,
     required this.isDark,
+    this.laserTrail = const [],
+    this.selectionGlowPhase = 0.0,
   });
+
+  /// Mirrors `_MathsPadWidgetState._selectedImageRotation` -- when exactly
+  /// one image line is selected, the selection box/handles are drawn
+  /// rotated to match it (see `_drawSelectionOverlay`) instead of staying
+  /// axis-aligned while only the image itself visually spins.
+  double get _selectedImageRotation {
+    if (selectedLines.length == 1) {
+      final line = selectedLines.first;
+      if (line.fillImage != null) return line.rotation;
+    }
+    return 0;
+  }
 
   Rect? _getGroupBounds(Set<MathsPadLine> selection) {
     if (selection.isEmpty) return null;
@@ -5568,7 +7483,9 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
         }
       }
 
-      // 2. Draw Selection Overlay Box & Handles
+      // 2. Draw each selected stroke's own neon outline, then the group
+      // bounding box & handles on top of it.
+      _drawNeonSelectionOutlines(canvas);
       _drawSelectionOverlay(canvas);
 
       // 3. Draw Lasso Loop
@@ -5635,9 +7552,75 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           }
         }
       }
+
+      // Laser Pointer trail -- always drawn last so it stays on top of
+      // every stroke/selection/preview above.
+      _drawLaserTrail(canvas);
     } finally {
       canvas.restore();
     }
+  }
+
+  /// Renders as a fixed *screen* size regardless of canvas zoom (dividing
+  /// radii by `scale`, since `canvas` here is already inside the
+  /// pan/zoom transform) -- a real laser pointer dot doesn't shrink when
+  /// you zoom out on the content it's pointing at.
+  void _drawLaserTrail(Canvas canvas) {
+    if (laserTrail.isEmpty) return;
+    final int nowMs = DateTime.now().millisecondsSinceEpoch;
+    const double coreScreenRadius = 7.0;
+    const double glowScreenRadius = 26.0;
+
+    // Fading comet tail: older points shrink and fade out.
+    for (int i = 0; i < laserTrail.length - 1; i++) {
+      final p = laserTrail[i];
+      final double age = (nowMs - p.bornAtMs) / _kLaserTrailLifetimeMs;
+      if (age >= 1.0) continue;
+      final double t = (1.0 - age).clamp(0.0, 1.0);
+      final Paint tailPaint = Paint()
+        ..isAntiAlias = true
+        ..color = const Color(0xFFFF3B30).withValues(alpha: 0.45 * t);
+      canvas.drawCircle(p.pos, (coreScreenRadius * 0.55 * t) / scale, tailPaint);
+    }
+
+    // The current (newest) point gets the full glowing "hot" dot.
+    final _LaserTrailPoint latest = laserTrail.last;
+    final double latestAge = (nowMs - latest.bornAtMs) / _kLaserTrailLifetimeMs;
+    if (latestAge >= 1.0) return;
+    final double t = (1.0 - latestAge).clamp(0.0, 1.0);
+
+    // Soft outer bloom.
+    final Paint glowPaint = Paint()
+      ..isAntiAlias = true
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 10.0 / scale)
+      ..color = const Color(0xFFFF3B30).withValues(alpha: 0.35 * t);
+    canvas.drawCircle(latest.pos, glowScreenRadius / scale, glowPaint);
+
+    // Bright gradient core (hot white centre fading to laser red).
+    final double coreRadius = coreScreenRadius / scale;
+    final Paint corePaint = Paint()
+      ..isAntiAlias = true
+      ..shader = RadialGradient(
+        colors: [
+          Colors.white.withValues(alpha: t),
+          const Color(0xFFFF453A).withValues(alpha: t),
+          const Color(0xFFFF453A).withValues(alpha: 0.0),
+        ],
+        stops: const [0.0, 0.45, 1.0],
+      ).createShader(
+        Rect.fromCircle(center: latest.pos, radius: coreRadius),
+      );
+    canvas.drawCircle(latest.pos, coreRadius, corePaint);
+
+    // A crisp thin ring on top reads as "sharp focus point" rather than
+    // just a soft blob -- the touch of polish that makes it feel modern
+    // rather than a plain flat dot.
+    final Paint ringPaint = Paint()
+      ..isAntiAlias = true
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4 / scale
+      ..color = Colors.white.withValues(alpha: 0.85 * t);
+    canvas.drawCircle(latest.pos, coreRadius * 0.55, ringPaint);
   }
 
   Path _buildLivePath(MathsPadLine line) {
@@ -5650,20 +7633,201 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
       return path;
     }
 
-    for (int i = 1; i < line.points.length - 1; i++) {
-      final pPrev = line.points[i].offset;
-      final pNext = line.points[i + 1].offset;
+    // Shape tools (Square Tool, basic shape stamps, ...) want crisp straight
+    // edges/sharp corners live while dragging, same as their final committed
+    // path (`_buildAndCachePath`) already does -- only freehand pen strokes
+    // should get the quadratic-smoothed curve treatment below.
+    if (line.isShape) {
+      for (int i = 1; i < line.points.length; i++) {
+        path.lineTo(line.points[i].offset.dx, line.points[i].offset.dy);
+      }
+      return path;
+    }
+
+    // Chaikin-smooth the live preview too (same treatment
+    // `_buildAndCachePath` gives the finished stroke), so the ink doesn't
+    // visibly "settle"/refine the instant the pen lifts -- what you see
+    // while drawing is what you get. Fewer iterations than the commit-time
+    // pass (2 vs 3): this reruns over every point of the stroke-so-far on
+    // every live-drawing frame, so keeping it cheaper here matters more
+    // than matching the final smoothing exactly; the full pass still runs
+    // once at commit.
+    final List<Offset> rawOffsets = line.points.map((p) => p.offset).toList();
+    final List<Offset> smoothPts = _chaikinSmooth(rawOffsets, iterations: 2);
+
+    for (int i = 1; i < smoothPts.length - 1; i++) {
+      final pPrev = smoothPts[i];
+      final pNext = smoothPts[i + 1];
       final midX = (pPrev.dx + pNext.dx) / 2;
       final midY = (pPrev.dy + pNext.dy) / 2;
       path.quadraticBezierTo(pPrev.dx, pPrev.dy, midX, midY);
     }
-    path.lineTo(line.points.last.offset.dx, line.points.last.offset.dy);
+    path.lineTo(smoothPts.last.dx, smoothPts.last.dy);
     return path;
+  }
+
+  // Neon mix used by every selected-stroke outline -- cycles through
+  // several saturated hues (like RGB gaming-peripheral lighting) rather
+  // than a single flat colour.
+  static const List<Color> _neonMix = [
+    Color(0xFFFF7A00), // neon orange
+    Color(0xFFFF2E9A), // neon pink
+    Color(0xFF00E5FF), // neon cyan/blue
+    Color(0xFF39FF14), // neon green
+    Color(0xFFFF7A00), // wrap back to orange
+  ];
+  static const List<double> _neonMixStops = [0.0, 0.25, 0.5, 0.75, 1.0];
+
+  /// A very thin, solid, continuously-glowing outline traced *outside*
+  /// each individually selected stroke's own silhouette -- offset clear of
+  /// the ink itself (never drawn over it) -- so it's unmistakable exactly
+  /// which strokes are selected, distinct from the indigo bounding
+  /// box/handles `_drawSelectionOverlay` draws for group transforms. The
+  /// neon colours continuously flow around the outline (via a slowly
+  /// rotating gradient) -- no dashing, no opacity pulsing, just steady
+  /// colour motion.
+  void _drawNeonSelectionOutlines(Canvas canvas) {
+    if (selectedLines.isEmpty) return;
+    // Gap between the ink's own edge and the inner edge of the outline --
+    // this (not the outline's own thickness) is what keeps it from ever
+    // sitting on top of the stroke.
+    final double standoff = 4.5 / scale;
+    const double ringThickness = 1.6;
+
+    for (final line in selectedLines) {
+      final Rect? bounds = line.fillImage != null
+          ? line.fillWorldBounds
+          : (line.cachedBounds ?? _lineBounds(line));
+      if (bounds == null) continue;
+      final Shader neonShader = SweepGradient(
+        colors: _neonMix,
+        stops: _neonMixStops,
+        transform: GradientRotation(selectionGlowPhase * 0.02),
+      ).createShader(bounds.inflate(bounds.longestSide / 2 + 1));
+
+      if (line.fillImage != null && line.fillWorldBounds != null) {
+        // A filled region/pasted image -- ink covers the whole rect, so
+        // the outline traces a rounded rect inflated well clear of it.
+        final RRect ring = RRect.fromRectAndRadius(
+          bounds.inflate(standoff),
+          const Radius.circular(8),
+        );
+        _paintNeonRing(
+          canvas,
+          Path()..addRRect(ring),
+          neonShader,
+          ringThickness / scale,
+        );
+        continue;
+      }
+
+      if (line.points.length == 1) {
+        // A single dot -- ink is a filled circle, so the outline is just
+        // a bigger concentric circle.
+        final double radius = (line.strokeWidth / 2) + standoff;
+        _paintNeonRing(
+          canvas,
+          Path()..addOval(Rect.fromCircle(center: line.points.first.offset, radius: radius)),
+          neonShader,
+          ringThickness / scale,
+        );
+        continue;
+      }
+
+      if (line.points.length < 2) continue;
+      final Path centerline = line.cachedPath ?? _buildLivePath(line);
+
+      // For an arbitrary freehand/shape stroke there's no simple "offset
+      // this path outward" operation in dart:ui, so the standoff ring is
+      // built by punching the ink's own footprint out of a wider halo:
+      // draw a stroke wide enough to cover ink + standoff on both sides,
+      // then clear back out exactly the ink's own width, leaving only the
+      // outer band -- which never overlaps a single ink pixel.
+      final Rect layerBounds = bounds.inflate(standoff * 2 + 20);
+      canvas.saveLayer(layerBounds, Paint());
+      try {
+        final Paint haloPaint = Paint()
+          ..isAntiAlias = true
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..strokeWidth = line.strokeWidth + standoff * 2
+          ..shader = neonShader;
+        canvas.drawPath(centerline, haloPaint);
+
+        final Paint punchPaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..strokeWidth = line.strokeWidth
+          ..blendMode = BlendMode.clear;
+        canvas.drawPath(centerline, punchPaint);
+      } finally {
+        canvas.restore();
+      }
+    }
+  }
+
+  /// Draws [ringPath] (already offset clear of the ink it surrounds) as a
+  /// soft glow plus a thin solid bright core, both coloured by the same
+  /// continuously-rotating [neonShader] -- used for the dot/fill-image
+  /// selection outlines, which (unlike an arbitrary freehand stroke) can
+  /// be offset outward with simple geometry so they don't need the
+  /// punch-a-hole compositing trick `_drawNeonSelectionOutlines` uses for
+  /// freehand paths.
+  void _paintNeonRing(
+    Canvas canvas,
+    Path ringPath,
+    Shader neonShader,
+    double coreWidth,
+  ) {
+    final Paint glowPaint = Paint()
+      ..isAntiAlias = true
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = coreWidth * 4
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, coreWidth * 3)
+      ..shader = neonShader;
+    canvas.drawPath(ringPath, glowPaint);
+
+    final Paint corePaint = Paint()
+      ..isAntiAlias = true
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = coreWidth
+      ..shader = neonShader;
+    canvas.drawPath(ringPath, corePaint);
+  }
+
+  Rect? _lineBounds(MathsPadLine line) {
+    if (line.points.isEmpty) return null;
+    double minX = line.points.first.offset.dx;
+    double maxX = minX;
+    double minY = line.points.first.offset.dy;
+    double maxY = minY;
+    for (int i = 1; i < line.points.length; i++) {
+      final p = line.points[i].offset;
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
   void _drawSelectionOverlay(Canvas canvas) {
     final selectionBounds = _getGroupBounds(selectedLines);
     if (selectionBounds != null) {
+      final double rotation = _selectedImageRotation;
+      if (rotation != 0) {
+        canvas.save();
+        canvas.translate(selectionBounds.center.dx, selectionBounds.center.dy);
+        canvas.rotate(rotation);
+        canvas.translate(
+          -selectionBounds.center.dx,
+          -selectionBounds.center.dy,
+        );
+      }
       final selectBoxPaint = Paint()
         ..color = const Color(0xFF6366F1)
         ..strokeWidth = 2.0 / scale
@@ -5730,6 +7894,10 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
       for (final corner in corners) {
         canvas.drawCircle(corner, cornerRadius, cornerBgPaint);
         canvas.drawCircle(corner, cornerRadius, cornerBorderPaint);
+      }
+
+      if (rotation != 0) {
+        canvas.restore();
       }
     }
   }

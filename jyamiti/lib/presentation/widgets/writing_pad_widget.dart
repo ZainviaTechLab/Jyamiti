@@ -18,12 +18,8 @@ class DrawnLine {
   final bool isEraser;
   final bool isShape;
 
-  bool isFilled;
-  Color? fillColor;
-
   Path? cachedPath;
   Rect? cachedBounds;
-  Path? cachedFillPath;
 
   DrawnLine({
     required this.points,
@@ -31,17 +27,13 @@ class DrawnLine {
     required this.strokeWidth,
     this.isEraser = false,
     this.isShape = false,
-    this.isFilled = false,
-    this.fillColor,
     this.cachedPath,
     this.cachedBounds,
-    this.cachedFillPath,
   });
 
   void invalidateCache() {
     cachedPath = null;
     cachedBounds = null;
-    cachedFillPath = null;
   }
 }
 
@@ -910,41 +902,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     if (_currentLine != null) {
       _currentLine!.invalidateCache();
       _buildAndCachePath(_currentLine!);
-
-      bool scribbleHandled = false;
-      if (!_currentLine!.isEraser &&
-          !_currentLine!.isShape &&
-          _currentLine!.points.length >= 2) {
-        final List<Offset> scribblePts =
-            _currentLine!.points.map((p) => p.offset).toList();
-        for (int i = _lines.length - 1; i >= 0; i--) {
-          final candidate = _lines[i];
-          if (candidate.isEraser) continue;
-          if (candidate.cachedFillPath == null) {
-            _buildAndCachePath(candidate);
-          }
-          if (candidate.cachedFillPath != null) {
-            int insideCount = 0;
-            for (final pt in scribblePts) {
-              if (candidate.cachedFillPath!.contains(pt)) {
-                insideCount++;
-              }
-            }
-            if (insideCount > 0 && (insideCount / scribblePts.length) >= 0.55) {
-              setState(() {
-                candidate.isFilled = true;
-                candidate.fillColor = _currentLine!.color;
-              });
-              scribbleHandled = true;
-              break;
-            }
-          }
-        }
-      }
-
-      if (!scribbleHandled) {
-        _lines.add(_currentLine!);
-      }
+      _lines.add(_currentLine!);
       _currentLine = null;
       _finishedStrokesNotifier.value++;
       _activeDrawingNotifier.value++;
@@ -986,8 +944,6 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
           strokeWidth: line.strokeWidth,
           isEraser: line.isEraser,
           isShape: line.isShape,
-          isFilled: line.isFilled,
-          fillColor: line.fillColor,
         );
       }).toList();
     });
@@ -1044,8 +1000,6 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
         isShape: line.isShape,
-        isFilled: line.isFilled,
-        fillColor: line.fillColor,
       );
       _buildAndCachePath(newLine);
       return newLine;
@@ -1076,9 +1030,6 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
         color: line.color,
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
-        isShape: line.isShape,
-        isFilled: line.isFilled,
-        fillColor: line.fillColor,
       );
       _buildAndCachePath(newLine);
       duplicatedLines.add(newLine);
@@ -2729,8 +2680,6 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       'strokeWidth': line.strokeWidth,
       'isEraser': line.isEraser,
       'isShape': line.isShape,
-      'isFilled': line.isFilled,
-      'fillColor': line.fillColor?.value,
     };
   }
 }
@@ -2839,24 +2788,6 @@ void _buildAndCachePath(DrawnLine line) {
     if (p.dy > maxY) maxY = p.dy;
   }
   line.cachedBounds = Rect.fromLTRB(minX, minY, maxX, maxY);
-
-  bool isClosedLoop = line.isShape;
-  if (!isClosedLoop && line.points.length >= 5) {
-    final dist = (line.points.first.offset - line.points.last.offset).distance;
-    final double shortestSide = line.cachedBounds != null
-        ? line.cachedBounds!.shortestSide
-        : 100.0;
-    if (dist < min(45.0, max(20.0, shortestSide * 0.4))) {
-      isClosedLoop = true;
-    }
-  }
-
-  if (isClosedLoop && line.cachedPath != null) {
-    final fillP = Path.from(line.cachedPath!)..close();
-    line.cachedFillPath = fillP;
-  } else {
-    line.cachedFillPath = null;
-  }
 }
 
 // ── Layer 1: Finished Strokes & Background Painter ─────────────────────────────
@@ -2994,14 +2925,6 @@ class _FinishedStrokesPainter extends CustomPainter {
       } else {
         if (line.cachedPath == null) {
           _buildAndCachePath(line);
-        }
-
-        if (line.isFilled && line.cachedFillPath != null && !line.isEraser) {
-          final fillPaint = Paint()
-            ..isAntiAlias = true
-            ..style = PaintingStyle.fill
-            ..color = line.fillColor ?? line.color;
-          canvas.drawPath(line.cachedFillPath!, fillPaint);
         }
 
         if (!line.isEraser) {

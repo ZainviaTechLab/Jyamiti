@@ -31,6 +31,7 @@ class _QuestionFormScreenState extends State<QuestionFormScreen> {
   String? _selectedCourseId;
   String? _selectedChapter;
   String? _selectedTopic;
+  String? _selectedSubTopic;
 
   bool _isLoading = false;
 
@@ -67,6 +68,7 @@ class _QuestionFormScreenState extends State<QuestionFormScreen> {
     _selectedCourseId = q?['course'] ?? widget.initialCourseId;
     _selectedChapter = q?['chapter'];
     _selectedTopic = q?['topic'];
+    _selectedSubTopic = q?['subtopic'];
   }
 
   @override
@@ -106,6 +108,7 @@ class _QuestionFormScreenState extends State<QuestionFormScreen> {
       'course': _selectedCourseId,
       if (_selectedChapter != null) 'chapter': _selectedChapter,
       if (_selectedTopic != null) 'topic': _selectedTopic,
+      if (_selectedSubTopic != null) 'subtopic': _selectedSubTopic,
       'type': _type,
       'text': _textCtrl.text,
       'options': options,
@@ -209,7 +212,34 @@ class _QuestionFormScreenState extends State<QuestionFormScreen> {
                           value: t['title'],
                           child: Text(t['title']),
                         )).toList(),
-                    onChanged: topics.isEmpty ? null : (v) => setState(() => _selectedTopic = v),
+                    onChanged: topics.isEmpty ? null : (v) => setState(() {
+                      _selectedTopic = v;
+                      _selectedSubTopic = null;
+                    }),
+                  );
+                }
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (_selectedTopic != null && syllabus.any((ch) => ch['title'] == _selectedChapter)) ...[
+              Builder(
+                builder: (ctx) {
+                  final chapter = syllabus.firstWhere((ch) => ch['title'] == _selectedChapter, orElse: () => null);
+                  final List<dynamic> topics = chapter?['topics'] ?? [];
+                  final topic = topics.firstWhere((t) => t['title'] == _selectedTopic, orElse: () => null);
+                  final List<dynamic> subTopics = (topic?['subTopics'] as List?) ?? [];
+                  return DropdownButtonFormField<String>(
+                    value: subTopics.any((s) => s['title'] == _selectedSubTopic) ? _selectedSubTopic : null,
+                    dropdownColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+                    style: TextStyle(color: context.textColor),
+                    decoration: InputDecoration(labelText: 'Subtopic (Optional)', labelStyle: TextStyle(color: context.textColor70), filled: true, fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white, border: const OutlineInputBorder()),
+                    items: subTopics.isEmpty
+                      ? [const DropdownMenuItem<String>(value: null, child: Text('No subtopics available'))]
+                      : subTopics.map((s) => DropdownMenuItem<String>(
+                          value: s['title'],
+                          child: Text(s['title']),
+                        )).toList(),
+                    onChanged: subTopics.isEmpty ? null : (v) => setState(() => _selectedSubTopic = v),
                   );
                 }
               ),
