@@ -63,6 +63,7 @@ class MathsPadLine {
   // and any `MathsPadFixedAngleLabel.sourceLines` reference to this line.
   Color color;
   final double strokeWidth;
+  final bool isMagic;
   final bool isEraser;
   final bool isShape;
 
@@ -87,6 +88,7 @@ class MathsPadLine {
     required this.points,
     required this.color,
     required this.strokeWidth,
+    this.isMagic = false,
     this.isEraser = false,
     this.isShape = false,
     this.fillImage,
@@ -866,6 +868,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   double _initialScale = 1.0;
 
   CanvasToolMode _toolMode = CanvasToolMode.pen;
+  bool _isMagicPenMode = false;
   Color _selectedColor = const Color(0xFF6366F1);
   double _penWidth = 3.0;
   double _eraserWidth = 14.0;
@@ -2327,51 +2330,51 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       top: _textEditorWorldPos!.dy - 26,
       child: Material(
         color: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFF6366F1), width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.25),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.black.withOpacity(0.4) : Colors.white.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
+              child: SizedBox(
                 width: 140,
                 child: TextField(
                   controller: _textEditorController,
                   autofocus: true,
+                  cursorColor: isDark ? Colors.white : Colors.black87,
                   style: TextStyle(
                     color: isDark ? Colors.white : const Color(0xFF1E293B),
-                    fontSize: 15,
+                    fontSize: 16,
+                    letterSpacing: -0.3,
                   ),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
                     hintText: 'Label text…',
+                    hintStyle: TextStyle(
+                      color: isDark ? Colors.white54 : Colors.black45,
+                    ),
                   ),
                   onSubmitted: (_) => _commitTextEditor(),
+                  textInputAction: TextInputAction.done,
                 ),
               ),
-              const SizedBox(width: 6),
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _commitTextEditor,
-                child: const Icon(
-                  Icons.check_circle_rounded,
-                  color: Color(0xFF22C55E),
-                  size: 22,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -3646,6 +3649,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           color: _selectedColor,
           strokeWidth: activeWidth,
           isEraser: isEraserStroke,
+          isMagic: !isEraserStroke && _toolMode == CanvasToolMode.pen && _isMagicPenMode,
         );
         _currentLine = newLine;
         _resetPenAutoStraighten();
@@ -4073,6 +4077,36 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       }
       _selectedWidth = _eraserWidth;
       _selectedLines.clear();
+    });
+  }
+
+
+  void _selectAllLines() {
+    setState(() {
+      _selectedLines.clear();
+      _selectedLines.addAll(_lines.where((line) => !line.isEraser && line.points.isNotEmpty));
+    });
+  }
+
+  void _moveSelectedLines(Offset offset) {
+    if (_selectedLines.isEmpty) return;
+    setState(() {
+      for (final line in _selectedLines) {
+        if (line.fillWorldBounds != null) {
+          line.fillWorldBounds = line.fillWorldBounds!.shift(offset);
+          for (var pt in line.points) {
+            pt.offset += offset;
+          }
+        } else {
+          for (var pt in line.points) {
+            pt.offset += offset;
+          }
+          if (line.cachedBounds != null) {
+            line.cachedBounds = line.cachedBounds!.shift(offset);
+          }
+        }
+        line.invalidateCache();
+      }
     });
   }
 
@@ -5120,13 +5154,56 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       autofocus: true,
       onKeyEvent: (node, event) {
         if (event is KeyDownEvent) {
-          final ctrl = HardwareKeyboard.instance.isControlPressed;
+          final hw = HardwareKeyboard.instance;
+          final ctrl = hw.isControlPressed;
+          final shift = hw.isShiftPressed;
+
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyZ) {
+            _undo();
+            return KeyEventResult.handled;
+          }
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyD) {
+            _duplicateSelectedLines();
+            return KeyEventResult.handled;
+          }
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyA) {
+            _selectAllLines();
+            return KeyEventResult.handled;
+          }
           if (ctrl && event.logicalKey == LogicalKeyboardKey.keyC) {
             _copySelectedLines();
             return KeyEventResult.handled;
           }
           if (ctrl && event.logicalKey == LogicalKeyboardKey.keyV) {
             _pasteFromSystemClipboard();
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.escape) {
+            if (shift) {
+              widget.onToggleFullScreen?.call();
+            } else if (widget.isFullScreen) {
+              widget.onToggleFullScreen?.call();
+            }
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.delete) {
+            _deleteSelectedLines();
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+            _moveSelectedLines(const Offset(0, -10));
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+            _moveSelectedLines(const Offset(0, 10));
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+            _moveSelectedLines(const Offset(-10, 0));
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+            _moveSelectedLines(const Offset(10, 0));
             return KeyEventResult.handled;
           }
         }
@@ -5339,6 +5416,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     _selectedColor = color;
                     _toolMode = CanvasToolMode.pen;
                     _activeShapeTool = null;
+                    _isMagicPenMode = false;
                   });
                 }
               },
@@ -5495,12 +5573,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             // Left of the box.
             animatedTool(
               _quickToolIconButton(
-                icon: Icons.edit_rounded,
+                icon: _toolMode == CanvasToolMode.pen && _isMagicPenMode ? Icons.auto_fix_high_rounded : Icons.edit_rounded,
                 iconColor: iconColor,
                 isSelected: _toolMode == CanvasToolMode.pen,
                 onTap: () => setState(() {
-                  _toolMode = CanvasToolMode.pen;
-                  _activeShapeTool = null;
+                  if (_toolMode == CanvasToolMode.pen && _activeShapeTool == null) {
+                    _isMagicPenMode = !_isMagicPenMode;
+                  } else {
+                    _toolMode = CanvasToolMode.pen;
+                    _activeShapeTool = null;
+                  }
                 }),
               ),
               4,
@@ -6815,6 +6897,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             _toolMode = CanvasToolMode.pen;
                             _activeShapeTool = null;
                             _selectedWidth = _penWidth;
+                            _isMagicPenMode = false;
                           });
                         },
                         child: Container(
@@ -7970,7 +8053,23 @@ class _MathsPadFinishedStrokesPainter extends CustomPainter {
         paint.blendMode = BlendMode.clear;
         paint.strokeWidth = line.strokeWidth * 3.5;
       } else {
-        paint.color = line.color;
+        if (line.isMagic && line.points.isNotEmpty) {
+          paint.shader = const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFFFF7A00),
+              Color(0xFFFF2E9A),
+              Color(0xFF00E5FF),
+              Color(0xFF39FF14),
+              Color(0xFFFF7A00),
+            ],
+            tileMode: TileMode.repeated,
+          ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
+        } else {
+          paint.shader = null;
+          paint.color = line.color;
+        }
         paint.strokeWidth = line.strokeWidth;
       }
 
@@ -8092,7 +8191,23 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           paint.blendMode = BlendMode.clear;
           paint.strokeWidth = line.strokeWidth * 3.5;
         } else {
-          paint.color = line.color;
+          if (line.isMagic && line.points.isNotEmpty) {
+            paint.shader = const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFFFF7A00),
+                Color(0xFFFF2E9A),
+                Color(0xFF00E5FF),
+                Color(0xFF39FF14),
+                Color(0xFFFF7A00),
+              ],
+              tileMode: TileMode.repeated,
+            ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
+          } else {
+            paint.shader = null;
+            paint.color = line.color;
+          }
           paint.strokeWidth = line.strokeWidth;
         }
 
