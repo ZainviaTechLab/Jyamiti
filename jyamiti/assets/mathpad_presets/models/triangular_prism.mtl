@@ -1,0 +1,8 @@
+# Material for triangular_prism
+newmtl triangular_prismMaterial
+Ka 0.324 0.099 0.210
+Kd 0.925 0.282 0.600
+Ks 0.25 0.25 0.25
+Ns 20
+d 1.0
+illum 2

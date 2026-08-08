@@ -1,0 +1,8 @@
+# Material for cone
+newmtl coneMaterial
+Ka 0.342 0.158 0.030
+Kd 0.976 0.451 0.086
+Ks 0.25 0.25 0.25
+Ns 20
+d 1.0
+illum 2

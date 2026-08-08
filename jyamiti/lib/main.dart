@@ -20,12 +20,16 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:media_kit/media_kit.dart';
 import 'services/api_service.dart';
 import 'services/offline_sync_service.dart';
 import 'presentation/widgets/theme_reveal.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Must run once before any `media_kit` Player is created -- backs the
+  // Math Pad Asset Library's video embeds (see `MediaEmbedWidget`).
+  MediaKit.ensureInitialized();
   OfflineSyncService.instance.initAutoSync();
   OfflineSyncService.instance.syncPendingRequests();
 

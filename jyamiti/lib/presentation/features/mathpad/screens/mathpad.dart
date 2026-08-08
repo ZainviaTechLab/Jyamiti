@@ -17,7 +17,13 @@ import '../instruments/ruler_widget.dart';
 import '../instruments/protractor_widget.dart';
 import '../instruments/compass_widget.dart';
 import '../instruments/set_square_widget.dart';
+import '../instruments/media_embed_models.dart';
+import '../instruments/media_embed_widget.dart';
 import '../recording/mathpad_recording_service.dart';
+import '../asset_library/models/asset_library_models.dart';
+import '../asset_library/models/mathpad_template_models.dart';
+import '../asset_library/services/mathpad_asset_library_storage_service.dart';
+import '../asset_library/screens/asset_library_picker_sheet.dart';
 
 /// Hands the full current canvas content back to whoever opened
 /// [MathsPadWidget] with a `onSaveRequested` callback (e.g. the Math Pad
@@ -537,6 +543,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // Geometry instruments (ruler, protractor, compass, set squares) overlaid
   // on the canvas. See presentation/features/mathpad/instruments/.
   final List<InstrumentState> _instruments = [];
+
+  // Asset Library: which embedded video/GIF (if any) currently has its
+  // close button showing -- mirrors `_selectedTextLabelIndex`'s "tap to
+  // reveal controls" pattern. Set in `_tryStartInstrumentDrag` when a
+  // MediaEmbedState's 'move' handle is hit, cleared when tapping anywhere
+  // else (see the pointer-down handler, alongside the text label
+  // deselection it's modeled on).
+  MediaEmbedState? _selectedMediaEmbed;
+  final _assetLibraryStorage = MathPadAssetLibraryStorageService();
+  // Populated lazily (first Asset Library open, or whenever an embedded
+  // asset needs resolving) and refreshed each time the picker sheet opens
+  // -- avoids a disk hit on every MediaEmbedWidget rebuild. Keyed by
+  // AssetLibraryEntry.id, covers both presets and user-imported entries.
+  final Map<String, AssetLibraryEntry> _assetLookupCache = {};
   // The canvas's own visible size (excludes the toolbar above it), kept up
   // to date by the LayoutBuilder in build() -- used to center newly-added
   // instruments in the actually-visible area rather than the whole widget
@@ -945,6 +965,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
     if (widget.initialInstruments != null) {
       _instruments.addAll(widget.initialInstruments!);
+      // Any restored `MediaEmbedState`s need their `assetId` resolved
+      // against the global Asset Library before `MediaEmbedWidget` can
+      // render real content instead of a "missing asset" placeholder.
+      if (_instruments.any((i) => i is MediaEmbedState)) {
+        _ensureAssetLookupCacheLoaded().then((_) {
+          if (mounted) setState(() {});
+        });
+      }
     }
     if (widget.initialTextLabels != null) {
       _textLabels.addAll(widget.initialTextLabels!);
@@ -2199,6 +2227,182 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     });
   }
 
+  /// Embeds a video/GIF [entry] from the Asset Library onto the canvas as
+  /// a `MediaEmbedState` overlay, centered at the current viewport and
+  /// downscaled (never up) to the same `maxDim = 400.0` cap
+  /// `_insertPastedImageBytes` uses for pasted images, for visually
+  /// consistent initial sizing between the two insertion paths. Deliberately
+  /// bypasses `_addInstrument` (a toggle-singleton, one-per-tool-type helper
+  /// meant for the geometry instruments) -- a page can hold any number of
+  /// media embeds.
+  void _insertMediaEmbed(
+    AssetLibraryEntry entry, {
+    required bool isGif,
+    required double naturalWidth,
+    required double naturalHeight,
+  }) {
+    if (naturalWidth <= 0 || naturalHeight <= 0) return;
+    const double maxDim = 400.0;
+    final double scale = (naturalWidth > naturalHeight ? maxDim / naturalWidth : maxDim / naturalHeight)
+        .clamp(0.0, 1.0);
+    final viewportCenter = _screenToWorld(
+      Offset(_canvasSize.width / 2, _canvasSize.height / 2),
+    );
+    setState(() {
+      _assetLookupCache[entry.id] = entry;
+      _instruments.add(
+        MediaEmbedState(
+          pivot: viewportCenter,
+          assetId: entry.id,
+          isGif: isGif,
+          baseWidth: naturalWidth * scale,
+          baseHeight: naturalHeight * scale,
+        ),
+      );
+      _undoHistory.clear();
+    });
+  }
+
+  /// Inserts a bundled 2D diagram [template] (triangle/circle/axes/number
+  /// line, see `mathpad_template_models.dart`) as real editable strokes at
+  /// the current viewport -- the template's lines/labels are authored
+  /// around `Offset.zero`, so every point/position just needs shifting by
+  /// the viewport center. Mirrors `_insertPastedImageBytes`'s
+  /// setState/undo-clear/notify sequence.
+  void _insertTemplate(MathPadTemplate template) {
+    final viewportCenter = _screenToWorld(
+      Offset(_canvasSize.width / 2, _canvasSize.height / 2),
+    );
+    final List<MathsPadLine> newLines = template.buildLines();
+    for (final line in newLines) {
+      for (final p in line.points) {
+        p.offset += viewportCenter;
+      }
+    }
+    final List<MathsPadTextLabel> newLabels = template.buildLabels();
+    for (final label in newLabels) {
+      label.position += viewportCenter;
+    }
+    setState(() {
+      _lines.addAll(newLines);
+      _textLabels.addAll(newLabels);
+      _undoHistory.clear();
+    });
+    for (final line in newLines) {
+      _buildAndCachePath(line);
+    }
+    _finishedStrokesNotifier.value++;
+  }
+
+  /// Generic removal for any instrument (geometry or media embed) -- the
+  /// first actually-wired remove path in this file; Ruler/Protractor/
+  /// SetSquare declare a `'remove'` handle key that nothing ever renders or
+  /// acts on (dead code, left as-is -- see `MediaEmbedWidget`'s doc comment).
+  void _removeInstrument(InstrumentState inst) {
+    setState(() {
+      _instruments.remove(inst);
+      if (identical(_selectedMediaEmbed, inst)) _selectedMediaEmbed = null;
+    });
+  }
+
+  /// Snaps a video embed's placeholder box to its true aspect ratio once
+  /// `MediaEmbedWidget` reports the real decoded dimensions (fired at most
+  /// once per embed -- see `onNaturalSizeResolved`). Recomputes
+  /// `baseWidth`/`baseHeight` with the same never-upscale `maxDim = 400.0`
+  /// cap `_insertMediaEmbed`/`_insertPastedImageBytes` both use, so a video
+  /// snapping to its real size doesn't suddenly balloon past the size every
+  /// other inserted asset is capped to. Pivot (center) and the user's
+  /// current `scale` are left untouched, so this reads as the box's aspect
+  /// correcting in place, not the embed jumping around or resetting any
+  /// manual resize already applied.
+  void _updateMediaEmbedNaturalSize(MediaEmbedState inst, double naturalWidth, double naturalHeight) {
+    if (!_instruments.contains(inst) || naturalWidth <= 0 || naturalHeight <= 0) return;
+    const double maxDim = 400.0;
+    final double scale = (naturalWidth > naturalHeight ? maxDim / naturalWidth : maxDim / naturalHeight)
+        .clamp(0.0, 1.0);
+    setState(() {
+      inst.baseWidth = naturalWidth * scale;
+      inst.baseHeight = naturalHeight * scale;
+    });
+  }
+
+  Future<void> _ensureAssetLookupCacheLoaded() async {
+    if (kIsWeb) return;
+    final entries = await _assetLibraryStorage.loadIndex();
+    _assetLookupCache.addEntries(entries.map((e) => MapEntry(e.id, e)));
+  }
+
+  /// Opens the Asset Library picker sheet and routes each tab's selection
+  /// into the appropriate insertion path -- Images reuse the existing
+  /// `_insertPastedImageBytes` (already battle-tested for pasted images),
+  /// 3D opens its own standalone viewer route (not embedded on canvas),
+  /// Video/GIF embeds via `_insertMediaEmbed`, Templates via
+  /// `_insertTemplate`. Lives entirely inside `_MathsPadWidgetState` (not
+  /// injected via a `leadingToolbarAction`-style external param) since its
+  /// behavior is intrinsically tied to this state's private methods.
+  Widget _buildAssetLibraryToolbarButton() {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        decoration: BoxDecoration(
+          color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+          border: Border.all(color: context.glassBorder),
+        ),
+        child: IconButton(
+          icon: const Icon(Icons.perm_media_rounded, color: Color(0xFF6366F1)),
+          tooltip: 'Asset Library',
+          onPressed: () async {
+            await _ensureAssetLookupCacheLoaded();
+            if (!mounted) return;
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (_) => AssetLibraryPickerSheet(
+                onImageSelected: (entry) async {
+                  final bytes = await _assetLibraryStorage.readFileBytes(entry);
+                  final viewportCenter = _screenToWorld(
+                    Offset(_canvasSize.width / 2, _canvasSize.height / 2),
+                  );
+                  await _insertPastedImageBytes(bytes, viewportCenter);
+                },
+                onVideoOrGifSelected: (entry) async {
+                  final bytes = await _assetLibraryStorage.readFileBytes(entry);
+                  if (entry.kind == AssetKind.gif) {
+                    final codec = await ui.instantiateImageCodec(bytes);
+                    final frame = await codec.getNextFrame();
+                    _insertMediaEmbed(
+                      entry,
+                      isGif: true,
+                      naturalWidth: frame.image.width.toDouble(),
+                      naturalHeight: frame.image.height.toDouble(),
+                    );
+                    frame.image.dispose();
+                  } else {
+                    // Video dimensions aren't known synchronously without
+                    // decoding a frame (no lightweight probe available
+                    // here) -- start at a sensible fixed 16:9 box; the
+                    // generic 'resize' handle can adjust it afterwards.
+                    _insertMediaEmbed(entry, isGif: false, naturalWidth: 320, naturalHeight: 180);
+                  }
+                },
+                onTemplateSelected: _insertTemplate,
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   void _commitCompassArc(List<Offset> worldPoints) {
     if (worldPoints.length < 2) return;
     final arcLine = MathsPadLine(
@@ -2472,6 +2676,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           inst.tracedArcPoints = [];
         }),
       );
+    } else if (inst is MediaEmbedState) {
+      return MediaEmbedWidget(
+        key: ValueKey(inst),
+        state: inst,
+        isDark: isDark,
+        isSelected: identical(_selectedMediaEmbed, inst),
+        entry: _assetLookupCache[inst.assetId],
+        storage: _assetLibraryStorage,
+        onRemove: () => _removeInstrument(inst),
+        onNaturalSizeResolved: inst.isGif
+            ? null
+            : (w, h) => _updateMediaEmbedNaturalSize(inst, w, h),
+      );
     }
     return const SizedBox.shrink();
   }
@@ -2692,6 +2909,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           return (inst, 'pivot');
         }
       }
+      // A media embed's 'move' handle sits exactly at its pivot (center) --
+      // fine as a precise grab point, but tapping anywhere else on the
+      // visible video/GIF tile should drag it too, the way you'd expect to
+      // pick up a sticker rather than needing to find a specific handle
+      // dot. Only reached if the tap missed every handle above, so the
+      // rotate/resize handles (outside the rect) still take priority.
+      if (inst is MediaEmbedState) {
+        final local = inst.worldToLocal(worldPos);
+        if (local.dx.abs() <= inst.worldWidth / 2 && local.dy.abs() <= inst.worldHeight / 2) {
+          return (inst, 'move');
+        }
+      }
     }
     return null;
   }
@@ -2871,6 +3100,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (inst is ProtractorState)
       _instrumentDragStartRadiusOrScale = inst.radius;
     if (inst is SetSquareState) _instrumentDragStartRadiusOrScale = inst.scale;
+    if (inst is MediaEmbedState) {
+      _instrumentDragStartRadiusOrScale = inst.scale;
+      if (!identical(_selectedMediaEmbed, inst)) {
+        setState(() => _selectedMediaEmbed = inst);
+      }
+    }
     if (inst is CompassState) _instrumentDragStartArmAngle = inst.armAngle;
     if (inst is CompassState &&
         (handle == 'tip' || handle == 'hinge') &&
@@ -3002,6 +3237,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             inst.scale = (_instrumentDragStartRadiusOrScale! * factor).clamp(
               0.4,
               3.0,
+            );
+          } else if (inst is MediaEmbedState) {
+            inst.scale = (_instrumentDragStartRadiusOrScale! * factor).clamp(
+              0.2,
+              4.0,
             );
           }
         }
@@ -3485,6 +3725,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // button/resize handle was showing.
       if (_selectedTextLabelIndex != null) {
         setState(() => _selectedTextLabelIndex = null);
+      }
+      if (_selectedMediaEmbed != null) {
+        setState(() => _selectedMediaEmbed = null);
       }
 
       if (_toolMode == CanvasToolMode.text) {
@@ -7503,6 +7746,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               child: widget.trailingToolbarAction!,
             ),
           ],
+          // Asset Library button -- unconditional (not gated behind a
+          // widget param the host page injects, unlike the two slots
+          // above) since opening the picker and inserting its selections
+          // is intrinsically internal to this state, not host-page chrome.
+          const SizedBox(width: 12),
+          Container(
+            width: 1,
+            height: 32,
+            color: isDark ? Colors.white24 : Colors.black12,
+          ),
+          const SizedBox(width: 12),
+          RotatedBox(
+            quarterTurns: _toolbarOnLeft ? -1 : 0,
+            child: _buildAssetLibraryToolbarButton(),
+          ),
         ],
       ),
     );

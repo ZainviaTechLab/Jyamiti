@@ -1,0 +1,8 @@
+# Material for cube
+newmtl cubeMaterial
+Ka 0.136 0.140 0.331
+Kd 0.388 0.400 0.945
+Ks 0.25 0.25 0.25
+Ns 20
+d 1.0
+illum 2

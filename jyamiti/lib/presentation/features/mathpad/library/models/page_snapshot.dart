@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart' show Offset, Color, Rect;
 
 import '../../instruments/instrument_models.dart';
+import '../../instruments/media_embed_models.dart';
 import '../../screens/mathpad.dart';
 
 /// Everything visible on one Math Pad canvas -- the full content of one
@@ -173,6 +174,20 @@ Map<String, dynamic>? _encodeInstrument(InstrumentState inst) {
       'pencilEdgeIndex': inst.pencilEdgeIndex,
       'pencilOffsetPx': inst.pencilOffsetPx,
     };
+  } else if (inst is MediaEmbedState) {
+    // No byte-duplication here, unlike a pasted image's `fillImageFile` --
+    // `assetId` is a reference into the *global* Asset Library, resolved
+    // lazily at render time, so replacing/editing that asset is reflected
+    // everywhere it's embedded instead of freezing a copy per page.
+    return {
+      ...base,
+      'type': 'mediaEmbed',
+      'assetId': inst.assetId,
+      'isGif': inst.isGif,
+      'baseWidth': inst.baseWidth,
+      'baseHeight': inst.baseHeight,
+      'scale': inst.scale,
+    };
   }
   return null;
 }
@@ -215,6 +230,16 @@ InstrumentState? _decodeInstrument(Map<String, dynamic> json) {
         pencilArmed: json['pencilArmed'] as bool? ?? false,
         pencilEdgeIndex: json['pencilEdgeIndex'] as int? ?? 0,
         pencilOffsetPx: (json['pencilOffsetPx'] as num?)?.toDouble(),
+      );
+    case 'mediaEmbed':
+      return MediaEmbedState(
+        pivot: pivot,
+        rotation: rotation,
+        assetId: json['assetId'] as String,
+        isGif: json['isGif'] as bool,
+        baseWidth: (json['baseWidth'] as num).toDouble(),
+        baseHeight: (json['baseHeight'] as num).toDouble(),
+        scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
       );
   }
   return null;

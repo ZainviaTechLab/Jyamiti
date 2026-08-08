@@ -7,6 +7,8 @@ list(APPEND FLUTTER_PLUGIN_LIST
   file_selector_windows
   flutter_tts
   irondash_engine_context
+  media_kit_libs_windows_video
+  media_kit_video
   record_windows
   speech_to_text_windows
   super_native_extensions

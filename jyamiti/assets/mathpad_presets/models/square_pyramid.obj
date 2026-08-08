@@ -1,0 +1,16 @@
+# Square Pyramid
+# Auto-generated preset for Jyamiti Math Pad's Asset Library
+mtllib square_pyramid.mtl
+usemtl square_pyramidMaterial
+
+v -1.0000 -1.0000 -1.0000
+v 1.0000 -1.0000 -1.0000
+v 1.0000 -1.0000 1.0000
+v -1.0000 -1.0000 1.0000
+v 0.0000 1.0000 0.0000
+
+f 1 2 3 4
+f 1 5 2
+f 2 5 3
+f 3 5 4
+f 4 5 1
