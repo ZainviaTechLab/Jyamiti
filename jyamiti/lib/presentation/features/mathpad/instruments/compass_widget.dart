@@ -18,7 +18,6 @@ class CompassWidget extends StatelessWidget {
   final bool isDark;
   final VoidCallback onToggleLock;
   final VoidCallback onRefresh;
-  final VoidCallback onRemove;
 
   const CompassWidget({
     super.key,
@@ -26,7 +25,6 @@ class CompassWidget extends StatelessWidget {
     required this.isDark,
     required this.onToggleLock,
     required this.onRefresh,
-    required this.onRemove,
   });
 
   @override
@@ -52,7 +50,6 @@ class CompassWidget extends StatelessWidget {
             state: state,
             onToggleLock: onToggleLock,
             onRefresh: onRefresh,
-            onRemove: onRemove,
           ),
         ),
       ],
@@ -64,13 +61,11 @@ class _CompassBadge extends StatelessWidget {
   final CompassState state;
   final VoidCallback onToggleLock;
   final VoidCallback onRefresh;
-  final VoidCallback onRemove;
 
   const _CompassBadge({
     required this.state,
     required this.onToggleLock,
     required this.onRefresh,
-    required this.onRemove,
   });
 
   @override
@@ -121,16 +116,6 @@ class _CompassBadge extends StatelessWidget {
                 color: Colors.grey,
               ),
             ),
-            const SizedBox(width: 6),
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onRemove,
-              child: const Icon(
-                Icons.close_rounded,
-                size: 18,
-                color: Color(0xFFEF4444),
-              ),
-            ),
           ],
         ),
       ),
@@ -165,7 +150,10 @@ class _CompassPainter extends CustomPainter {
         ..strokeWidth = 2.5
         ..strokeCap = StrokeCap.round;
       final path = Path()
-        ..moveTo(state.tracedArcPoints.first.dx, state.tracedArcPoints.first.dy);
+        ..moveTo(
+          state.tracedArcPoints.first.dx,
+          state.tracedArcPoints.first.dy,
+        );
       for (final p in state.tracedArcPoints.skip(1)) {
         path.lineTo(p.dx, p.dy);
       }

@@ -197,11 +197,12 @@ enum BasicShapeType {
   pentagon,
   hexagon,
   diamond,
-  star,
   coordinateAxes,
   arrowHorizontal,
   arrowVertical,
   cube3d,
+  cone3d,
+  sphere3d,
 }
 
 class _ShapeToolItem {
@@ -399,7 +400,6 @@ const List<_ShapeToolItem> _shapeTools = [
     Icons.diamond_outlined,
     'Diamond / Rhombus',
   ),
-  _ShapeToolItem(BasicShapeType.star, Icons.star_outline_rounded, 'Star'),
   _ShapeToolItem(
     BasicShapeType.coordinateAxes,
     Icons.add_chart_rounded,
@@ -420,7 +420,47 @@ const List<_ShapeToolItem> _shapeTools = [
     Icons.view_in_ar_rounded,
     '3D Cube Wireframe',
   ),
+  _ShapeToolItem(
+    BasicShapeType.cone3d,
+    Icons.filter_tilt_shift_rounded,
+    '3D Cone',
+  ),
+  _ShapeToolItem(BasicShapeType.sphere3d, Icons.language_rounded, '3D Sphere'),
 ];
+
+class _CanvasCluster {
+  final List<MathsPadLine> lines = [];
+  final List<MathsPadTextLabel> labels = [];
+  Rect bounds;
+  Offset totalShift = Offset.zero;
+
+  _CanvasCluster(this.bounds);
+
+  void merge(_CanvasCluster other) {
+    lines.addAll(other.lines);
+    labels.addAll(other.labels);
+    bounds = bounds.expandToInclude(other.bounds);
+  }
+
+  void shift(Offset offset) {
+    for (final line in lines) {
+      if (line.fillImage != null && line.fillWorldBounds != null) {
+        line.fillWorldBounds = line.fillWorldBounds!.shift(offset);
+      }
+      for (final p in line.points) {
+        p.offset += offset;
+      }
+      line.cachedPath = null;
+      line.cachedBounds = null;
+      _buildAndCachePath(line);
+    }
+    for (final label in labels) {
+      label.position += offset;
+    }
+    bounds = bounds.shift(offset);
+    totalShift += offset;
+  }
+}
 
 class MathsPadWidget extends StatefulWidget {
   final VoidCallback? onClose;
@@ -601,13 +641,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // Drag through a gap to push everything past that point further away,
   // live, opening up blank space to work in -- like "Add Space" in note
   // apps. Axis (vertical vs horizontal) is decided from the first ~8px of
-  // actual movement, UNLESS _spacerHorizontalOnly is set (toggled by
-  // tapping the tool's own toolbar button again), which always forces
-  // horizontal. _spacerDrag stays null until the axis is decided.
+  // apps. Axis (vertical vs horizontal) is decided from the first ~8px of
+  // actual movement. _spacerDrag stays null until the axis is decided.
+  // Tapping the tool's own toolbar button again will compress the canvas.
   Offset? _spacerPointerStart;
   _SpacerDragState? _spacerDrag;
   double _spacerLiveShift = 0;
-  bool _spacerHorizontalOnly = false;
 
   // ─── Text Label Tool ──────────────────────────────────────────────────
   final List<MathsPadTextLabel> _textLabels = [];
@@ -819,6 +858,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // Infinite Canvas Pan & Zoom Transformation State
   Offset _panOffset = Offset.zero;
   double _scale = 1.0;
+  bool _zoomLocked = false;
 
   // Gesture Tracking State
   Offset _initialFocalPoint = Offset.zero;
@@ -1165,9 +1205,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       const double activateThreshold = 8.0;
       if (delta.distance < activateThreshold) return;
 
-      final bool isVertical = _spacerHorizontalOnly
-          ? false
-          : delta.dy.abs() >= delta.dx.abs();
+      final bool isVertical = delta.dy.abs() >= delta.dx.abs();
       final Offset start = _spacerPointerStart!;
       const double tolerance = 2.0;
       final double startCoord = isVertical ? start.dy : start.dx;
@@ -2151,7 +2189,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     setState(() {
       final existingIndex = _instruments.indexWhere(isSameTool);
       if (existingIndex != -1) {
-        _instruments[existingIndex].pivot = viewportCenter;
+        _instruments.removeAt(existingIndex);
       } else {
         _instruments.add(build(viewportCenter));
       }
@@ -2405,7 +2443,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         state: inst,
         isDark: isDark,
         logoImage: _logoImage,
-        onRemove: () => setState(() => _instruments.remove(inst)),
       );
     } else if (inst is ProtractorState) {
       return ProtractorWidget(
@@ -2413,7 +2450,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         state: inst,
         isDark: isDark,
         logoImage: _logoImage,
-        onRemove: () => setState(() => _instruments.remove(inst)),
       );
     } else if (inst is SetSquareState) {
       return SetSquareWidget(
@@ -2421,7 +2457,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         state: inst,
         isDark: isDark,
         logoImage: _logoImage,
-        onRemove: () => setState(() => _instruments.remove(inst)),
       );
     } else if (inst is CompassState) {
       return CompassWidget(
@@ -2433,7 +2468,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           inst.armAngle = -pi / 4;
           inst.tracedArcPoints = [];
         }),
-        onRemove: () => setState(() => _instruments.remove(inst)),
       );
     }
     return const SizedBox.shrink();
@@ -3351,10 +3385,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       final isControlPressed = HardwareKeyboard.instance.isControlPressed;
       if (isControlPressed) {
         // Pinch-to-zoom on Chrome trackpad or Ctrl + Wheel
-        setState(() {
-          final double zoomFactor = event.scrollDelta.dy > 0 ? 0.93 : 1.07;
-          _scale = (_scale * zoomFactor).clamp(0.25, 4.0);
-        });
+        if (!_zoomLocked) {
+          setState(() {
+            final double zoomFactor = event.scrollDelta.dy > 0 ? 0.93 : 1.07;
+            _scale = (_scale * zoomFactor).clamp(0.25, 4.0);
+          });
+        }
       } else {
         // Butter-smooth 1.35x 360-degree trackpad pan – direct notifier, 0 rebuilds!
         final Offset delta =
@@ -3635,11 +3671,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _lassoPoints.clear();
 
       // Direct notifier updates – no setState → zero widget-tree rebuild at 120fps!
-      _scale = (_initialScale * details.scale).clamp(0.25, 4.0);
+      if (!_zoomLocked) {
+        _scale = (_initialScale * details.scale).clamp(0.25, 4.0);
+        _scaleNotifier.value = _scale;
+      }
       final focalDelta = details.localFocalPoint - _initialFocalPoint;
       _panOffset = _initialPanOffset + focalDelta;
       _panNotifier.value = _panOffset;
-      _scaleNotifier.value = _scale;
       return;
     } else if (_draggedInstrument != null) {
       _updateInstrumentDrag(_screenToWorld(details.localFocalPoint));
@@ -4546,27 +4584,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         );
         break;
 
-      case BasicShapeType.star:
-        final List<MathsPadStrokePoint> pts = [];
-        for (int i = 0; i < 10; i++) {
-          final double rx = i.isEven ? radiusX : radiusX * 0.45;
-          final double ry = i.isEven ? radiusY : radiusY * 0.45;
-          final double a = (i / 10) * 2 * pi - pi / 2;
-          pts.add(
-            MathsPadStrokePoint(center + Offset(cos(a) * rx, sin(a) * ry)),
-          );
-        }
-        pts.add(pts.first);
-        createdLines.add(
-          MathsPadLine(
-            points: pts,
-            color: color,
-            strokeWidth: strokeWidth,
-            isShape: true,
-          ),
-        );
-        break;
-
       case BasicShapeType.coordinateAxes:
         // X-Axis with Arrowhead
         createdLines.add(
@@ -4759,6 +4776,99 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           ),
         );
         break;
+
+      case BasicShapeType.cone3d:
+        final List<MathsPadStrokePoint> basePts = [];
+        final double baseCenterY = rect.bottom - rect.height * 0.15;
+        final double ellipseRY = rect.height * 0.15;
+        for (int i = 0; i <= 36; i++) {
+          final double a = (i / 36) * 2 * pi;
+          basePts.add(
+            MathsPadStrokePoint(
+              Offset(
+                center.dx + cos(a) * radiusX,
+                baseCenterY + sin(a) * ellipseRY,
+              ),
+            ),
+          );
+        }
+        createdLines.add(
+          MathsPadLine(
+            points: basePts,
+            color: color,
+            strokeWidth: strokeWidth,
+            isShape: true,
+          ),
+        );
+        createdLines.add(
+          MathsPadLine(
+            points: [
+              MathsPadStrokePoint(Offset(rect.left, baseCenterY)),
+              MathsPadStrokePoint(Offset(center.dx, rect.top)),
+              MathsPadStrokePoint(Offset(rect.right, baseCenterY)),
+            ],
+            color: color,
+            strokeWidth: strokeWidth,
+            isShape: true,
+          ),
+        );
+        break;
+
+      case BasicShapeType.sphere3d:
+        final List<MathsPadStrokePoint> circlePts = [];
+        for (int i = 0; i <= 36; i++) {
+          final double a = (i / 36) * 2 * pi;
+          circlePts.add(
+            MathsPadStrokePoint(
+              center + Offset(cos(a) * radiusX, sin(a) * radiusY),
+            ),
+          );
+        }
+        createdLines.add(
+          MathsPadLine(
+            points: circlePts,
+            color: color,
+            strokeWidth: strokeWidth,
+            isShape: true,
+          ),
+        );
+        final List<MathsPadStrokePoint> equatorPts = [];
+        final double equatorRY = radiusY * 0.3;
+        for (int i = 0; i <= 36; i++) {
+          final double a = (i / 36) * 2 * pi;
+          equatorPts.add(
+            MathsPadStrokePoint(
+              center + Offset(cos(a) * radiusX, sin(a) * equatorRY),
+            ),
+          );
+        }
+        createdLines.add(
+          MathsPadLine(
+            points: equatorPts,
+            color: color,
+            strokeWidth: strokeWidth,
+            isShape: true,
+          ),
+        );
+        final List<MathsPadStrokePoint> verticalPts = [];
+        final double equatorRX = radiusX * 0.3;
+        for (int i = 0; i <= 36; i++) {
+          final double a = (i / 36) * 2 * pi;
+          verticalPts.add(
+            MathsPadStrokePoint(
+              center + Offset(cos(a) * equatorRX, sin(a) * radiusY),
+            ),
+          );
+        }
+        createdLines.add(
+          MathsPadLine(
+            points: verticalPts,
+            color: color,
+            strokeWidth: strokeWidth,
+            isShape: true,
+          ),
+        );
+        break;
     }
 
     final String shapeGroupId = DateTime.now().microsecondsSinceEpoch
@@ -4790,6 +4900,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   void _zoomIn() {
+    if (_zoomLocked) return;
     _frictionController?.stop();
     setState(() {
       _scale = (_scale * 1.2).clamp(0.25, 4.0);
@@ -4798,10 +4909,151 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   void _zoomOut() {
+    if (_zoomLocked) return;
     _frictionController?.stop();
     setState(() {
       _scale = (_scale / 1.2).clamp(0.25, 4.0);
       _scaleNotifier.value = _scale;
+    });
+  }
+
+  void _compressCanvasSpace() {
+    if (_lines.isEmpty && _textLabels.isEmpty) return;
+
+    List<_CanvasCluster> clusters = [];
+    final Map<String, _CanvasCluster> groupClusters = {};
+
+    for (final line in _lines) {
+      Rect? lineBounds;
+      if (line.fillWorldBounds != null) {
+        lineBounds = line.fillWorldBounds;
+      } else if (line.points.isNotEmpty) {
+        double minX = double.infinity, minY = double.infinity;
+        double maxX = -double.infinity, maxY = -double.infinity;
+        for (final p in line.points) {
+          if (p.offset.dx < minX) minX = p.offset.dx;
+          if (p.offset.dx > maxX) maxX = p.offset.dx;
+          if (p.offset.dy < minY) minY = p.offset.dy;
+          if (p.offset.dy > maxY) maxY = p.offset.dy;
+        }
+        lineBounds = Rect.fromLTRB(minX, minY, maxX, maxY);
+      }
+      if (lineBounds == null) continue;
+
+      if (line.groupId != null) {
+        if (groupClusters.containsKey(line.groupId)) {
+          final cluster = groupClusters[line.groupId!]!;
+          cluster.lines.add(line);
+          cluster.bounds = cluster.bounds.expandToInclude(lineBounds);
+        } else {
+          final cluster = _CanvasCluster(lineBounds);
+          cluster.lines.add(line);
+          groupClusters[line.groupId!] = cluster;
+        }
+      } else {
+        final cluster = _CanvasCluster(lineBounds);
+        cluster.lines.add(line);
+        clusters.add(cluster);
+      }
+    }
+    clusters.addAll(groupClusters.values);
+
+    for (final label in _textLabels) {
+      final cluster = _CanvasCluster(label.worldBounds);
+      cluster.labels.add(label);
+      clusters.add(cluster);
+    }
+
+    // Merge intersecting clusters
+    bool merged;
+    do {
+      merged = false;
+      for (int i = 0; i < clusters.length; i++) {
+        for (int j = i + 1; j < clusters.length; j++) {
+          if (clusters[i].bounds
+              .inflate(5.0)
+              .overlaps(clusters[j].bounds.inflate(5.0))) {
+            clusters[i].merge(clusters[j]);
+            clusters.removeAt(j);
+            merged = true;
+            break;
+          }
+        }
+        if (merged) break;
+      }
+    } while (merged);
+
+    const double minGap = 20.0;
+
+    // Vertical Compaction (shift UP)
+    clusters.sort((a, b) => a.bounds.top.compareTo(b.bounds.top));
+    for (int i = 0; i < clusters.length; i++) {
+      final cluster = clusters[i];
+      double maxAllowedY = -double.infinity;
+      for (int j = 0; j < i; j++) {
+        final other = clusters[j];
+        if (cluster.bounds.left <= other.bounds.right &&
+            cluster.bounds.right >= other.bounds.left) {
+          if (other.bounds.bottom > maxAllowedY) {
+            maxAllowedY = other.bounds.bottom;
+          }
+        }
+      }
+
+      double shiftY = 0;
+      if (maxAllowedY != -double.infinity) {
+        final double targetY = maxAllowedY + minGap;
+        if (cluster.bounds.top > targetY) {
+          shiftY = targetY - cluster.bounds.top;
+        }
+      }
+      if (shiftY < 0) {
+        cluster.shift(Offset(0, shiftY));
+      }
+    }
+
+    // Horizontal Compaction (shift LEFT)
+    clusters.sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
+    for (int i = 0; i < clusters.length; i++) {
+      final cluster = clusters[i];
+      double maxAllowedX = -double.infinity;
+      for (int j = 0; j < i; j++) {
+        final other = clusters[j];
+        if (cluster.bounds.top <= other.bounds.bottom &&
+            cluster.bounds.bottom >= other.bounds.top) {
+          if (other.bounds.right > maxAllowedX) {
+            maxAllowedX = other.bounds.right;
+          }
+        }
+      }
+
+      double shiftX = 0;
+      if (maxAllowedX != -double.infinity) {
+        final double targetX = maxAllowedX + minGap;
+        if (cluster.bounds.left > targetX) {
+          shiftX = targetX - cluster.bounds.left;
+        }
+      }
+      if (shiftX < 0) {
+        cluster.shift(Offset(shiftX, 0));
+      }
+    }
+
+    // Apply shifts to fixed angle labels
+    for (final angleLabel in _fixedAngleLabels) {
+      if (angleLabel.sourceLines.isNotEmpty) {
+        for (final cluster in clusters) {
+          if (cluster.lines.contains(angleLabel.sourceLines.first)) {
+            angleLabel.vertex += cluster.totalShift;
+            break;
+          }
+        }
+      }
+    }
+
+    setState(() {
+      _finishedStrokesNotifier.value++;
+      _activeDrawingNotifier.value++;
     });
   }
 
@@ -5053,8 +5305,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       height: 52,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B).withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.85),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(50), bottom: Radius.circular(12)),
+        color: isDark
+            ? const Color(0xFF1E293B).withValues(alpha: 0.85)
+            : Colors.white.withValues(alpha: 0.85),
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(50),
+          bottom: Radius.circular(12),
+        ),
         border: Border.all(
           color: Colors.white.withValues(alpha: isDark ? 0.2 : 0.6),
           width: 1.2,
@@ -5169,7 +5426,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       final double delayMs = distance * 50.0;
       final double totalDurationMs = 500.0;
       final double startFraction = delayMs / totalDurationMs;
-      
+
       return TweenAnimationBuilder<double>(
         tween: Tween(begin: 0.0, end: 1.0),
         duration: Duration(milliseconds: totalDurationMs.toInt()),
@@ -5177,10 +5434,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         builder: (context, value, child) {
           return Transform.translate(
             offset: Offset(0, -40 * (1 - value)),
-            child: Opacity(
-              opacity: value.clamp(0.0, 1.0),
-              child: child,
-            ),
+            child: Opacity(opacity: value.clamp(0.0, 1.0), child: child),
           );
         },
         child: child,
@@ -5239,90 +5493,112 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             // Left of the box.
-            animatedTool(_quickToolIconButton(
-              icon: Icons.edit_rounded,
-              iconColor: iconColor,
-              isSelected: _toolMode == CanvasToolMode.pen,
-              onTap: () => setState(() {
-                _toolMode = CanvasToolMode.pen;
-                _activeShapeTool = null;
-              }),
-            ), 4),
-            animatedTool(_quickToolIconButton(
-              icon: Icons.gesture_rounded,
-              iconColor: iconColor,
-              isSelected: _toolMode == CanvasToolMode.lasso,
-              onTap: () => setState(() {
-                _toolMode = CanvasToolMode.lasso;
-                _activeShapeTool = null;
-                _selectedLines.clear();
-              }),
-            ), 3),
-            animatedTool(_quickToolIconButton(
-              icon: _eraserMode == EraserMode.stroke
-                  ? Icons.auto_fix_high_rounded
-                  : Icons.cleaning_services_rounded,
-              iconColor: iconColor,
-              isSelected: _toolMode == CanvasToolMode.eraser,
-              onTap: () {
-                _activeShapeTool = null;
-                _handleEraserButtonTap();
-              },
-            ), 2),
-            animatedTool(_quickToolIconButton(
-              icon: Icons.center_focus_strong_rounded,
-              iconColor: iconColor,
-              isSelected: _toolMode == CanvasToolMode.laser,
-              onTap: () => setState(() {
-                _toolMode = CanvasToolMode.laser;
-                _activeShapeTool = null;
-                _selectedLines.clear();
-              }),
-            ), 1),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.edit_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.pen,
+                onTap: () => setState(() {
+                  _toolMode = CanvasToolMode.pen;
+                  _activeShapeTool = null;
+                }),
+              ),
+              4,
+            ),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.gesture_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.lasso,
+                onTap: () => setState(() {
+                  _toolMode = CanvasToolMode.lasso;
+                  _activeShapeTool = null;
+                  _selectedLines.clear();
+                }),
+              ),
+              3,
+            ),
+            animatedTool(
+              _quickToolIconButton(
+                icon: _eraserMode == EraserMode.stroke
+                    ? Icons.auto_fix_high_rounded
+                    : Icons.cleaning_services_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.eraser,
+                onTap: () {
+                  _activeShapeTool = null;
+                  _handleEraserButtonTap();
+                },
+              ),
+              2,
+            ),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.center_focus_strong_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.laser,
+                onTap: () => setState(() {
+                  _toolMode = CanvasToolMode.laser;
+                  _activeShapeTool = null;
+                  _selectedLines.clear();
+                }),
+              ),
+              1,
+            ),
             box,
             // Right of the box.
-            animatedTool(_quickToolIconButton(
-              icon: Icons.format_color_fill_rounded,
-              iconColor: iconColor,
-              isSelected: _toolMode == CanvasToolMode.fill,
-              onTap: () => setState(() {
-                _toolMode = CanvasToolMode.fill;
-                _activeShapeTool = null;
-                _selectedLines.clear();
-              }),
-            ), 1),
-            animatedTool(_quickToolIconButton(
-              icon: Icons.back_hand_rounded,
-              iconColor: iconColor,
-              isSelected: _toolMode == CanvasToolMode.pan,
-              onTap: () => setState(() {
-                _toolMode = CanvasToolMode.pan;
-                _activeShapeTool = null;
-                _selectedLines.clear();
-              }),
-            ), 2),
-            animatedTool(_quickToolIconButton(
-              icon: _spacerHorizontalOnly
-                  ? Icons.compare_arrows_rounded
-                  : Icons.unfold_more_rounded,
-              iconColor: iconColor,
-              isSelected: _toolMode == CanvasToolMode.spacer,
-              onTap: () => setState(() {
-                if (_toolMode == CanvasToolMode.spacer) {
-                  _spacerHorizontalOnly = !_spacerHorizontalOnly;
-                } else {
-                  _toolMode = CanvasToolMode.spacer;
-                }
-                _activeShapeTool = null;
-                _selectedLines.clear();
-              }),
-            ), 3),
-            animatedTool(_quickToolIconButton(
-              icon: Icons.undo_rounded,
-              iconColor: iconColor,
-              isSelected: false,
-              onTap: _undo,
-            ), 4),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.format_color_fill_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.fill,
+                onTap: () => setState(() {
+                  _toolMode = CanvasToolMode.fill;
+                  _activeShapeTool = null;
+                  _selectedLines.clear();
+                }),
+              ),
+              1,
+            ),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.back_hand_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.pan,
+                onTap: () => setState(() {
+                  _toolMode = CanvasToolMode.pan;
+                  _activeShapeTool = null;
+                  _selectedLines.clear();
+                }),
+              ),
+              2,
+            ),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.unfold_more_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.spacer,
+                onTap: () => setState(() {
+                  if (_toolMode == CanvasToolMode.spacer) {
+                    _compressCanvasSpace();
+                  } else {
+                    _toolMode = CanvasToolMode.spacer;
+                  }
+                  _activeShapeTool = null;
+                  _selectedLines.clear();
+                }),
+              ),
+              3,
+            ),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.undo_rounded,
+                iconColor: iconColor,
+                isSelected: false,
+                onTap: _undo,
+              ),
+              4,
+            ),
           ],
         ),
       ),
@@ -5369,6 +5645,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       child: Stack(
         children: [
           _buildCanvasCaptureArea(context, isDark, bgColor),
+          if (_recordingState == MathPadRecordingState.recording)
+            const _RecordingNeonBorder(),
           if (_recordingState != MathPadRecordingState.idle)
             _buildRecordingBadge(context),
         ],
@@ -5461,6 +5739,39 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           // use case wants real transparency, not a recording-friendly one.
           if (!widget.isTransparentBg)
             Positioned.fill(child: ColoredBox(color: bgColor)),
+
+          // Jyamiti Empty Canvas Watermark
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedBuilder(
+                animation: Listenable.merge([
+                  _finishedStrokesNotifier,
+                  _activeDrawingNotifier,
+                ]),
+                builder: (_, __) {
+                  return Center(
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 600),
+                      curve: Curves.easeInOut,
+                      opacity:
+                          (_lines.isEmpty &&
+                              _textLabels.isEmpty &&
+                              _instruments.isEmpty &&
+                              _currentLine == null)
+                          ? (isDark ? 0.2 : 0.12)
+                          : 0.0,
+                      child: Image.asset(
+                        'assets/image/logo.png',
+                        width: 240,
+                        height: 240,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+
           Listener(
             onPointerDown: _onPointerDown,
             onPointerMove: _onPointerMove,
@@ -6069,6 +6380,30 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Widget _buildToolbar(BuildContext context, bool isDark) {
+    int _animIconIndex = 0;
+    Widget animated(Widget child) {
+      final int currentIndex = _animIconIndex++;
+      final int distance = (currentIndex - 7).abs();
+      final double delayMs = distance * 40.0;
+      final double totalDurationMs = 500.0;
+      final double startFraction = (delayMs / totalDurationMs).clamp(0.0, 0.99);
+
+      return TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.0, end: 1.0),
+        duration: Duration(milliseconds: totalDurationMs.toInt()),
+        curve: Interval(startFraction, 1.0, curve: Curves.easeOutBack),
+        builder: (context, value, child) {
+          return Transform.translate(
+            offset: _toolbarOnLeft
+                ? Offset(-40 * (1 - value), 0)
+                : Offset(0, -40 * (1 - value)),
+            child: Opacity(opacity: value.clamp(0.0, 1.0), child: child),
+          );
+        },
+        child: child,
+      );
+    }
+
     // Left-docked also goes through quarterTurns:1 (same as right-docked
     // used to, and still does) so the button order always reads top-to-
     // bottom regardless of which side it's on -- but that rotation maps
@@ -6097,9 +6432,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         mainAxisSize: MainAxisSize.min,
         children: [
           if (widget.leadingToolbarAction != null) ...[
-            RotatedBox(quarterTurns: _toolbarOnLeft ? -1 : 0, child: widget.leadingToolbarAction!),
+            RotatedBox(
+              quarterTurns: _toolbarOnLeft ? -1 : 0,
+              child: widget.leadingToolbarAction!,
+            ),
             const SizedBox(width: 12),
-            Container(width: 1, height: 32, color: isDark ? Colors.white24 : Colors.black12),
+            Container(
+              width: 1,
+              height: 32,
+              color: isDark ? Colors.white24 : Colors.black12,
+            ),
             const SizedBox(width: 12),
           ],
           Flexible(
@@ -6113,841 +6455,972 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               physics: const ClampingScrollPhysics(),
               child: Row(
                 children: [
-            // Pen, Stroke Eraser, Tap-to-Select, Lasso Select, & Pan Tool
-            Container(
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0F172A) : Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white12),
-              ),
-              child: Row(
-                children: [
-                  _buildIconButton(
-                    icon: Icons.edit_rounded,
-                    tooltip: 'Pen Mode',
-                    isSelected:
-                        _toolMode == CanvasToolMode.pen &&
-                        _activeShapeTool == null,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.pen;
-                      _activeShapeTool = null;
-                      _selectedWidth = _penWidth;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: _lineAxisLocked
-                        ? Icons.add_rounded
-                        : Icons.horizontal_rule_rounded,
-                    tooltip: _lineAxisLocked
-                        ? 'Straight Line Tool: HORIZONTAL/VERTICAL ONLY -- '
-                              'length shown live; starting/ending near '
-                              "another line's tip connects to it exactly "
-                              '(tap icon again to allow any angle)'
-                        : 'Straight Line Tool: drag to draw a line with its '
-                              "length shown live; starting/ending near "
-                              "another line's tip connects to it exactly "
-                              '(tap icon again to lock to horizontal/vertical only)',
-                    isSelected: _toolMode == CanvasToolMode.straightLine,
-                    onTap: () => setState(() {
-                      if (_toolMode == CanvasToolMode.straightLine) {
-                        _lineAxisLocked = !_lineAxisLocked;
-                      } else {
-                        _toolMode = CanvasToolMode.straightLine;
-                      }
-                      _activeShapeTool = null;
-                      _selectedWidth = _penWidth;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: _toolMode == CanvasToolMode.polygonAngle
-                        ? Icons.timeline_rounded
-                        : Icons.call_split_rounded,
-                    tooltip: _toolMode == CanvasToolMode.polygonAngle
-                        ? 'Polygon Angle Tool: ACTIVE — tap icon again to '
-                              'switch back to Angle Tool'
-                        : _toolMode == CanvasToolMode.angle
-                        ? 'Angle Tool: ACTIVE — tap icon again to switch '
-                              'to Polygon Angle Tool'
-                        : 'Angle Tool: draw a line, then drag a second '
-                              'line from either of its ends to see the '
-                              'angle between them live -- release to fix it '
-                              '(tap icon again while active to toggle '
-                              'Polygon Angle Tool)',
-                    isSelected:
-                        _toolMode == CanvasToolMode.angle ||
-                        _toolMode == CanvasToolMode.polygonAngle,
-                    onTap: () => setState(() {
-                      if (_toolMode == CanvasToolMode.angle) {
-                        // Toggle → Polygon Angle
-                        _toolMode = CanvasToolMode.polygonAngle;
-                        _activeShapeTool = null;
-                        _selectedWidth = _penWidth;
-                        _selectedLines.clear();
-                        _resetPolygonTool();
-                      } else if (_toolMode == CanvasToolMode.polygonAngle) {
-                        // Toggle back → Angle
-                        _toolMode = CanvasToolMode.angle;
-                        _activeShapeTool = null;
-                        _selectedWidth = _penWidth;
-                        _selectedLines.clear();
-                        _resetAngleTool();
-                      } else {
-                        // First tap → Angle (default)
-                        _toolMode = CanvasToolMode.angle;
-                        _activeShapeTool = null;
-                        _selectedWidth = _penWidth;
-                        _selectedLines.clear();
-                        _resetAngleTool();
-                      }
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: _toolMode == CanvasToolMode.square
-                        ? Icons.crop_square_rounded
-                        : Icons.blur_circular_rounded,
-                    tooltip: _toolMode == CanvasToolMode.square
-                        ? 'Square Tool: ACTIVE — tap icon again to switch back '
-                              'to Circle/Arc Tool'
-                        : _toolMode == CanvasToolMode.circleArc
-                        ? 'Circle/Arc Tool: ACTIVE — tap icon again to '
-                              'switch to Square Tool'
-                        : 'Circle/Arc Tool: drag out to set the radius, '
-                              'then keep dragging in a curve around that '
-                              'same point — only the traced arc/circle '
-                              'stays when you release '
-                              '(tap icon again while active to toggle '
-                              'Square Tool)',
-                    isSelected:
-                        _toolMode == CanvasToolMode.circleArc ||
-                        _toolMode == CanvasToolMode.square,
-                    onTap: () => setState(() {
-                      if (_toolMode == CanvasToolMode.circleArc) {
-                        // Toggle → Square
-                        _toolMode = CanvasToolMode.square;
-                        _activeShapeTool = null;
-                        _selectedWidth = _penWidth;
-                        _selectedLines.clear();
-                        _resetSquareTool();
-                      } else if (_toolMode == CanvasToolMode.square) {
-                        // Toggle back → Circle/Arc
-                        _toolMode = CanvasToolMode.circleArc;
-                        _activeShapeTool = null;
-                        _selectedWidth = _penWidth;
-                        _selectedLines.clear();
-                        _resetCircleArcTool();
-                      } else {
-                        // First tap → Circle/Arc (default)
-                        _toolMode = CanvasToolMode.circleArc;
-                        _activeShapeTool = null;
-                        _selectedWidth = _penWidth;
-                        _selectedLines.clear();
-                        _resetCircleArcTool();
-                      }
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.format_color_fill_rounded,
-                    tooltip:
-                        'Fill Tool: tap inside any closed area to flood-fill '
-                        'it with the current color, like a paint bucket',
-                    isSelected: _toolMode == CanvasToolMode.fill,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.fill;
-                      _activeShapeTool = null;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.text_fields_rounded,
-                    tooltip:
-                        'Text Label: tap empty space to add a label; tap an '
-                        'existing one to edit it, or drag it to move it',
-                    isSelected: _toolMode == CanvasToolMode.text,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.text;
-                      _activeShapeTool = null;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: _spacerHorizontalOnly
-                        ? Icons.compare_arrows_rounded
-                        : Icons.unfold_more_rounded,
-                    tooltip: _spacerHorizontalOnly
-                        ? 'Spacer Tool: HORIZONTAL ONLY -- drag through a gap '
-                              'to push everything past that point sideways '
-                              '(tap icon again to go back to any direction)'
-                        : 'Spacer Tool: drag through a gap to push everything '
-                              'past that point further away, live, opening up '
-                              'blank space to work in (tap icon again for '
-                              'horizontal-only)',
-                    isSelected: _toolMode == CanvasToolMode.spacer,
-                    onTap: () => setState(() {
-                      if (_toolMode == CanvasToolMode.spacer) {
-                        _spacerHorizontalOnly = !_spacerHorizontalOnly;
-                      } else {
-                        _toolMode = CanvasToolMode.spacer;
-                      }
-                      _activeShapeTool = null;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: _eraserMode == EraserMode.stroke
-                        ? Icons.auto_fix_high_rounded
-                        : Icons.cleaning_services_rounded,
-                    tooltip: _eraserMode == EraserMode.stroke
-                        ? 'Stroke Eraser: ACTIVE (Tap stroke to erase line • Double-click/Tap icon to switch to Area Eraser)'
-                        : 'Area Eraser: ACTIVE (Double-click/Tap icon to switch to Stroke Eraser)',
-                    isSelected: _toolMode == CanvasToolMode.eraser,
-                    onTap: () {
-                      _activeShapeTool = null;
-                      _handleEraserButtonTap();
-                    },
-                  ),
-                  _buildIconButton(
-                    icon: Icons.touch_app_rounded,
-                    tooltip: 'Tap Line to Select, Move & Duplicate',
-                    isSelected: _toolMode == CanvasToolMode.tapSelect,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.tapSelect;
-                      _activeShapeTool = null;
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.gesture_rounded,
-                    tooltip: 'Lasso Select, Move & Duplicate Area',
-                    isSelected: _toolMode == CanvasToolMode.lasso,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.lasso;
-                      _activeShapeTool = null;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.back_hand_rounded,
-                    tooltip: 'Pan Canvas (Hand Tool)',
-                    isSelected: _toolMode == CanvasToolMode.pan,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.pan;
-                      _activeShapeTool = null;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.center_focus_strong_rounded,
-                    tooltip:
-                        'Laser Pointer: hold and move to point things out '
-                        'live -- leaves no permanent mark',
-                    isSelected: _toolMode == CanvasToolMode.laser,
-                    onTap: () => setState(() {
-                      _toolMode = CanvasToolMode.laser;
-                      _activeShapeTool = null;
-                      _selectedLines.clear();
-                    }),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-
-            // Geometry Instruments: Ruler, Protractor, Compass, Set Squares
-            Container(
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0F172A) : Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white12),
-              ),
-              child: Row(
-                children: [
-                  _buildIconButton(
-                    icon: Icons.straighten_rounded,
-                    tooltip: 'Add Ruler',
-                    onTap: () => _addInstrument(
-                      (i) => i is RulerState,
-                      (center) => RulerState(pivot: center),
-                    ),
-                  ),
-                  _buildIconButton(
-                    customIconBuilder: _buildProtractorIcon,
-                    tooltip: 'Add Protractor',
-                    onTap: () => _addInstrument(
-                      (i) => i is ProtractorState,
-                      (center) => ProtractorState(pivot: center),
-                    ),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.architecture_rounded,
-                    tooltip: 'Add Compass',
-                    onTap: () => _addInstrument(
-                      (i) => i is CompassState,
-                      (center) => CompassState(pivot: center),
-                    ),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.change_history_rounded,
-                    tooltip: 'Add Set Square (45-45-90)',
-                    onTap: () => _addInstrument(
-                      (i) =>
-                          i is SetSquareState &&
-                          i.kind == SetSquareKind.fortyFive,
-                      (center) => SetSquareState(
-                        pivot: center,
-                        kind: SetSquareKind.fortyFive,
-                      ),
-                    ),
-                  ),
-                  _buildIconButton(
-                    icon: Icons.change_history_outlined,
-                    tooltip: 'Add Set Square (30-60-90)',
-                    onTap: () => _addInstrument(
-                      (i) =>
-                          i is SetSquareState &&
-                          i.kind == SetSquareKind.thirtySixty,
-                      (center) => SetSquareState(
-                        pivot: center,
-                        kind: SetSquareKind.thirtySixty,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-
-            // Color Palette
-            Row(
-              children: _palette.map((color) {
-                final isSelected =
-                    _toolMode == CanvasToolMode.pen &&
-                    _activeShapeTool == null &&
-                    _selectedColor.value == color.value;
-                return GestureDetector(
-                  onTap: () {
-                    // With something already selected, picking a colour
-                    // recolours that selection in place instead of just
-                    // arming the pen with it -- selection stays as-is
-                    // (not cleared, tool mode untouched) so further
-                    // actions (another colour, width, delete, ...) can
-                    // still target the same selection right after.
-                    if (_selectedLines.isNotEmpty) {
-                      _recolorSelectedLines(color);
-                      setState(() => _selectedColor = color);
-                      return;
-                    }
-                    setState(() {
-                      _selectedColor = color;
-                      _toolMode = CanvasToolMode.pen;
-                      _activeShapeTool = null;
-                      _selectedWidth = _penWidth;
-                    });
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    width: 24,
-                    height: 24,
+                  // Pen, Stroke Eraser, Tap-to-Select, Lasso Select, & Pan Tool
+                  Container(
                     decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: isSelected
-                            ? const Color(0xFF6366F1)
-                            : Colors.grey.withOpacity(0.4),
-                        width: isSelected ? 3 : 1,
-                      ),
-                      boxShadow: isSelected
-                          ? [
-                              BoxShadow(
-                                color: color.withOpacity(0.6),
-                                blurRadius: 6,
-                              ),
-                            ]
-                          : null,
+                      color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white12),
                     ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(width: 10),
-
-            // Stroke Width Selector
-            PopupMenuButton<double>(
-              tooltip: 'Stroke Thickness',
-              icon: Row(
-                children: [
-                  Icon(
-                    Icons.line_weight_rounded,
-                    size: 18,
-                    color: context.textColor,
-                  ),
-                  const SizedBox(width: 2),
-                  Text(
-                    '${_selectedWidth.toInt()}px',
-                    style: TextStyle(fontSize: 11, color: context.textColor),
-                  ),
-                ],
-              ),
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              onSelected: (w) => setState(() {
-                _selectedWidth = w;
-                if (_toolMode == CanvasToolMode.eraser) {
-                  _eraserWidth = w;
-                } else {
-                  _penWidth = w;
-                }
-              }),
-              itemBuilder: (ctx) => [
-                const PopupMenuItem(value: 2.0, child: Text('Fine (2px)')),
-                const PopupMenuItem(value: 4.0, child: Text('Medium (4px)')),
-                const PopupMenuItem(value: 6.0, child: Text('Bold (6px)')),
-                const PopupMenuItem(value: 8.0, child: Text('Thick (8px)')),
-                const PopupMenuItem(value: 14.0, child: Text('Marker (14px)')),
-              ],
-            ),
-
-            const SizedBox(width: 6),
-
-            // Basic Shapes & Diagrams Dropdown (Horizontal Ribbon Palette)
-            PopupMenuButton<void>(
-              tooltip: 'Select Shape to Draw',
-              offset: const Offset(0, 36),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              icon: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  color: _activeShapeTool != null
-                      ? const Color(0xFF6366F1).withOpacity(0.2)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.category_rounded,
-                      size: 18,
-                      color: _activeShapeTool != null
-                          ? const Color(0xFF6366F1)
-                          : context.textColor,
-                    ),
-                    Icon(
-                      Icons.arrow_drop_down_rounded,
-                      size: 16,
-                      color: _activeShapeTool != null
-                          ? const Color(0xFF6366F1)
-                          : context.textColor,
-                    ),
-                  ],
-                ),
-              ),
-              itemBuilder: (ctx) => [
-                PopupMenuItem<void>(
-                  enabled: false,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 4,
-                  ),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
                     child: Row(
-                      children: _shapeTools.map((item) {
-                        final isSelected = _activeShapeTool == item.type;
-                        return Tooltip(
-                          message: item.tooltip,
-                          child: InkWell(
+                      children: [
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.edit_rounded,
+                            tooltip: 'Pen Mode',
+                            isSelected:
+                                _toolMode == CanvasToolMode.pen &&
+                                _activeShapeTool == null,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.pen;
+                              _activeShapeTool = null;
+                              _selectedWidth = _penWidth;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: _lineAxisLocked
+                                ? Icons.add_rounded
+                                : Icons.horizontal_rule_rounded,
+                            tooltip: _lineAxisLocked
+                                ? 'Straight Line Tool: HORIZONTAL/VERTICAL ONLY -- '
+                                      'length shown live; starting/ending near '
+                                      "another line's tip connects to it exactly "
+                                      '(tap icon again to allow any angle)'
+                                : 'Straight Line Tool: drag to draw a line with its '
+                                      "length shown live; starting/ending near "
+                                      "another line's tip connects to it exactly "
+                                      '(tap icon again to lock to horizontal/vertical only)',
+                            isSelected:
+                                _toolMode == CanvasToolMode.straightLine,
+                            onTap: () => setState(() {
+                              if (_toolMode == CanvasToolMode.straightLine) {
+                                _lineAxisLocked = !_lineAxisLocked;
+                              } else {
+                                _toolMode = CanvasToolMode.straightLine;
+                              }
+                              _activeShapeTool = null;
+                              _selectedWidth = _penWidth;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: _toolMode == CanvasToolMode.polygonAngle
+                                ? Icons.timeline_rounded
+                                : Icons.call_split_rounded,
+                            tooltip: _toolMode == CanvasToolMode.polygonAngle
+                                ? 'Polygon Angle Tool: ACTIVE — tap icon again to '
+                                      'switch back to Angle Tool'
+                                : _toolMode == CanvasToolMode.angle
+                                ? 'Angle Tool: ACTIVE — tap icon again to switch '
+                                      'to Polygon Angle Tool'
+                                : 'Angle Tool: draw a line, then drag a second '
+                                      'line from either of its ends to see the '
+                                      'angle between them live -- release to fix it '
+                                      '(tap icon again while active to toggle '
+                                      'Polygon Angle Tool)',
+                            isSelected:
+                                _toolMode == CanvasToolMode.angle ||
+                                _toolMode == CanvasToolMode.polygonAngle,
+                            onTap: () => setState(() {
+                              if (_toolMode == CanvasToolMode.angle) {
+                                // Toggle → Polygon Angle
+                                _toolMode = CanvasToolMode.polygonAngle;
+                                _activeShapeTool = null;
+                                _selectedWidth = _penWidth;
+                                _selectedLines.clear();
+                                _resetPolygonTool();
+                              } else if (_toolMode ==
+                                  CanvasToolMode.polygonAngle) {
+                                // Toggle back → Angle
+                                _toolMode = CanvasToolMode.angle;
+                                _activeShapeTool = null;
+                                _selectedWidth = _penWidth;
+                                _selectedLines.clear();
+                                _resetAngleTool();
+                              } else {
+                                // First tap → Angle (default)
+                                _toolMode = CanvasToolMode.angle;
+                                _activeShapeTool = null;
+                                _selectedWidth = _penWidth;
+                                _selectedLines.clear();
+                                _resetAngleTool();
+                              }
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: _toolMode == CanvasToolMode.square
+                                ? Icons.crop_square_rounded
+                                : Icons.blur_circular_rounded,
+                            tooltip: _toolMode == CanvasToolMode.square
+                                ? 'Square Tool: ACTIVE — tap icon again to switch back '
+                                      'to Circle/Arc Tool'
+                                : _toolMode == CanvasToolMode.circleArc
+                                ? 'Circle/Arc Tool: ACTIVE — tap icon again to '
+                                      'switch to Square Tool'
+                                : 'Circle/Arc Tool: drag out to set the radius, '
+                                      'then keep dragging in a curve around that '
+                                      'same point — only the traced arc/circle '
+                                      'stays when you release '
+                                      '(tap icon again while active to toggle '
+                                      'Square Tool)',
+                            isSelected:
+                                _toolMode == CanvasToolMode.circleArc ||
+                                _toolMode == CanvasToolMode.square,
+                            onTap: () => setState(() {
+                              if (_toolMode == CanvasToolMode.circleArc) {
+                                // Toggle → Square
+                                _toolMode = CanvasToolMode.square;
+                                _activeShapeTool = null;
+                                _selectedWidth = _penWidth;
+                                _selectedLines.clear();
+                                _resetSquareTool();
+                              } else if (_toolMode == CanvasToolMode.square) {
+                                // Toggle back → Circle/Arc
+                                _toolMode = CanvasToolMode.circleArc;
+                                _activeShapeTool = null;
+                                _selectedWidth = _penWidth;
+                                _selectedLines.clear();
+                                _resetCircleArcTool();
+                              } else {
+                                // First tap → Circle/Arc (default)
+                                _toolMode = CanvasToolMode.circleArc;
+                                _activeShapeTool = null;
+                                _selectedWidth = _penWidth;
+                                _selectedLines.clear();
+                                _resetCircleArcTool();
+                              }
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.format_color_fill_rounded,
+                            tooltip:
+                                'Fill Tool: tap inside any closed area to flood-fill '
+                                'it with the current color, like a paint bucket',
+                            isSelected: _toolMode == CanvasToolMode.fill,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.fill;
+                              _activeShapeTool = null;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.text_fields_rounded,
+                            tooltip:
+                                'Text Label: tap empty space to add a label; tap an '
+                                'existing one to edit it, or drag it to move it',
+                            isSelected: _toolMode == CanvasToolMode.text,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.text;
+                              _activeShapeTool = null;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.unfold_more_rounded,
+                            tooltip:
+                                'Spacer Tool: drag through a gap to push everything '
+                                'past that point further away, live, opening up '
+                                'blank space to work in (tap icon again to '
+                                'compress whitespace)',
+                            isSelected: _toolMode == CanvasToolMode.spacer,
+                            onTap: () => setState(() {
+                              if (_toolMode == CanvasToolMode.spacer) {
+                                _compressCanvasSpace();
+                              } else {
+                                _toolMode = CanvasToolMode.spacer;
+                              }
+                              _activeShapeTool = null;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: _eraserMode == EraserMode.stroke
+                                ? Icons.auto_fix_high_rounded
+                                : Icons.cleaning_services_rounded,
+                            tooltip: _eraserMode == EraserMode.stroke
+                                ? 'Stroke Eraser: ACTIVE (Tap stroke to erase line • Double-click/Tap icon to switch to Area Eraser)'
+                                : 'Area Eraser: ACTIVE (Double-click/Tap icon to switch to Stroke Eraser)',
+                            isSelected: _toolMode == CanvasToolMode.eraser,
                             onTap: () {
-                              Navigator.pop(ctx);
-                              _insertBasicShape(item.type);
+                              _activeShapeTool = null;
+                              _handleEraserButtonTap();
                             },
-                            borderRadius: BorderRadius.circular(8),
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 2),
-                              padding: const EdgeInsets.all(7),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? const Color(0xFF6366F1).withOpacity(0.25)
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(8),
-                                border: isSelected
-                                    ? Border.all(
-                                        color: const Color(0xFF6366F1),
-                                        width: 1.5,
-                                      )
-                                    : null,
-                              ),
-                              child: Icon(
-                                item.icon,
-                                size: 19,
-                                color: isSelected
-                                    ? const Color(0xFF6366F1)
-                                    : context.textColor,
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.touch_app_rounded,
+                            tooltip: 'Tap Line to Select, Move & Duplicate',
+                            isSelected: _toolMode == CanvasToolMode.tapSelect,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.tapSelect;
+                              _activeShapeTool = null;
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.gesture_rounded,
+                            tooltip: 'Lasso Select, Move & Duplicate Area',
+                            isSelected: _toolMode == CanvasToolMode.lasso,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.lasso;
+                              _activeShapeTool = null;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.back_hand_rounded,
+                            tooltip: 'Pan Canvas (Hand Tool)',
+                            isSelected: _toolMode == CanvasToolMode.pan,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.pan;
+                              _activeShapeTool = null;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.center_focus_strong_rounded,
+                            tooltip:
+                                'Laser Pointer: hold and move to point things out '
+                                'live -- leaves no permanent mark',
+                            isSelected: _toolMode == CanvasToolMode.laser,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.laser;
+                              _activeShapeTool = null;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+
+                  // Geometry Instruments: Ruler, Protractor, Compass, Set Squares
+                  Container(
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Row(
+                      children: [
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.straighten_rounded,
+                            tooltip: 'Add Ruler',
+                            onTap: () => _addInstrument(
+                              (i) => i is RulerState,
+                              (center) => RulerState(pivot: center),
+                            ),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            customIconBuilder: _buildProtractorIcon,
+                            tooltip: 'Add Protractor',
+                            onTap: () => _addInstrument(
+                              (i) => i is ProtractorState,
+                              (center) => ProtractorState(pivot: center),
+                            ),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.architecture_rounded,
+                            tooltip: 'Add Compass',
+                            onTap: () => _addInstrument(
+                              (i) => i is CompassState,
+                              (center) => CompassState(pivot: center),
+                            ),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.change_history_rounded,
+                            tooltip: 'Add Set Square (45-45-90)',
+                            onTap: () => _addInstrument(
+                              (i) =>
+                                  i is SetSquareState &&
+                                  i.kind == SetSquareKind.fortyFive,
+                              (center) => SetSquareState(
+                                pivot: center,
+                                kind: SetSquareKind.fortyFive,
                               ),
                             ),
                           ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.change_history_outlined,
+                            tooltip: 'Add Set Square (30-60-90)',
+                            onTap: () => _addInstrument(
+                              (i) =>
+                                  i is SetSquareState &&
+                                  i.kind == SetSquareKind.thirtySixty,
+                              (center) => SetSquareState(
+                                pivot: center,
+                                kind: SetSquareKind.thirtySixty,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+
+                  // Color Palette
+                  Row(
+                    children: _palette.map((color) {
+                      final isSelected =
+                          _toolMode == CanvasToolMode.pen &&
+                          _activeShapeTool == null &&
+                          _selectedColor.value == color.value;
+                      return GestureDetector(
+                        onTap: () {
+                          // With something already selected, picking a colour
+                          // recolours that selection in place instead of just
+                          // arming the pen with it -- selection stays as-is
+                          // (not cleared, tool mode untouched) so further
+                          // actions (another colour, width, delete, ...) can
+                          // still target the same selection right after.
+                          if (_selectedLines.isNotEmpty) {
+                            _recolorSelectedLines(color);
+                            setState(() => _selectedColor = color);
+                            return;
+                          }
+                          setState(() {
+                            _selectedColor = color;
+                            _toolMode = CanvasToolMode.pen;
+                            _activeShapeTool = null;
+                            _selectedWidth = _penWidth;
+                          });
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isSelected
+                                  ? const Color(0xFF6366F1)
+                                  : Colors.grey.withOpacity(0.4),
+                              width: isSelected ? 3 : 1,
+                            ),
+                            boxShadow: isSelected
+                                ? [
+                                    BoxShadow(
+                                      color: color.withOpacity(0.6),
+                                      blurRadius: 6,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(width: 10),
+
+                  // Stroke Width Selector
+                  PopupMenuButton<double>(
+                    tooltip: 'Stroke Thickness',
+                    icon: RotatedBox(
+                      quarterTurns: _toolbarOnLeft ? -1 : 0,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.line_weight_rounded,
+                            size: 18,
+                            color: context.textColor,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            '${_selectedWidth.toInt()}px',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: context.textColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    onSelected: (w) => setState(() {
+                      _selectedWidth = w;
+                      if (_toolMode == CanvasToolMode.eraser) {
+                        _eraserWidth = w;
+                      } else {
+                        _penWidth = w;
+                      }
+                    }),
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: 2.0,
+                        child: Text('Fine (2px)'),
+                      ),
+                      const PopupMenuItem(
+                        value: 4.0,
+                        child: Text('Medium (4px)'),
+                      ),
+                      const PopupMenuItem(
+                        value: 6.0,
+                        child: Text('Bold (6px)'),
+                      ),
+                      const PopupMenuItem(
+                        value: 8.0,
+                        child: Text('Thick (8px)'),
+                      ),
+                      const PopupMenuItem(
+                        value: 14.0,
+                        child: Text('Marker (14px)'),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(width: 6),
+
+                  // Basic Shapes & Diagrams Dropdown (Horizontal Ribbon Palette)
+                  PopupMenuButton<void>(
+                    tooltip: 'Select Shape to Draw',
+                    offset: const Offset(0, 36),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    icon: RotatedBox(
+                      quarterTurns: _toolbarOnLeft ? -1 : 0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _activeShapeTool != null
+                              ? const Color(0xFF6366F1).withOpacity(0.2)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.category_rounded,
+                              size: 18,
+                              color: _activeShapeTool != null
+                                  ? const Color(0xFF6366F1)
+                                  : context.textColor,
+                            ),
+                            Icon(
+                              Icons.arrow_drop_down_rounded,
+                              size: 16,
+                              color: _activeShapeTool != null
+                                  ? const Color(0xFF6366F1)
+                                  : context.textColor,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    itemBuilder: (ctx) => [
+                      PopupMenuItem<void>(
+                        enabled: false,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 4,
+                        ),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: _shapeTools.map((item) {
+                              final isSelected = _activeShapeTool == item.type;
+                              return Tooltip(
+                                message: item.tooltip,
+                                child: InkWell(
+                                  onTap: () {
+                                    Navigator.pop(ctx);
+                                    _insertBasicShape(item.type);
+                                  },
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      horizontal: 2,
+                                    ),
+                                    padding: const EdgeInsets.all(7),
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? const Color(
+                                              0xFF6366F1,
+                                            ).withOpacity(0.25)
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: isSelected
+                                          ? Border.all(
+                                              color: const Color(0xFF6366F1),
+                                              width: 1.5,
+                                            )
+                                          : null,
+                                    ),
+                                    child: Icon(
+                                      item.icon,
+                                      size: 19,
+                                      color: isSelected
+                                          ? const Color(0xFF6366F1)
+                                          : context.textColor,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(width: 6),
+
+                  // Paper Background Mode Toggle
+                  PopupMenuButton<CanvasBgMode>(
+                    tooltip: 'Background Pattern',
+                    icon: RotatedBox(
+                      quarterTurns: _toolbarOnLeft ? -1 : 0,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _bgMode == CanvasBgMode.grid
+                                ? Icons.grid_on_rounded
+                                : (_bgMode == CanvasBgMode.ruled
+                                      ? Icons.notes_rounded
+                                      : Icons.crop_portrait_rounded),
+                            size: 18,
+                            color: context.textColor,
+                          ),
+                        ],
+                      ),
+                    ),
+                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    onSelected: (m) => setState(() => _bgMode = m),
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: CanvasBgMode.grid,
+                        child: Text('📐 Math Grid'),
+                      ),
+                      const PopupMenuItem(
+                        value: CanvasBgMode.ruled,
+                        child: Text('📝 Ruled Lines'),
+                      ),
+                      const PopupMenuItem(
+                        value: CanvasBgMode.blank,
+                        child: Text('📄 Blank Canvas'),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(width: 6),
+
+                  // Theme Mode Toggle
+                  PopupMenuButton<MathPadTheme>(
+                    tooltip: 'App Theme',
+                    icon: RotatedBox(
+                      quarterTurns: _toolbarOnLeft ? -1 : 0,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _themeMode == MathPadTheme.cosmos
+                                ? Icons.auto_awesome_rounded
+                                : (_themeMode == MathPadTheme.aswadLail
+                                      ? Icons.brightness_1_rounded
+                                      : (_themeMode == MathPadTheme.dark
+                                            ? Icons.dark_mode_rounded
+                                            : Icons.light_mode_rounded)),
+                            size: 18,
+                            color: context.textColor,
+                          ),
+                        ],
+                      ),
+                    ),
+                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    onSelected: (m) async {
+                      setState(() {
+                        _themeMode = m;
+                      });
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setString('mathpad_default_theme', m.name);
+                    },
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: MathPadTheme.light,
+                        child: Text('☀️ Light Mode'),
+                      ),
+                      const PopupMenuItem(
+                        value: MathPadTheme.dark,
+                        child: Text('🌙 Dark Mode'),
+                      ),
+                      const PopupMenuItem(
+                        value: MathPadTheme.cosmos,
+                        child: Text('🌌 Jyamiti Cosmos (#0F2B52)'),
+                      ),
+                      const PopupMenuItem(
+                        value: MathPadTheme.aswadLail,
+                        child: Text('⚫ Aswad Lail (#000000)'),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(width: 10),
+
+                  // Zoom Controls
+                  animated(
+                    _buildIconButton(
+                      icon: Icons.zoom_out_rounded,
+                      tooltip: 'Zoom Out',
+                      onTap: _zoomOut,
+                    ),
+                  ),
+                  Tooltip(
+                    message: _zoomLocked
+                        ? 'Zoom Locked (Long press to unlock)'
+                        : 'Reset Center & 100% Zoom (Long press to lock)',
+                    child: InkWell(
+                      onTap: _resetView,
+                      onLongPress: () {
+                        setState(() {
+                          _zoomLocked = !_zoomLocked;
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              _zoomLocked ? 'Zoom Locked' : 'Zoom Unlocked',
+                            ),
+                            duration: const Duration(seconds: 2),
+                          ),
                         );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(width: 6),
-
-            // Paper Background Mode Toggle
-            PopupMenuButton<CanvasBgMode>(
-              tooltip: 'Background Pattern',
-              icon: Row(
-                children: [
-                  Icon(
-                    _bgMode == CanvasBgMode.grid
-                        ? Icons.grid_on_rounded
-                        : (_bgMode == CanvasBgMode.ruled
-                              ? Icons.notes_rounded
-                              : Icons.crop_portrait_rounded),
-                    size: 18,
-                    color: context.textColor,
-                  ),
-                ],
-              ),
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              onSelected: (m) => setState(() => _bgMode = m),
-              itemBuilder: (ctx) => [
-                const PopupMenuItem(
-                  value: CanvasBgMode.grid,
-                  child: Text('📐 Math Grid'),
-                ),
-                const PopupMenuItem(
-                  value: CanvasBgMode.ruled,
-                  child: Text('📝 Ruled Lines'),
-                ),
-                const PopupMenuItem(
-                  value: CanvasBgMode.blank,
-                  child: Text('📄 Blank Canvas'),
-                ),
-              ],
-            ),
-
-            const SizedBox(width: 6),
-
-            // Theme Mode Toggle
-            PopupMenuButton<MathPadTheme>(
-              tooltip: 'App Theme',
-              icon: Row(
-                children: [
-                  Icon(
-                    _themeMode == MathPadTheme.cosmos
-                        ? Icons.auto_awesome_rounded
-                        : (_themeMode == MathPadTheme.aswadLail
-                              ? Icons.brightness_1_rounded
-                              : (_themeMode == MathPadTheme.dark
-                                    ? Icons.dark_mode_rounded
-                                    : Icons.light_mode_rounded)),
-                    size: 18,
-                    color: context.textColor,
-                  ),
-                ],
-              ),
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              onSelected: (m) async {
-                setState(() {
-                  _themeMode = m;
-                });
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setString('mathpad_default_theme', m.name);
-              },
-              itemBuilder: (ctx) => [
-                const PopupMenuItem(
-                  value: MathPadTheme.light,
-                  child: Text('☀️ Light Mode'),
-                ),
-                const PopupMenuItem(
-                  value: MathPadTheme.dark,
-                  child: Text('🌙 Dark Mode'),
-                ),
-                const PopupMenuItem(
-                  value: MathPadTheme.cosmos,
-                  child: Text('🌌 Jyamiti Cosmos (#0F2B52)'),
-                ),
-                const PopupMenuItem(
-                  value: MathPadTheme.aswadLail,
-                  child: Text('⚫ Aswad Lail (#000000)'),
-                ),
-              ],
-            ),
-
-            const SizedBox(width: 10),
-
-            // Zoom Controls
-            _buildIconButton(
-              icon: Icons.zoom_out_rounded,
-              tooltip: 'Zoom Out',
-              onTap: _zoomOut,
-            ),
-            Tooltip(
-              message: 'Reset Center & 100% Zoom',
-              child: InkWell(
-                onTap: _resetView,
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 4,
-                  ),
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: _scaleNotifier,
-                    builder: (_, sc, _c) => Text(
-                      '${(sc * 100).round()}%',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: context.textColor70,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            _buildIconButton(
-              icon: Icons.zoom_in_rounded,
-              tooltip: 'Zoom In',
-              onTap: _zoomIn,
-            ),
-
-            const SizedBox(width: 10),
-
-            // Full Screen Toggle Button
-            if (widget.onToggleFullScreen != null) ...[
-              _buildIconButton(
-                icon: widget.isFullScreen
-                    ? Icons.fullscreen_exit_rounded
-                    : Icons.fullscreen_rounded,
-                tooltip: widget.isFullScreen
-                    ? 'Exit Full Screen'
-                    : 'Full Screen Whiteboard',
-                isSelected: widget.isFullScreen,
-                onTap: widget.onToggleFullScreen!,
-              ),
-              const SizedBox(width: 4),
-            ],
-
-            // Undo / Redo / Clear
-            _buildIconButton(
-              icon: Icons.undo_rounded,
-              tooltip: 'Undo',
-              isDisabled: _lines.isEmpty,
-              onTap: _undo,
-            ),
-            _buildIconButton(
-              icon: Icons.redo_rounded,
-              tooltip: 'Redo',
-              isDisabled: _undoHistory.isEmpty,
-              onTap: _redo,
-            ),
-            _buildIconButton(
-              icon: Icons.delete_outline_rounded,
-              tooltip: 'Clear Canvas',
-              color: Colors.redAccent,
-              onTap: _clearCanvas,
-            ),
-
-            if (widget.enableSaveNotes) ...[
-              const SizedBox(width: 6),
-              Tooltip(
-                message: 'Save Note to My Notes',
-                child: InkWell(
-                  onTap: _saveNote,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                      },
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: const Color(0xFF10B981),
-                        width: 1.5,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.save_rounded,
-                          size: 15,
-                          color: Color(0xFF10B981),
-                        ),
-                        const SizedBox(width: 4),
-                        const Text(
-                          'Save Note',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF10B981),
+                      child: RotatedBox(
+                        quarterTurns: _toolbarOnLeft ? -1 : 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 4,
+                          ),
+                          child: ValueListenableBuilder<double>(
+                            valueListenable: _scaleNotifier,
+                            builder: (_, sc, _c) => Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  '${(sc * 100).round()}%',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: _zoomLocked
+                                        ? Colors.redAccent
+                                        : context.textColor70,
+                                  ),
+                                ),
+                                if (_zoomLocked) ...[
+                                  const SizedBox(width: 2),
+                                  const Icon(
+                                    Icons.lock_rounded,
+                                    size: 10,
+                                    color: Colors.redAccent,
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-
-            if (widget.onSaveRequested != null) ...[
-              const SizedBox(width: 6),
-              Tooltip(
-                message: 'Save Page',
-                child: InkWell(
-                  onTap: _savePage,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: const Color(0xFF10B981),
-                        width: 1.5,
                       ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.save_rounded,
-                          size: 15,
-                          color: Color(0xFF10B981),
-                        ),
-                      ],
+                  ),
+                  animated(
+                    _buildIconButton(
+                      icon: Icons.zoom_in_rounded,
+                      tooltip: 'Zoom In',
+                      onTap: _zoomIn,
                     ),
                   ),
-                ),
-              ),
-            ],
 
-            // Paste Button – visible ONLY when clipboard has copied strokes
-            if (_clipboard.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Tooltip(
-                message: 'Paste Copied Strokes (Ctrl+V)',
-                child: InkWell(
-                  onTap: _pasteClipboard,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0EA5E9).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: const Color(0xFF0EA5E9),
-                        width: 1.5,
+                  const SizedBox(width: 10),
+
+                  // Full Screen Toggle Button
+                  if (widget.onToggleFullScreen != null) ...[
+                    animated(
+                      _buildIconButton(
+                        icon: widget.isFullScreen
+                            ? Icons.fullscreen_exit_rounded
+                            : Icons.fullscreen_rounded,
+                        tooltip: widget.isFullScreen
+                            ? 'Exit Full Screen'
+                            : 'Full Screen Whiteboard',
+                        isSelected: widget.isFullScreen,
+                        onTap: widget.onToggleFullScreen!,
                       ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.content_paste_rounded,
-                          size: 15,
-                          color: Color(0xFF0EA5E9),
-                        ),
-                        const SizedBox(width: 4),
-                        const Text(
-                          'Paste',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF0EA5E9),
+                    const SizedBox(width: 4),
+                  ],
+
+                  // Undo / Redo / Clear
+                  animated(
+                    _buildIconButton(
+                      icon: Icons.undo_rounded,
+                      tooltip: 'Undo',
+                      isDisabled: _lines.isEmpty,
+                      onTap: _undo,
+                    ),
+                  ),
+                  animated(
+                    _buildIconButton(
+                      icon: Icons.redo_rounded,
+                      tooltip: 'Redo',
+                      isDisabled: _undoHistory.isEmpty,
+                      onTap: _redo,
+                    ),
+                  ),
+                  animated(
+                    _buildIconButton(
+                      icon: Icons.delete_outline_rounded,
+                      tooltip: 'Clear Canvas',
+                      color: Colors.redAccent,
+                      onTap: _clearCanvas,
+                    ),
+                  ),
+
+                  if (widget.enableSaveNotes) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: 'Save Note to My Notes',
+                      child: InkWell(
+                        onTap: _saveNote,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xFF10B981,
+                            ).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFF10B981),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.save_rounded,
+                                size: 15,
+                                color: Color(0xFF10B981),
+                              ),
+                              const SizedBox(width: 4),
+                              const Text(
+                                'Save Note',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF10B981),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
+                  ],
+
+                  if (widget.onSaveRequested != null) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: 'Save Page',
+                      child: InkWell(
+                        onTap: _savePage,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xFF10B981,
+                            ).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFF10B981),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.save_rounded,
+                                size: 15,
+                                color: Color(0xFF10B981),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+
+                  // Paste Button – visible ONLY when clipboard has copied strokes
+                  if (_clipboard.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: 'Paste Copied Strokes (Ctrl+V)',
+                      child: InkWell(
+                        onTap: _pasteClipboard,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xFF0EA5E9,
+                            ).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFF0EA5E9),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.content_paste_rounded,
+                                size: 15,
+                                color: Color(0xFF0EA5E9),
+                              ),
+                              const SizedBox(width: 4),
+                              const Text(
+                                'Paste',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF0EA5E9),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.view_sidebar_rounded, size: 20),
+                    onPressed: () =>
+                        setState(() => _toolbarOnLeft = !_toolbarOnLeft),
+                    tooltip: _toolbarOnLeft
+                        ? 'Move Toolbar to Top'
+                        : 'Move Toolbar to Left Side',
                   ),
-                ),
-              ),
-            ],
 
-            const SizedBox(width: 8),
-            IconButton(
-              icon: const Icon(Icons.view_sidebar_rounded, size: 20),
-              onPressed: () => setState(() => _toolbarOnLeft = !_toolbarOnLeft),
-              tooltip: _toolbarOnLeft
-                  ? 'Move Toolbar to Top'
-                  : 'Move Toolbar to Left Side',
+                  if (!kIsWeb &&
+                      MathPadRecordingService.isSupportedPlatform) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(
+                        _recordingState == MathPadRecordingState.recording
+                            ? Icons.stop_circle_rounded
+                            : Icons.fiber_manual_record_rounded,
+                        size: 20,
+                        color:
+                            _recordingState == MathPadRecordingState.recording
+                            ? Colors.redAccent
+                            : null,
+                      ),
+                      onPressed:
+                          _recordingState == MathPadRecordingState.encoding
+                          ? null
+                          : _toggleRecording,
+                      tooltip:
+                          _recordingState == MathPadRecordingState.recording
+                          ? 'Stop Recording'
+                          : (_recordingState == MathPadRecordingState.encoding
+                                ? 'Encoding…'
+                                : 'Record Board + Voice'),
+                    ),
+                  ],
+
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: Icon(
+                      _isFullScreenMode
+                          ? Icons.fullscreen_exit_rounded
+                          : Icons.fullscreen_rounded,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(() {
+                      _isFullScreenMode = !_isFullScreenMode;
+                      _toolbarRevealedInFullScreen = false;
+                      widget.onCanvasOnlyModeChanged?.call(_isFullScreenMode);
+                    }),
+                    tooltip: _isFullScreenMode
+                        ? 'Exit Full Screen'
+                        : 'Full Screen (canvas only)',
+                  ),
+
+                  if (widget.onClose != null) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 20),
+                      onPressed: _handleCloseTap,
+                      tooltip: 'Close Writing Screen',
+                    ),
+                  ],
+                ],
+              ),
             ),
-
-            if (!kIsWeb && MathPadRecordingService.isSupportedPlatform) ...[
-              const SizedBox(width: 8),
-              IconButton(
-                icon: Icon(
-                  _recordingState == MathPadRecordingState.recording
-                      ? Icons.stop_circle_rounded
-                      : Icons.fiber_manual_record_rounded,
-                  size: 20,
-                  color: _recordingState == MathPadRecordingState.recording
-                      ? Colors.redAccent
-                      : null,
-                ),
-                onPressed: _recordingState == MathPadRecordingState.encoding
-                    ? null
-                    : _toggleRecording,
-                tooltip: _recordingState == MathPadRecordingState.recording
-                    ? 'Stop Recording'
-                    : (_recordingState == MathPadRecordingState.encoding
-                          ? 'Encoding…'
-                          : 'Record Board + Voice'),
-              ),
-            ],
-
-            const SizedBox(width: 8),
-            IconButton(
-              icon: Icon(
-                _isFullScreenMode
-                    ? Icons.fullscreen_exit_rounded
-                    : Icons.fullscreen_rounded,
-                size: 20,
-              ),
-              onPressed: () => setState(() {
-                _isFullScreenMode = !_isFullScreenMode;
-                _toolbarRevealedInFullScreen = false;
-                widget.onCanvasOnlyModeChanged?.call(_isFullScreenMode);
-              }),
-              tooltip: _isFullScreenMode
-                  ? 'Exit Full Screen'
-                  : 'Full Screen (canvas only)',
+          ),
+          if (widget.trailingToolbarAction != null) ...[
+            const SizedBox(width: 12),
+            Container(
+              width: 1,
+              height: 32,
+              color: isDark ? Colors.white24 : Colors.black12,
             ),
-
-            if (widget.onClose != null) ...[
-              const SizedBox(width: 8),
-              IconButton(
-                icon: const Icon(Icons.close_rounded, size: 20),
-                onPressed: _handleCloseTap,
-                tooltip: 'Close Writing Screen',
-              ),
-            ],
+            const SizedBox(width: 12),
+            RotatedBox(
+              quarterTurns: _toolbarOnLeft ? -1 : 0,
+              child: widget.trailingToolbarAction!,
+            ),
           ],
-        ),
-      ),
-      ),
-      if (widget.trailingToolbarAction != null) ...[
-        const SizedBox(width: 12),
-        Container(width: 1, height: 32, color: isDark ? Colors.white24 : Colors.black12),
-        const SizedBox(width: 12),
-        RotatedBox(quarterTurns: _toolbarOnLeft ? -1 : 0, child: widget.trailingToolbarAction!),
-      ],
-      ],
+        ],
       ),
     );
   }
@@ -6977,9 +7450,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: customIconBuilder != null
-              ? customIconBuilder(resolvedColor)
-              : Icon(icon, size: 18, color: resolvedColor),
+          child: RotatedBox(
+            quarterTurns: _toolbarOnLeft ? -1 : 0,
+            child: customIconBuilder != null
+                ? customIconBuilder(resolvedColor)
+                : Icon(icon, size: 18, color: resolvedColor),
+          ),
         ),
       ),
     );
@@ -7871,29 +8347,31 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
         // A filled region/pasted image -- ink covers the whole rect, so
         // the outline traces a rounded rect inflated well clear of it.
         final RRect ring = RRect.fromRectAndRadius(
-          bounds.inflate(standoff),
+          bounds.inflate(4.5 / scale),
           const Radius.circular(8),
         );
         _paintNeonRing(
           canvas,
           Path()..addRRect(ring),
           neonShader,
-          ringThickness / scale,
+          1.6 / scale,
         );
         continue;
       }
 
+      final double strokeStandoff = line.strokeWidth * 0.5; // 50% of the stroke
+
       if (line.points.length == 1) {
         // A single dot -- ink is a filled circle, so the outline is just
         // a bigger concentric circle.
-        final double radius = (line.strokeWidth / 2) + standoff;
+        final double radius = (line.strokeWidth / 2) + (strokeStandoff / 2);
         _paintNeonRing(
           canvas,
           Path()..addOval(
             Rect.fromCircle(center: line.points.first.offset, radius: radius),
           ),
           neonShader,
-          ringThickness / scale,
+          strokeStandoff,
         );
         continue;
       }
@@ -7907,7 +8385,7 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
       // draw a stroke wide enough to cover ink + standoff on both sides,
       // then clear back out exactly the ink's own width, leaving only the
       // outer band -- which never overlaps a single ink pixel.
-      final Rect layerBounds = bounds.inflate(standoff * 2 + 20);
+      final Rect layerBounds = bounds.inflate(strokeStandoff * 2 + 20);
       canvas.saveLayer(layerBounds, Paint());
       try {
         final Paint haloPaint = Paint()
@@ -7915,7 +8393,7 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
-          ..strokeWidth = line.strokeWidth + standoff * 2
+          ..strokeWidth = line.strokeWidth + strokeStandoff * 2
           ..shader = neonShader;
         canvas.drawPath(centerline, haloPaint);
 
@@ -8127,5 +8605,126 @@ class MathsPadFullScreenPage extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _RecordingNeonBorder extends StatefulWidget {
+  const _RecordingNeonBorder();
+
+  @override
+  State<_RecordingNeonBorder> createState() => _RecordingNeonBorderState();
+}
+
+class _RecordingNeonBorderState extends State<_RecordingNeonBorder>
+    with TickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final AnimationController _fadeController;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+    _fadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _fadeController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: AnimatedBuilder(
+          animation: Listenable.merge([_controller, _fadeController]),
+          builder: (context, _) {
+            if (_fadeController.isCompleted) {
+              return const SizedBox.shrink();
+            }
+            final opacity = _fadeController.value < 0.66
+                ? 1.0
+                : (1.0 - ((_fadeController.value - 0.66) / 0.34)).clamp(
+                    0.0,
+                    1.0,
+                  );
+            return Opacity(
+              opacity: opacity,
+              child: CustomPaint(
+                painter: _NeonBorderPainter(angle: _controller.value * 2 * pi),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _NeonBorderPainter extends CustomPainter {
+  final double angle;
+  _NeonBorderPainter({required this.angle});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(18));
+
+    // Glow effect
+    final glowPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6.0
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8.0)
+      ..shader = SweepGradient(
+        colors: [
+          Colors.transparent,
+          Colors.blue.withValues(alpha: 0.2),
+          Colors.blue,
+          Colors.orange,
+          Colors.red,
+          Colors.purple,
+          Colors.lightGreen,
+          Colors.yellow,
+          Colors.transparent,
+        ],
+        stops: const [0.0, 0.05, 0.15, 0.31, 0.47, 0.63, 0.79, 0.95, 1.0],
+        transform: GradientRotation(angle),
+      ).createShader(rect);
+
+    // Solid border core
+    final corePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..shader = SweepGradient(
+        colors: [
+          Colors.transparent,
+          Colors.blue.withValues(alpha: 0.2),
+          Colors.blue,
+          Colors.orange,
+          Colors.red,
+          Colors.purple,
+          Colors.lightGreen,
+          Colors.yellow,
+          Colors.transparent,
+        ],
+        stops: const [0.0, 0.05, 0.15, 0.31, 0.47, 0.63, 0.79, 0.95, 1.0],
+        transform: GradientRotation(angle),
+      ).createShader(rect);
+
+    canvas.drawRRect(rrect, glowPaint);
+    canvas.drawRRect(rrect, corePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _NeonBorderPainter oldDelegate) {
+    return oldDelegate.angle != angle;
   }
 }

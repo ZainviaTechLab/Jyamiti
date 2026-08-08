@@ -15,14 +15,12 @@ class SetSquareWidget extends StatelessWidget {
   final SetSquareState state;
   final bool isDark;
   final ui.Image? logoImage;
-  final VoidCallback onRemove;
 
   const SetSquareWidget({
     super.key,
     required this.state,
     required this.isDark,
     this.logoImage,
-    required this.onRemove,
   });
 
   @override
@@ -51,12 +49,6 @@ class SetSquareWidget extends StatelessWidget {
             ],
           ),
         ),
-        _tapHandle(
-          handles['remove']!,
-          InstrumentHandleRole.remove,
-          'Remove Set Square',
-          onRemove,
-        ),
       ],
     );
   }
@@ -80,20 +72,6 @@ class SetSquareWidget extends StatelessWidget {
         tooltip: '',
         armed: armed,
       ),
-    );
-  }
-
-  Widget _tapHandle(
-    Offset worldPos,
-    InstrumentHandleRole role,
-    String tooltip,
-    VoidCallback onTap,
-  ) {
-    const r = InstrumentHandle.size / 2;
-    return Positioned(
-      left: worldPos.dx - r,
-      top: worldPos.dy - r,
-      child: InstrumentHandle(role: role, tooltip: tooltip, onTap: onTap),
     );
   }
 }

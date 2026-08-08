@@ -43,7 +43,10 @@ abstract class InstrumentState {
     final rel = worldPoint - pivot;
     final cosR = cos(rotation);
     final sinR = sin(rotation);
-    return Offset(rel.dx * cosR + rel.dy * sinR, -rel.dx * sinR + rel.dy * cosR);
+    return Offset(
+      rel.dx * cosR + rel.dy * sinR,
+      -rel.dx * sinR + rel.dy * cosR,
+    );
   }
 }
 
@@ -229,7 +232,8 @@ class SetSquareState extends InstrumentState {
 
   /// The edge (by index: 0 = v0->v1, 1 = v1->v2, 2 = v2->v0) the attached
   /// pencil currently rides on and draws along.
-  (Offset, Offset) get drawEdge => strokeableEdges()[pencilEdgeIndex.clamp(0, 2)];
+  (Offset, Offset) get drawEdge =>
+      strokeableEdges()[pencilEdgeIndex.clamp(0, 2)];
 
   Offset _outward(Offset vertex, Offset from, double amount) {
     final dir = vertex - from;

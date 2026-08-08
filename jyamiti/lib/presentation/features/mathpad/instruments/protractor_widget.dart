@@ -16,14 +16,12 @@ class ProtractorWidget extends StatelessWidget {
   final ProtractorState state;
   final bool isDark;
   final ui.Image? logoImage;
-  final VoidCallback onRemove;
 
   const ProtractorWidget({
     super.key,
     required this.state,
     required this.isDark,
     this.logoImage,
-    required this.onRemove,
   });
 
   @override
@@ -51,12 +49,6 @@ class ProtractorWidget extends StatelessWidget {
             ],
           ),
         ),
-        _tapHandle(
-          handles['remove']!,
-          InstrumentHandleRole.remove,
-          'Remove Protractor',
-          onRemove,
-        ),
       ],
     );
   }
@@ -67,20 +59,6 @@ class ProtractorWidget extends StatelessWidget {
       left: worldPos.dx - r,
       top: worldPos.dy - r,
       child: InstrumentHandle(role: role, tooltip: ''),
-    );
-  }
-
-  Widget _tapHandle(
-    Offset worldPos,
-    InstrumentHandleRole role,
-    String tooltip,
-    VoidCallback onTap,
-  ) {
-    const r = InstrumentHandle.size / 2;
-    return Positioned(
-      left: worldPos.dx - r,
-      top: worldPos.dy - r,
-      child: InstrumentHandle(role: role, tooltip: tooltip, onTap: onTap),
     );
   }
 }

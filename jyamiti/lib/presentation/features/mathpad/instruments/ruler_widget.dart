@@ -15,14 +15,12 @@ class RulerWidget extends StatelessWidget {
   final RulerState state;
   final bool isDark;
   final ui.Image? logoImage;
-  final VoidCallback onRemove;
 
   const RulerWidget({
     super.key,
     required this.state,
     required this.isDark,
     this.logoImage,
-    required this.onRemove,
   });
 
   @override
@@ -50,12 +48,6 @@ class RulerWidget extends StatelessWidget {
             ],
           ),
         ),
-        _tapHandle(
-          handles['remove']!,
-          InstrumentHandleRole.remove,
-          'Remove Ruler',
-          onRemove,
-        ),
       ],
     );
   }
@@ -81,20 +73,6 @@ class RulerWidget extends StatelessWidget {
       ),
     );
   }
-
-  Widget _tapHandle(
-    Offset worldPos,
-    InstrumentHandleRole role,
-    String tooltip,
-    VoidCallback onTap,
-  ) {
-    const r = InstrumentHandle.size / 2;
-    return Positioned(
-      left: worldPos.dx - r,
-      top: worldPos.dy - r,
-      child: InstrumentHandle(role: role, tooltip: tooltip, onTap: onTap),
-    );
-  }
 }
 
 class _RulerPainter extends CustomPainter {
@@ -113,7 +91,12 @@ class _RulerPainter extends CustomPainter {
     canvas.translate(state.pivot.dx, state.pivot.dy);
     canvas.rotate(state.rotation);
 
-    final bodyRect = Rect.fromLTWH(-halfLen, -height / 2, state.lengthPx, height);
+    final bodyRect = Rect.fromLTWH(
+      -halfLen,
+      -height / 2,
+      state.lengthPx,
+      height,
+    );
     final bodyPaint = Paint()
       ..color = isDark
           ? const Color(0xFFCBB8F0).withOpacity(0.92)
