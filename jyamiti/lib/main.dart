@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
@@ -60,6 +61,17 @@ void main() {
   );
 }
 
+class AppScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.stylus,
+        PointerDeviceKind.invertedStylus,
+        PointerDeviceKind.trackpad,
+      };
+}
+
 class LearningPlatformApp extends StatelessWidget {
   const LearningPlatformApp({super.key});
 
@@ -73,6 +85,7 @@ class LearningPlatformApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: themeProvider.themeMode,
+      scrollBehavior: AppScrollBehavior(),
       builder: (context, child) {
         return ThemeReveal(child: child ?? const SizedBox.shrink());
       },

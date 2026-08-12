@@ -2850,6 +2850,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // handled purely at paint time (see `_drawStrokes`), so the boundary
       // stroke's own antialiasing draws on top of the fill colour there.
       _lines.add(fillLine);
+      _recordAction(MathsPadAction(addedLines: [fillLine]));
     });
     _finishedStrokesNotifier.value++;
     _maybeRebakeLines();
