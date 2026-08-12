@@ -65,7 +65,12 @@ dependencies:
   path_provider: ^2.1.6
   google_mlkit_digital_ink_recognition: ^0.15.0
   record: ^7.1.1
-  flutter_cube: ^0.1.1
+  # Vendored (not pub.dev) -- patched to compute proper smoothed vertex
+  # normals instead of one flat normal per triangle face, which is what
+  # made every curved solid render with hard, visible facets regardless of
+  # polygon count. See third_party/flutter_cube/PATCH_NOTES.md.
+  flutter_cube:
+    path: third_party/flutter_cube
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
   media_kit_libs_video: ^1.0.7

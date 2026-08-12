@@ -1092,7 +1092,15 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
     return Scaffold(
       extendBodyBehindAppBar: !isLargeScreen,
-      floatingActionButton: const JyamitiPadFab(enableSaveNotes: true),
+      floatingActionButton: JyamitiPadFab(
+        enableSaveNotes: true,
+        onPressed: () {
+          setState(() {
+            _selectedSidebarTab = 10;
+            _activeInlineSubScreen = null;
+          });
+        },
+      ),
       appBar: isLargeScreen
           ? null
           : AppBar(
@@ -1266,11 +1274,7 @@ class _TutorDashboardState extends State<TutorDashboard> {
                           'My Notes',
                           Icons.note_alt_rounded,
                         ),
-                        _buildSidebarItem(
-                          10,
-                          'Math Pad',
-                          Icons.architecture_rounded,
-                        ),
+
 
                         const Spacer(),
 

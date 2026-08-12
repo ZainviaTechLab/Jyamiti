@@ -95,6 +95,7 @@ Future<Map<String, dynamic>> encodePageSnapshot(
       'isShape': line.isShape,
       'fillImageFile': fillImageFile,
       'rotation': line.rotation,
+      'isPastedImage': line.isPastedImage,
     });
   }
 
@@ -286,6 +287,11 @@ Future<MathPadPageSnapshot> decodePageSnapshot(
         fillImage: fillImage,
         fillWorldBounds: fillWorldBounds,
         rotation: (lineJson['rotation'] as num?)?.toDouble() ?? 0,
+        // Defaults false for pages saved before this flag existed --
+        // indistinguishable from a Fill Tool result in that old data, so
+        // it just keeps rendering underneath ink as it always did until
+        // the page is saved again.
+        isPastedImage: lineJson['isPastedImage'] as bool? ?? false,
       ),
     );
   }

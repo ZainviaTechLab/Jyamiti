@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io' show File;
 import 'dart:math';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint, setEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,6 +26,8 @@ import '../asset_library/models/asset_library_models.dart';
 import '../asset_library/models/mathpad_template_models.dart';
 import '../asset_library/services/mathpad_asset_library_storage_service.dart';
 import '../asset_library/screens/asset_library_picker_sheet.dart';
+import '../widgets/student_spinner_dialog.dart';
+import '../../../../providers/auth_provider.dart';
 
 /// Hands the full current canvas content back to whoever opened
 /// [MathsPadWidget] with a `onSaveRequested` callback (e.g. the Math Pad
@@ -83,12 +87,41 @@ class MathsPadLine {
   Rect? fillWorldBounds;
   // Radians, only meaningful when `fillImage != null` -- the image is
   // rendered rotated about its own `fillWorldBounds` center at paint time
-  // (see `_drawStrokes`); the bounds rect itself stays axis-aligned and is
+  // (see `_MathsPadFinishedStrokesPainter.paint`); the bounds rect itself
+  // stays axis-aligned and is
   double rotation;
   String? groupId;
 
+  // True for a user-pasted image (`_insertPastedImageBytes`), false for a
+  // Fill Tool flood-fill result -- both share the `fillImage` mechanism
+  // above, but render with different z-order rules (see
+  // `_MathsPadFinishedStrokesPainter.paint`'s Pass 1 vs Pass 2): a Fill
+  // Tool patch always stays underneath every stroke (so ink's own
+  // antialiased edge blends on top of it), while a pasted image renders
+  // in true chronological order right alongside ink -- draw a stroke
+  // after pasting an image and that stroke stays on top of it, same as
+  // pasting a second image on top of an earlier one or earlier ink. The
+  // Eraser tool can never affect either kind of image regardless of this
+  // flag or draw order.
+  bool isPastedImage;
+
   Path? cachedPath;
   Rect? cachedBounds;
+
+  // Live-drawing-only scratch state (never serialized, never touched by
+  // `invalidateCache`/`cachedPath` above -- those are for the FINAL
+  // committed stroke's path) -- see `_buildLivePath`'s use of these to
+  // avoid re-running full Chaikin smoothing over the entire stroke-so-far
+  // on every single drawing frame.
+  List<Offset>? liveCachedSmoothPts;
+  int liveCachedRawPointCount = 0;
+
+  // How many of this (still being drawn) line's leading raw points are
+  // already rasterized into Layer 2a's cached "stroke-so-far" snapshot
+  // (see `_kLiveBakeEvery`) -- 0 until the first bake. Meaningless once
+  // the stroke is committed into `_lines`/a baked chunk, which render
+  // from `cachedPath` above instead.
+  int liveBakedPointCount = 0;
 
   MathsPadLine({
     required this.points,
@@ -103,6 +136,7 @@ class MathsPadLine {
     this.groupId,
     this.cachedPath,
     this.cachedBounds,
+    this.isPastedImage = false,
   });
 
   void invalidateCache() {
@@ -113,6 +147,19 @@ class MathsPadLine {
     if (fillImage != null && points.length >= 2) {
       fillWorldBounds = Rect.fromPoints(points[0].offset, points[1].offset);
     }
+    // `_buildLivePath`'s smoothing cache is staleness-checked purely by
+    // RAW POINT COUNT (see its doc comment) -- correct for a live-growing
+    // stroke, where the count only ever goes up, but WRONG for an
+    // already-finished line being moved/rotated/resized: the count stays
+    // fixed while every point's VALUE changes, so without clearing this
+    // here too, `_buildLivePath` would keep reusing the smoothed shape
+    // from whatever position the line was in the FIRST time it was
+    // called after selection -- e.g. the selected-stroke neon outline
+    // (which falls back to `_buildLivePath` once `cachedPath` is null)
+    // would visibly freeze at the drag's starting position instead of
+    // tracking the live move/rotate.
+    liveCachedSmoothPts = null;
+    liveCachedRawPointCount = 0;
   }
 }
 
@@ -497,6 +544,16 @@ class MathsPadWidget extends StatefulWidget {
   // Library's page switcher to silently save "whatever's on screen" before
   // swapping in a different page, without a save-button press.
   final ValueChanged<MathsPadLiveStateReader>? onEditorReady;
+  // Called once at init with a closure the caller can invoke at any later
+  // moment (typically right after a save) to capture a small PNG
+  // thumbnail of the canvas's CURRENT content -- same "hand out a
+  // callable closure once" pattern as `onEditorReady`, just async, since
+  // rasterizing a frame (`RenderRepaintBoundary.toImage`) can't be done
+  // synchronously. Used by the Math Pad Library's page editor to keep
+  // each page's cached preview image (see `MathPadLibraryStorageService.
+  // saveThumbnail`) up to date without the pages sidebar ever needing to
+  // decode/re-render a page's full stroke data just to show a thumbnail.
+  final ValueChanged<Future<Uint8List?> Function()>? onThumbnailCaptureReady;
   // Fires whenever this pad's own "canvas only" mode (its internal
   // toolbar hidden down to a small pull-handle -- see `_isFullScreenMode`)
   // is toggled, so a caller with its OWN floating chrome around this
@@ -525,6 +582,7 @@ class MathsPadWidget extends StatefulWidget {
     this.initialThemeMode,
     this.onSaveRequested,
     this.onEditorReady,
+    this.onThumbnailCaptureReady,
     this.onCanvasOnlyModeChanged,
     this.leadingToolbarAction,
     this.trailingToolbarAction,
@@ -534,11 +592,95 @@ class MathsPadWidget extends StatefulWidget {
   State<MathsPadWidget> createState() => _MathsPadWidgetState();
 }
 
+class MathsPadAction {
+  final List<MathsPadLine> addedLines;
+  final List<MathsPadLine> removedLines;
+  final List<MathsPadTextLabel> addedLabels;
+  final List<MathsPadTextLabel> removedLabels;
+  final List<InstrumentState> addedInstruments;
+  final List<InstrumentState> removedInstruments;
+
+  MathsPadAction({
+    this.addedLines = const [],
+    this.removedLines = const [],
+    this.addedLabels = const [],
+    this.removedLabels = const [],
+    this.addedInstruments = const [],
+    this.removedInstruments = const [],
+  });
+
+  void undo(_MathsPadWidgetState state) {
+    if (addedLines.isNotEmpty) state._lines.removeWhere((l) => addedLines.contains(l));
+    if (removedLines.isNotEmpty) {
+      state._lines.addAll(removedLines);
+      for (final l in removedLines) {
+        _buildAndCachePath(l);
+      }
+    }
+
+    if (addedLabels.isNotEmpty) state._textLabels.removeWhere((l) => addedLabels.contains(l));
+    if (removedLabels.isNotEmpty) state._textLabels.addAll(removedLabels);
+
+    if (addedInstruments.isNotEmpty) state._instruments.removeWhere((i) => addedInstruments.contains(i));
+    if (removedInstruments.isNotEmpty) state._instruments.addAll(removedInstruments);
+    
+    state._selectedLines.removeWhere((l) => addedLines.contains(l));
+    if (addedLines.isNotEmpty) {
+      state._removeOrphanedAngleLabels(addedLines);
+    }
+    state._resetBaking();
+    state._finishedStrokesNotifier.value++;
+    state._activeDrawingNotifier.value++;
+  }
+
+  void redo(_MathsPadWidgetState state) {
+    if (removedLines.isNotEmpty) {
+      state._lines.removeWhere((l) => removedLines.contains(l));
+      state._selectedLines.removeWhere((l) => removedLines.contains(l));
+      state._removeOrphanedAngleLabels(removedLines);
+    }
+    if (addedLines.isNotEmpty) {
+      state._lines.addAll(addedLines);
+      for (final l in addedLines) {
+        _buildAndCachePath(l);
+      }
+    }
+
+    if (removedLabels.isNotEmpty) state._textLabels.removeWhere((l) => removedLabels.contains(l));
+    if (addedLabels.isNotEmpty) state._textLabels.addAll(addedLabels);
+
+    if (removedInstruments.isNotEmpty) state._instruments.removeWhere((i) => removedInstruments.contains(i));
+    if (addedInstruments.isNotEmpty) state._instruments.addAll(addedInstruments);
+    
+    state._resetBaking();
+    state._finishedStrokesNotifier.value++;
+    state._activeDrawingNotifier.value++;
+  }
+}
+
 class _MathsPadWidgetState extends State<MathsPadWidget>
     with SingleTickerProviderStateMixin {
   final List<MathsPadLine> _lines = [];
-  final List<MathsPadLine> _undoHistory = [];
+  final List<MathsPadAction> _undoHistory = [];
+  final List<MathsPadAction> _redoHistory = [];
+
+  bool get _isDarkTheme {
+    return _themeMode == MathPadTheme.cosmos ||
+        _themeMode == MathPadTheme.dark ||
+        _themeMode == MathPadTheme.aswadLail;
+  }
+
+  Color get _textColor => _isDarkTheme ? Colors.white : const Color(0xFF1E293B);
+  Color get _textColor70 =>
+      _isDarkTheme ? Colors.white70 : const Color(0xFF1E293B).withOpacity(0.7);
+  Color get _textColor60 =>
+      _isDarkTheme ? Colors.white60 : const Color(0xFF1E293B).withOpacity(0.6);
   MathsPadLine? _currentLine;
+  // Live cursor ring drawn on the (cheap, per-frame) active overlay layer
+  // while an area-eraser stroke is being dragged -- see the comment at its
+  // one write site in `_onScaleUpdate` for why this replaced repainting
+  // the entire finished-strokes layer on every move sample.
+  Offset? _eraserCursorPos;
 
   // Geometry instruments (ruler, protractor, compass, set squares) overlaid
   // on the canvas. See presentation/features/mathpad/instruments/.
@@ -727,12 +869,239 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   late final ValueNotifier<int> _finishedStrokesNotifier;
   late final ValueNotifier<int> _activeDrawingNotifier;
 
+  // Split of the finished-strokes layer into a rarely-repainting "baked"
+  // sub-layer (`_lines[0.._bakedLineCount)`, redrawn only when
+  // `_bakedStrokesNotifier` fires) and a small "recent" sub-layer
+  // (`_lines[_bakedLineCount..]`, redrawn on every `_finishedStrokesNotifier`
+  // tick same as before). Plain sequential drawing was forcing a full
+  // from-scratch redraw of literally every stroke on the page on every
+  // single commit (`_finishedStrokesNotifier` already fired once per
+  // completed stroke, by design, for the correct reason of showing the new
+  // ink) -- on a heavily-used page that's a real, ever-growing O(total
+  // strokes) cost paid on every single new stroke, exactly matching "gets
+  // laggier the more the page has been drawn on".
+  //
+  // The baked sub-layer is itself split into fixed CHUNKS (`_bakedChunks`,
+  // one immutable `List<MathsPadLine>` per past bake event), each rendered
+  // in its OWN keyed `RepaintBoundary`/`CustomPaint` in the widget tree
+  // (see `build`'s Layer 1a). A single monolithic baked layer would still
+  // have to fully re-rasterize its ENTIRE sublist every time a new chunk
+  // folds in -- reintroducing the exact per-stroke-count-scaling hitch this
+  // cache exists to eliminate, just at 1/`_kBakeThreshold` the frequency
+  // instead of never (this was confirmed against real usage: "smooth, then
+  // one laggy commit like before, then smooth again" -- a periodic hitch
+  // whose cost grows with how much of the page is already baked). Chunking
+  // keeps each individual bake event's cost bounded to `_kBakeThreshold`
+  // lines regardless of total page history, because a sealed chunk's
+  // `List<MathsPadLine>` instance is never replaced or re-sliced once
+  // created -- `_MathsPadFinishedStrokesPainter.shouldRepaint` compares
+  // `lines` by `identical()`, so Flutter's compositor reuses that chunk's
+  // already-rasterized layer for free on every later rebuild instead of
+  // re-executing its paint calls.
+  //
+  // Any operation that MUTATES or REMOVES an existing (possibly-already-
+  // baked) line -- undo/redo/erase/selection-transform/clear -- calls
+  // `_resetBaking()` instead, discarding all sealed chunks and falling back
+  // to the previous (correct, if unoptimized) full-recent-layer behavior
+  // for those lower-frequency interactions rather than risk a baked chunk
+  // silently going stale.
+  int _bakedLineCount = 0;
+  final List<List<MathsPadLine>> _bakedChunks = [];
+  // True from `initState` until a freshly-opened page's `widget.
+  // initialLines` have all been frame-batched into `_bakedChunks` (see
+  // `_hydrateNextInitialBatch`) -- guards against drawing/undo/paste/etc.
+  // interleaving with the hydration batches, which would corrupt
+  // `_bakedLineCount` bookkeeping (hydration assumes it owns the front of
+  // `_lines` until done). False immediately for a blank/small page (no
+  // `initialLines`), so this adds zero overhead for the common case.
+  bool _isHydratingInitialContent = false;
+
+  // World-space bounding box for each entry in `_bakedChunks` (same
+  // index), computed once when a chunk seals -- lets `build` pass an
+  // `isVisible` flag into each chunk's painter so it can skip its own
+  // drawing work (real Skia tessellation cost) when nowhere near the
+  // current viewport, WITHOUT ever unmounting the widget itself. An
+  // earlier attempt achieved the same skip by excluding invisible chunks
+  // from the `Stack`'s children entirely -- reverted, because destroying
+  // and recreating a chunk's `RepaintBoundary`/GPU layer every time it
+  // crossed the viewport edge caused a delayed "everything freezes for a
+  // stretch a few seconds later" stall (GPU resource churn catching up),
+  // confirmed by the user after that change. Keeping every chunk
+  // permanently mounted and only toggling a paint-time boolean avoids that
+  // churn entirely while still skipping the real cost.
+  final List<Rect> _bakedChunkBounds = [];
+  late final ValueNotifier<int> _bakedStrokesNotifier;
+  static const int _kBakeThreshold = 25;
+  // Caps how many separate `_bakedChunks` entries exist at once -- each is
+  // its own composited GPU layer (`RepaintBoundary`), and confirmed via a
+  // live diagnostic capture that COMPOSITING many of them together every
+  // frame has a real, sustained cost that scales with zoom, independent of
+  // whether any of them actually need to repaint: a 1670-line page (67
+  // chunks at the old uncapped-count design) showed ~500ms of raster time
+  // on nearly EVERY frame while zoomed in and drawing, even though the
+  // live stroke painter itself measured under 1ms and no new chunk was
+  // being created -- that sustained cost is what was actually behind
+  // "after zooming, drawing/panning feels very very laggy," not repaint
+  // work. `_kBakeThreshold` stays small (good per-stroke "recent" tier
+  // redraw cost, unaffected by this), but once sealed, chunks periodically
+  // get merged (see `_compactBakedChunksIfNeeded`) to keep the total
+  // layer count bounded regardless of how large a page's history grows --
+  // free to do since a baked chunk never needs to repaint on its own
+  // (only on the rare frame it's first created/merged), so merging costs
+  // nothing ongoing, only a one-time re-render of the merged result.
+  static const int _kMaxBakedChunks = 24;
+
+  /// Keeps `_bakedChunks.length` bounded to `_kMaxBakedChunks` by
+  /// repeatedly merging the two OLDEST chunks into one -- cheap (just list
+  /// concatenation + a bounds union, no painting happens here) since a
+  /// chunk is only ever actually re-tessellated the next time it's
+  /// rendered (via the normal `identical()`-based `shouldRepaint` check),
+  /// not at merge time. Oldest-first means long-settled, effectively-
+  /// static content naturally consolidates into fewer, larger layers over
+  /// a page's lifetime, while freshly-baked chunks stay small until they
+  /// too age into the merge -- content that's unlikely to ever need
+  /// repainting again doesn't need to stay in its own separate layer.
+  void _compactBakedChunksIfNeeded() {
+    while (_bakedChunks.length > _kMaxBakedChunks) {
+      final List<MathsPadLine> merged = [
+        ..._bakedChunks[0],
+        ..._bakedChunks[1],
+      ];
+      final Rect mergedBounds = _bakedChunkBounds[0].expandToInclude(
+        _bakedChunkBounds[1],
+      );
+      _bakedChunks[0] = merged;
+      _bakedChunkBounds[0] = mergedBounds;
+      _bakedChunks.removeAt(1);
+      _bakedChunkBounds.removeAt(1);
+    }
+  }
+
+  Rect _computeLineBounds(MathsPadLine line) {
+    if (line.points.isEmpty) return Rect.zero;
+    double minX = line.points.first.offset.dx;
+    double maxX = minX;
+    double minY = line.points.first.offset.dy;
+    double maxY = minY;
+    for (int i = 1; i < line.points.length; i++) {
+      final p = line.points[i].offset;
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    line.cachedBounds = Rect.fromLTRB(minX, minY, maxX, maxY);
+    return line.cachedBounds!;
+  }
+
+  /// Unions the world-space bounds of every line in [chunk] (computing and
+  /// caching each line's own `cachedBounds` first if it isn't already, the
+  /// same lazy bounds computation `_MathsPadFinishedStrokesPainter` does).
+  Rect _computeChunkBounds(List<MathsPadLine> chunk) {
+    Rect? bounds;
+    for (final line in chunk) {
+      if (line.points.isEmpty) continue;
+      final lineBounds = line.cachedBounds ?? _computeLineBounds(line);
+      bounds = bounds == null ? lineBounds : bounds.expandToInclude(lineBounds);
+    }
+    return bounds ?? Rect.zero;
+  }
+
+  void _maybeRebakeLines() {
+    // MUST cap every sealed chunk at `_kBakeThreshold` -- this used to bake
+    // the ENTIRE unbaked backlog (`_lines.sublist(_bakedLineCount,
+    // _lines.length)`) in one shot, which is harmless when called after
+    // every single stroke (the backlog is normally only ~25-26 lines when
+    // the threshold trips) but a real, serious bug whenever a much larger
+    // backlog piles up unbaked at once -- e.g. right after `_resetBaking()`
+    // wipes everything on a heavy page, or after a bulk insert (paste/
+    // duplicate/template). Confirmed via live diagnostic capture: a single
+    // resulting "chunk" of 1604 lines took 873ms to paint, and kept getting
+    // rebuilt from scratch on subsequent frames (its `lines` reference
+    // changing each time defeats `shouldRepaint`'s `identical()` check) --
+    // this is what was actually behind "after zooming/editing, everything
+    // feels terrible," not zoom itself. Looping here bounds every chunk to
+    // the same small, cheap-to-paint, stable size regardless of how large
+    // the backlog is.
+    bool sealedAny = false;
+    while (_lines.length - _bakedLineCount >= _kBakeThreshold) {
+      final int end = (_bakedLineCount + _kBakeThreshold).clamp(
+        0,
+        _lines.length,
+      );
+      final List<MathsPadLine> newChunk = _lines.sublist(_bakedLineCount, end);
+      _bakedChunks.add(newChunk);
+      _bakedChunkBounds.add(_computeChunkBounds(newChunk));
+      _bakedLineCount = end;
+      sealedAny = true;
+    }
+    if (sealedAny) {
+      _compactBakedChunksIfNeeded();
+      _bakedStrokesNotifier.value++;
+    }
+  }
+
+  /// Processes one `_kBakeThreshold`-sized batch of `widget.initialLines`
+  /// (building each line's smoothed `Path` via `_buildAndCachePath`,
+  /// sealing the batch into a new baked chunk) and reschedules itself for
+  /// the frame after next via `addPostFrameCallback`, until every loaded
+  /// line has been hydrated -- see the doc comment at its call site in
+  /// `initState` for why this replaced one flat synchronous loop over the
+  /// whole page. `addPostFrameCallback` (rather than a microtask/`Future.
+  /// delayed(Duration.zero)`) is deliberate: it deterministically waits
+  /// for an actual rendered frame between batches, which is what lets a
+  /// real loading indicator (and each newly-sealed chunk) actually be
+  /// seen on screen between batches, not just theoretically yield.
+  void _hydrateNextInitialBatch(Duration _) {
+    if (!mounted) return;
+    final int start = _bakedLineCount;
+    final int end = (start + _kBakeThreshold).clamp(0, _lines.length);
+    if (start >= end) {
+      // Nothing left (or nothing to begin with) -- shouldn't normally be
+      // reached given the `_lines.isNotEmpty` guard at the call site, but
+      // safe to just stop hydrating rather than loop forever.
+      if (_isHydratingInitialContent) {
+        setState(() => _isHydratingInitialContent = false);
+      }
+      return;
+    }
+    final List<MathsPadLine> chunk = _lines.sublist(start, end);
+    for (final line in chunk) {
+      _buildAndCachePath(line);
+    }
+    _bakedChunks.add(chunk);
+    _bakedChunkBounds.add(_computeChunkBounds(chunk));
+    _bakedLineCount = end;
+    // Keeps the total composited-layer count bounded even for a heavy
+    // page's initial load, not just for later live drawing -- see
+    // `_kMaxBakedChunks`'s doc comment.
+    _compactBakedChunksIfNeeded();
+    _bakedStrokesNotifier.value++;
+    if (_bakedLineCount >= _lines.length) {
+      setState(() => _isHydratingInitialContent = false);
+    } else {
+      SchedulerBinding.instance.addPostFrameCallback(_hydrateNextInitialBatch);
+    }
+  }
+
+  void _resetBaking() {
+    if (_bakedLineCount == 0 && _bakedChunks.isEmpty) return;
+    _bakedLineCount = 0;
+    _bakedChunks.clear();
+    _bakedChunkBounds.clear();
+    _bakedStrokesNotifier.value++;
+  }
+
   // Active Pointers tracking for Chrome Web Multi-Touch Panning
   final Map<int, Offset> _activePointers = {};
   Offset? _lastCentroid;
 
   // Hardware Stylus Side Barrel Button & Eraser Tip Detection
   bool _isStylusBarrelPressed = false;
+  bool _isPrimaryBarrelPressed = false;
+  bool _isSecondaryBarrelPressed = false;
+  DateTime? _lastPrimaryBarrelPressTime;
+  DateTime? _lastSecondaryBarrelPressTime;
 
   // Most recent raw pointer pressure (updated from the `Listener`'s raw
   // PointerEvents, since `ScaleStartDetails`/`ScaleUpdateDetails` -- what
@@ -742,30 +1111,154 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // pressure-sensitive stylus.
   double _currentPointerPressure = 1.0;
 
-  // ─── Pen Tool: auto-straighten on hold ─────────────────────────────────
+  // ─── Pen Tool: auto-shape on hold ───────────────────────────────────────
   // While freehand drawing (ink only, not the eraser), pausing mid-stroke
-  // for a beat auto-straightens the stroke-so-far into a clean line IF it
-  // already looks roughly straight (an intentionally-straight but slightly
-  // wobbly hand-drawn line, not real handwriting -- see
-  // `_tryAutoStraightenPenLine`'s straightness check). Same "draw and hold
-  // to correct" idea as OneNote's ink shapes. Continued dragging after that
-  // keeps the line straight, following the pointer, same as the Straight
-  // Line Tool.
+  // for a beat snaps the stroke-so-far to a clean shape IF it already
+  // looks roughly like one -- a straight line (an intentionally-straight
+  // but slightly wobbly hand-drawn line, not real handwriting -- see
+  // `_tryAutoStraightenPenLine`'s straightness check) or a circle/oval
+  // (see `_tryAutoCircleifyPenLine`'s roundness check), tried in that
+  // order. Same "draw and hold to correct" idea as OneNote's ink shapes.
+  // Continued dragging after that keeps adjusting the shape to follow the
+  // pointer (the line's endpoint, or the circle's radius) instead of
+  // resuming freehand sampling.
   Timer? _penHoldTimer;
   Offset? _penHoldAnchor;
   bool _penAutoStraightened = false;
+  bool _penAutoCircled = false;
+  Offset? _penAutoCircleCenter;
 
-  void _resetPenAutoStraighten() {
+  void _resetPenAutoShape() {
     _penHoldTimer?.cancel();
     _penHoldTimer = null;
     _penHoldAnchor = null;
     _penAutoStraightened = false;
+    _penAutoCircled = false;
+    _penAutoCircleCenter = null;
   }
 
-  /// Fires after holding still for a second mid-freehand-stroke. If what's
-  /// been drawn so far already looks roughly straight, snaps it to a
-  /// perfect straight line from the stroke's start to the hold point, and
-  /// flips on `_penAutoStraightened` so `_onScaleUpdate` keeps the line
+  /// Fires after holding still for a second mid-freehand-stroke -- tries
+  /// snapping to a circle first (see `_tryAutoCircleifyPenLine`), then
+  /// falls back to a straight line if that didn't match.
+  void _tryAutoShapePenLine(Offset holdPos) {
+    if (_tryAutoCircleifyPenLine(holdPos)) return;
+    _tryAutoStraightenPenLine(holdPos);
+  }
+
+  /// Builds a closed circle outline of [segments] straight edges (65
+  /// points, first == last to close the loop) -- a high enough segment
+  /// count to look smooth at any reasonable on-canvas size, while still
+  /// being cheap to build/redraw live every frame during a resize drag.
+  /// Shared by the initial snap and by continued-drag resizing.
+  List<MathsPadStrokePoint> _circleOutlinePoints(
+    Offset center,
+    double radius, {
+    int segments = 64,
+  }) {
+    return List.generate(segments + 1, (i) {
+      final double a = (i / segments) * 2 * pi;
+      return MathsPadStrokePoint(center + Offset(cos(a), sin(a)) * radius);
+    });
+  }
+
+  /// If the stroke-so-far already looks roughly like a hand-drawn
+  /// circle/oval, replaces it with a perfect circle sized to match what
+  /// was actually drawn (matching OneNote's ink-shape recognition, not
+  /// snapped to some fixed/preset size). Detection fits an ELLIPSE from
+  /// the points' bounding box rather than a single radius from the
+  /// centroid -- live testing showed real hand/mouse-drawn "circles" are
+  /// naturally somewhat oval (up to ~40-70% radius variance from a
+  /// centroid-based single-radius model, which rejected every real
+  /// attempt); the bounding box's center and half-extents are a far more
+  /// forgiving, robust fit for a genuinely round-ish freehand shape while
+  /// still rejecting real scribbles. Returns whether it actually
+  /// snapped. `_currentLine` is replaced (not mutated) with a fresh
+  /// `isShape: true` line so it renders with clean straight edges
+  /// between the generated circle points instead of the freehand
+  /// painter's Chaikin smoothing subtly rounding/shrinking it -- `isShape`
+  /// is `final`, set once at construction.
+  bool _tryAutoCircleifyPenLine(Offset holdPos) {
+    final line = _currentLine;
+    if (line == null || line.points.length < 10) return false;
+
+    double minX = line.points.first.offset.dx;
+    double maxX = minX;
+    double minY = line.points.first.offset.dy;
+    double maxY = minY;
+    for (final p in line.points) {
+      if (p.offset.dx < minX) minX = p.offset.dx;
+      if (p.offset.dx > maxX) maxX = p.offset.dx;
+      if (p.offset.dy < minY) minY = p.offset.dy;
+      if (p.offset.dy > maxY) maxY = p.offset.dy;
+    }
+    final double rx = (maxX - minX) / 2;
+    final double ry = (maxY - minY) / 2;
+    if (rx < 8 || ry < 8) return false; // too small (or too flat) to judge
+
+    // Not too elongated -- a genuinely round-ish shape, not a long thin
+    // sliver (the straight-line check is the right fallback for that).
+    final double aspect = rx > ry ? rx / ry : ry / rx;
+    if (aspect > 2.2) return false;
+
+    final Offset center = Offset((minX + maxX) / 2, (minY + maxY) / 2);
+
+    // Roundness check against the fitted ELLIPSE: for a point exactly on
+    // it, `((x-cx)/rx)^2 + ((y-cy)/ry)^2 == 1`. Real wobble in an
+    // intentionally round-ish freehand shape stays reasonably close to
+    // 1; a scribble, or a shape that's round in the middle but pokes out
+    // somewhere, doesn't.
+    const double allowedNormDeviation = 0.35;
+    double worstNormDeviation = 0;
+    for (final p in line.points) {
+      final double dx = (p.offset.dx - center.dx) / rx;
+      final double dy = (p.offset.dy - center.dy) / ry;
+      final double normDist = sqrt(dx * dx + dy * dy);
+      final double dev = (normDist - 1.0).abs();
+      if (dev > worstNormDeviation) worstNormDeviation = dev;
+    }
+    if (worstNormDeviation > allowedNormDeviation) return false;
+
+    // Coverage check: the stroke has to actually sweep most of the way
+    // around the center -- however round, a short arc/curve isn't a
+    // circle. Buckets each point's angle (in the ellipse's own
+    // normalized frame, so wedges stay evenly spaced regardless of how
+    // elongated it is) into 12 (30°) wedges and requires most to be hit.
+    final List<bool> wedgesHit = List.filled(12, false);
+    for (final p in line.points) {
+      final double dx = (p.offset.dx - center.dx) / rx;
+      final double dy = (p.offset.dy - center.dy) / ry;
+      final double angle = atan2(dy, dx); // -pi..pi
+      final int wedge = (((angle + pi) / (2 * pi)) * 12).floor().clamp(0, 11);
+      wedgesHit[wedge] = true;
+    }
+    if (wedgesHit.where((hit) => hit).length < 9) return false;
+
+    // The OUTPUT is still a perfect (not elliptical) circle -- sized to
+    // the average of the fitted ellipse's two half-extents, which is
+    // "accurate" to what was actually drawn without carrying the
+    // detection step's extra tolerance for ovalness into the result
+    // shape itself.
+    final double outputRadius = (rx + ry) / 2;
+    setState(() {
+      _currentLine = MathsPadLine(
+        points: _circleOutlinePoints(center, outputRadius),
+        color: line.color,
+        strokeWidth: line.strokeWidth,
+        isMagic: line.isMagic,
+        isShape: true,
+      );
+      _penAutoCircled = true;
+      _penAutoCircleCenter = center;
+    });
+    _activeDrawingNotifier.value++;
+    return true;
+  }
+
+  /// Fires after holding still for a second mid-freehand-stroke (and
+  /// `_tryAutoCircleifyPenLine` didn't already match). If what's been
+  /// drawn so far already looks roughly straight, snaps it to a perfect
+  /// straight line from the stroke's start to the hold point, and flips
+  /// on `_penAutoStraightened` so `_onScaleUpdate` keeps the line
   /// straight (following the pointer) for the rest of the drag instead of
   /// resuming freehand sampling.
   void _tryAutoStraightenPenLine(Offset holdPos) {
@@ -810,6 +1303,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   bool _isDraggingSelection = false;
   Offset? _lastDragWorldPos;
 
+  // Whatever tool was active right before double-tapping an image
+  // auto-switched to the Select tool (see `_onScaleStart`'s double-tap
+  // handling) -- null whenever that hasn't happened (or has already been
+  // consumed/restored). Restored the next time an empty-canvas tap clears
+  // the selection while still in the Select tool (see the `tapSelect`
+  // branch just below), so double-tapping to peek at/adjust an image
+  // doesn't strand the user in the Select tool afterward.
+  CanvasToolMode? _toolModeBeforeDoubleTapImageSelect;
+
   // Stroke Clipboard for Copy (Ctrl+C) & Paste (Ctrl+V)
   List<MathsPadLine> _clipboard = [];
   Offset? _lastPointerWorldPos;
@@ -828,6 +1330,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Offset? _longPressPasteDownScreenPos;
   Offset? _pastePopupWorldPos;
 
+  // Double-tap-to-select-image tracking -- deliberately timed off raw
+  // `_onPointerDown` calls (same reasoning as the long-press-paste timer
+  // above: no gesture-arena participation, so it can never delay/steal a
+  // normal single tap from whatever tool is active) rather than
+  // `GestureDetector.onDoubleTap`, which would introduce its own
+  // resolution delay on EVERY single tap/stroke-start across the whole
+  // canvas while it waits to see if a second tap follows. Consumed (and
+  // reset to null) by `_onScaleStart`, which is where the actual
+  // "select the image" action + skipping the normal draw-start happens.
+  DateTime? _lastPointerDownTime;
+  Offset? _lastPointerDownScreenPos;
+  bool _isDoubleTapPointerDown = false;
+  static const Duration _kDoubleTapMaxGap = Duration(milliseconds: 350);
+  static const double _kDoubleTapMaxDistance = 25.0;
+
   // Keyboard FocusNode for Ctrl+C / Ctrl+V shortcuts
   final FocusNode _canvasFocusNode = FocusNode();
 
@@ -838,6 +1355,37 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   final MathPadRecordingService _recordingService = MathPadRecordingService();
   MathPadRecordingState _recordingState = MathPadRecordingState.idle;
   Duration _recordingElapsed = Duration.zero;
+
+  // A small pixel ratio, not the device's real one -- this is only ever
+  // displayed at ~120px tall in the Math Pad Library's pages sidebar, so a
+  // full-resolution capture would just be wasted disk space and encode
+  // time for detail nobody can see at that size.
+  static const double _kThumbnailPixelRatio = 0.25;
+
+  /// One-off capture of the canvas's CURRENT content as a small PNG --
+  /// handed out via `widget.onThumbnailCaptureReady` at init so the Math
+  /// Pad Library's page editor can call it right after every save,
+  /// persisting the result as that page's cached preview image (see
+  /// `MathPadLibraryStorageService.saveThumbnail`). Same `RenderRepaintBoundary
+  /// .toImage()`/`toByteData(png)` pattern `MathPadRecordingService.
+  /// _captureFrame` already uses on this exact `_canvasCaptureKey` for video
+  /// frames, just a single low-res call instead of a 60fps loop.
+  Future<Uint8List?> _captureThumbnail() async {
+    final RenderObject? renderObject = _canvasCaptureKey.currentContext
+        ?.findRenderObject();
+    if (renderObject is! RenderRepaintBoundary) return null;
+    final ui.Image image = await renderObject.toImage(
+      pixelRatio: _kThumbnailPixelRatio,
+    );
+    try {
+      final ByteData? bytes = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      return bytes?.buffer.asUint8List();
+    } finally {
+      image.dispose();
+    }
+  }
 
   // Lasso Selection Points for Free-Select Area Erase & Move
   List<Offset> _lassoPoints = [];
@@ -880,12 +1428,65 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // Infinite Canvas Pan & Zoom Transformation State
   Offset _panOffset = Offset.zero;
   double _scale = 1.0;
-  bool _zoomLocked = false;
+  bool _zoomLocked = true;
+
+  // Pan-direction lock (the "Floating Tool Hint Pill" lock icon, bottom
+  // center of screen). When on, panning/scrolling can only reveal more
+  // canvas below and to the right of wherever it was engaged, never back up/left past that point.
+  // `_panLockWorldTopLeft` is the WORLD-space coordinate of the viewport's top-left corner at the
+  // moment the lock was turned on -- pinning the boundary in world space
+  // (not a raw screen-pixel pan offset) means it holds steady even if the
+  // user zooms in/out while locked. See `_clampPanIfLocked`, which every
+  // `_panOffset` assignment site routes through.
+  bool _panLocked = true;
+  Offset? _panLockWorldTopLeft = const Offset(0, 0);
+
+  /// When `_panLocked` is on, clamps a proposed new `_panOffset` so it
+  /// can't move the viewport's world-space top-left corner above/left of
+  /// `_panLockWorldTopLeft` -- panning further right/down (which only
+  /// DECREASES `_panOffset`) stays completely free.
+  Offset _clampPanIfLocked(Offset proposed) {
+    final Offset? lockTopLeft = _panLockWorldTopLeft;
+    if (!_panLocked || lockTopLeft == null) return proposed;
+    final double maxDx = -lockTopLeft.dx * _scale;
+    final double maxDy = -lockTopLeft.dy * _scale;
+    return Offset(
+      proposed.dx > maxDx ? maxDx : proposed.dx,
+      proposed.dy > maxDy ? maxDy : proposed.dy,
+    );
+  }
 
   // Gesture Tracking State
   Offset _initialFocalPoint = Offset.zero;
   Offset _initialPanOffset = Offset.zero;
   double _initialScale = 1.0;
+  // True for the duration of a trackpad-driven pan/zoom gesture (see
+  // `onPointerPanZoomStart/Update/End`) -- lets `_onScaleUpdate` skip its
+  // own pan/zoom handling for the auto-synthesized calls
+  // `ScaleGestureRecognizer` generates from the same underlying event
+  // stream, since that synthesized data drifts for trackpad input (see
+  // `_onScaleUpdate`'s doc comment).
+  bool _isPanZoomGestureActive = false;
+  // `event.scale`/`event.pan` value (both cumulative since gesture start)
+  // as of the previous `onPointerPanZoomUpdate` call -- lets that handler
+  // work with the INCREMENTAL, frame-to-frame change in each instead of
+  // the accumulated-since-start value (see its doc comment for why that
+  // matters for `pan` specifically).
+  double _lastPanZoomScale = 1.0;
+  Offset _lastPanZoomPan = Offset.zero;
+  // Throttles how often a trackpad pan/zoom gesture actually pushes a new
+  // value to `_scaleNotifier`/`_panNotifier` (see `_onTrackpadPanZoomUpdate`)
+  // -- caps re-render frequency during a fast pinch to whatever the GPU can
+  // realistically keep up with, instead of one render pass per raw
+  // hardware sample. Set conservatively (~30fps) back when EVERY baked
+  // chunk fully re-rendered on every zoom frame; now that Layer 1a
+  // viewport-culls invisible chunks (see `_bakedChunkBounds`), the real
+  // per-frame cost is bounded to just what's on screen, so this can afford
+  // to run closer to a normal display's frame rate for smoother visual
+  // feedback without reintroducing the backlog this throttle exists to
+  // prevent.
+  DateTime? _lastPanZoomNotifyTime;
+  static const Duration _kPanZoomNotifyInterval = Duration(milliseconds: 16);
 
   CanvasToolMode _toolMode = CanvasToolMode.pen;
   bool _isMagicPenMode = false;
@@ -933,11 +1534,46 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   @override
   void initState() {
     super.initState();
+
     _loadLogoImage();
     if (widget.initialLines != null) {
       _lines.addAll(widget.initialLines!);
-      for (final line in _lines) {
-        _buildAndCachePath(line);
+      // Immediately treat all pre-existing (loaded) content as "baked" --
+      // otherwise a freshly-opened page with lots of prior strokes starts
+      // with its ENTIRE history sitting in the small "recent" tier (see
+      // `_bakedLineCount`/`_bakedChunks`), so every new stroke would
+      // redraw the whole thing until enough new strokes accumulate to
+      // trigger the first rebake -- exactly matching "laggy right after
+      // opening, smooths out after drawing a bit". Chunking it up-front
+      // the same way `_maybeRebakeLines` would (fixed `_kBakeThreshold`-
+      // sized pieces, each its own permanently-sealed layer) means
+      // drawing feels fast from the very first stroke instead of only
+      // after the page's pre-existing content happens to get folded in.
+      //
+      // This USED to run as one flat synchronous loop over every line
+      // right here -- for a heavy page (hundreds of lines), building each
+      // one's smoothed `Path` (Chaikin smoothing + `quadraticBezierTo`
+      // construction) back-to-back with zero yielding blocked the UI
+      // thread for a real, user-visible stretch: the exact "page is stuck
+      // for a while after opening, then it's fine" freeze. A loading
+      // spinner alone couldn't fix that -- the same thread that would need
+      // to be free to animate the spinner is the one being blocked.
+      // Instead, hydrate in `_kBakeThreshold`-sized batches, one per
+      // rendered frame (`_hydrateNextInitialBatch`), so the UI thread gets
+      // to produce a frame (and animate a real loading indicator, see
+      // `_isHydratingInitialContent`) between every ~25 lines' worth of
+      // work instead of doing the whole page in one uninterrupted burst.
+      // Each batch also seals one new chunk into `_bakedChunks` and bumps
+      // `_bakedStrokesNotifier`, which -- for free, via the exact same
+      // mechanism `_maybeRebakeLines` already uses -- spreads the
+      // page's first-ever Skia rasterization across those same frames
+      // too, instead of it all landing on a single frame once hydration
+      // "finishes".
+      if (_lines.isNotEmpty) {
+        _isHydratingInitialContent = true;
+        SchedulerBinding.instance.addPostFrameCallback(
+          _hydrateNextInitialBatch,
+        );
       }
     }
     if (widget.initialBgMode != null) {
@@ -946,12 +1582,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _bgMode = CanvasBgMode.blank;
     }
     if (widget.initialThemeMode != null) {
-      _themeMode = widget.initialThemeMode;
+      _themeMode = widget.initialThemeMode!;
     } else {
-      _themeMode =
-          MathPadTheme.light; // The user requested light theme as default
-      SharedPreferences.getInstance().then((prefs) {
-        if (!mounted) return;
+      _themeMode = MathPadTheme.light; // The user requested light theme as default
+    }
+
+    SharedPreferences.getInstance().then((prefs) {
+      if (!mounted) return;
+      if (widget.initialThemeMode == null) {
         final savedTheme = prefs.getString('mathpad_default_theme');
         if (savedTheme != null) {
           setState(() {
@@ -961,8 +1599,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             );
           });
         }
+      }
+      final savedPanLocked = prefs.getBool('mathpad_pan_locked');
+      setState(() {
+        _panLocked = savedPanLocked ?? true;
+        _panLockWorldTopLeft = _panLocked
+            ? Offset(-_panOffset.dx / _scale, -_panOffset.dy / _scale)
+            : null;
       });
-    }
+    });
     if (widget.initialInstruments != null) {
       _instruments.addAll(widget.initialInstruments!);
       // Any restored `MediaEmbedState`s need their `assetId` resolved
@@ -988,15 +1633,26 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _panNotifier = ValueNotifier<Offset>(_panOffset);
     _scaleNotifier = ValueNotifier<double>(_scale);
     _finishedStrokesNotifier = ValueNotifier<int>(0);
+    _bakedStrokesNotifier = ValueNotifier<int>(0);
     _activeDrawingNotifier = ValueNotifier<int>(0);
     _frictionController = AnimationController(vsync: this);
     // Drives the selected-stroke neon outline's marching-dash motion.
     // Runs for the widget's whole lifetime but only does any real work
     // (advancing the phase, triggering a repaint) while something is
     // actually selected -- otherwise this tick is just a cheap boolean
-    // check, so there's no cost to leaving it running idle.
+    // check, so there's no cost to leaving it running idle. Frozen (phase
+    // simply stops advancing, outline stays put at whatever colour it was
+    // already showing) for as long as a move/rotate/resize drag is
+    // actively in progress -- the gradient's own continuous motion on top
+    // of the outline ALSO continuously repositioning every frame reads as
+    // messy/janky together, and makes it harder to tell the outline is
+    // actually tracking the drag correctly. It resumes the instant the
+    // drag ends.
     _selectionGlowTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (_selectedLines.isEmpty) return;
+      final bool isTransforming =
+          _isDraggingSelection || _activeHandle != SelectionHandleType.none;
+      if (isTransforming) return;
       _selectionGlowPhase += 0.9;
       _activeDrawingNotifier.value++;
     });
@@ -1019,6 +1675,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             (context.isDark ? MathPadTheme.dark : MathPadTheme.light),
       ),
     );
+    widget.onThumbnailCaptureReady?.call(_captureThumbnail);
   }
 
   @override
@@ -1030,6 +1687,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _panNotifier.dispose();
     _scaleNotifier.dispose();
     _finishedStrokesNotifier.dispose();
+    _bakedStrokesNotifier.dispose();
     _activeDrawingNotifier.dispose();
     _frictionController?.dispose();
     _recordingService.dispose();
@@ -1114,7 +1772,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
     _frictionAnimation!.addListener(() {
       // Update ONLY the ValueNotifier – zero widget-tree rebuilds during inertia!
-      _panOffset = _frictionAnimation!.value;
+      _panOffset = _clampPanIfLocked(_frictionAnimation!.value);
       _panNotifier.value = _panOffset;
     });
 
@@ -1214,7 +1872,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if ((end - start).distance > 2) {
       _currentLine!.invalidateCache();
       _lines.add(_currentLine!);
+      _recordAction(MathsPadAction(addedLines: [_currentLine!]));
       _finishedStrokesNotifier.value++;
+      _maybeRebakeLines();
     }
     _currentLine = null;
     _straightLineLiveEnd = null;
@@ -1341,6 +2001,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       angleLabel.vertex = drag.originalAngleVertices[angleLabel]! + shiftOffset;
     }
     _finishedStrokesNotifier.value++;
+    _resetBaking();
   }
 
   void _handleSpacerToolEnd() {
@@ -1474,7 +2135,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_currentLine == null) return;
     _currentLine!.invalidateCache();
     _lines.add(_currentLine!);
+    _recordAction(MathsPadAction(addedLines: [_currentLine!]));
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
 
     if (!_angleWaitingForSecondLine) {
       // Line A just finished -- now wait for line B from one of its ends.
@@ -1593,7 +2256,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_currentLine == null) return;
     _currentLine!.invalidateCache();
     _lines.add(_currentLine!);
+    _recordAction(MathsPadAction(addedLines: [_currentLine!]));
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
 
     final segmentStart = _currentLine!.points.first.offset;
     final segmentEnd = _currentLine!.points.last.offset;
@@ -1785,7 +2450,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         ..addAll(_circleArcPoints.map((p) => MathsPadStrokePoint(p)));
       _currentLine!.invalidateCache();
       _lines.add(_currentLine!);
+      _recordAction(MathsPadAction(addedLines: [_currentLine!]));
       _finishedStrokesNotifier.value++;
+      _maybeRebakeLines();
     }
     // If the user never actually rotated, there's no arc to keep -- the
     // straight radius preview is discarded (nothing committed).
@@ -1939,7 +2606,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         ..addAll(_squareLivePoints.map((p) => MathsPadStrokePoint(p)));
       _currentLine!.invalidateCache();
       _lines.add(_currentLine!);
+      _recordAction(MathsPadAction(addedLines: [_currentLine!]));
       _finishedStrokesNotifier.value++;
+      _maybeRebakeLines();
     }
     // If the user never actually armed it (no hold), there's no square to
     // keep -- the straight side preview is discarded (nothing committed).
@@ -1979,15 +2648,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     offscreenCanvas.translate(_panOffset.dx, _panOffset.dy);
     offscreenCanvas.scale(_scale);
     final _MathsPadFinishedStrokesPainter tempPainter =
-        _MathsPadFinishedStrokesPainter(
-          lines: _lines,
-          bgMode: _bgMode,
-          isDark: false,
-          canvasBgColor: Colors.transparent,
-          panOffset: _panOffset,
-          scale: _scale,
-        );
-    tempPainter._drawStrokes(offscreenCanvas, _lines);
+        _MathsPadFinishedStrokesPainter(lines: _lines);
+    // `paint()` (not the old private `_drawStrokes`, since renamed/split
+    // into 3 passes -- see that method's doc comments) so bucket-fill
+    // boundary detection sees the exact same picture the real layers
+    // render, images included.
+    tempPainter.paint(
+      offscreenCanvas,
+      Size(width.toDouble(), height.toDouble()),
+    );
     offscreenCanvas.restore();
     final ui.Picture picture = recorder.endRecording();
     final ui.Image rasterImage = await picture.toImage(width, height);
@@ -2183,6 +2852,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _lines.add(fillLine);
     });
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
   }
 
   // ─── Geometry Instruments: helpers ──────────────────────────────────────
@@ -2220,9 +2890,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     setState(() {
       final existingIndex = _instruments.indexWhere(isSameTool);
       if (existingIndex != -1) {
-        _instruments.removeAt(existingIndex);
+        final removed = _instruments.removeAt(existingIndex);
+        _recordAction(MathsPadAction(removedInstruments: [removed]));
       } else {
-        _instruments.add(build(viewportCenter));
+        final added = build(viewportCenter);
+        _instruments.add(added);
+        _recordAction(MathsPadAction(addedInstruments: [added]));
       }
     });
   }
@@ -2243,23 +2916,25 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }) {
     if (naturalWidth <= 0 || naturalHeight <= 0) return;
     const double maxDim = 400.0;
-    final double scale = (naturalWidth > naturalHeight ? maxDim / naturalWidth : maxDim / naturalHeight)
-        .clamp(0.0, 1.0);
+    final double scale =
+        (naturalWidth > naturalHeight
+                ? maxDim / naturalWidth
+                : maxDim / naturalHeight)
+            .clamp(0.0, 1.0);
     final viewportCenter = _screenToWorld(
       Offset(_canvasSize.width / 2, _canvasSize.height / 2),
     );
     setState(() {
       _assetLookupCache[entry.id] = entry;
-      _instruments.add(
-        MediaEmbedState(
-          pivot: viewportCenter,
-          assetId: entry.id,
-          isGif: isGif,
-          baseWidth: naturalWidth * scale,
-          baseHeight: naturalHeight * scale,
-        ),
+      final newInstrument = MediaEmbedState(
+        pivot: viewportCenter,
+        assetId: entry.id,
+        isGif: isGif,
+        baseWidth: naturalWidth * scale,
+        baseHeight: naturalHeight * scale,
       );
-      _undoHistory.clear();
+      _instruments.add(newInstrument);
+      _recordAction(MathsPadAction(addedInstruments: [newInstrument]));
     });
   }
 
@@ -2286,12 +2961,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     setState(() {
       _lines.addAll(newLines);
       _textLabels.addAll(newLabels);
-      _undoHistory.clear();
+      _recordAction(MathsPadAction(addedLines: newLines, addedLabels: newLabels));
     });
     for (final line in newLines) {
       _buildAndCachePath(line);
     }
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
   }
 
   /// Generic removal for any instrument (geometry or media embed) -- the
@@ -2315,11 +2991,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// current `scale` are left untouched, so this reads as the box's aspect
   /// correcting in place, not the embed jumping around or resetting any
   /// manual resize already applied.
-  void _updateMediaEmbedNaturalSize(MediaEmbedState inst, double naturalWidth, double naturalHeight) {
-    if (!_instruments.contains(inst) || naturalWidth <= 0 || naturalHeight <= 0) return;
+  void _updateMediaEmbedNaturalSize(
+    MediaEmbedState inst,
+    double naturalWidth,
+    double naturalHeight,
+  ) {
+    if (!_instruments.contains(inst) || naturalWidth <= 0 || naturalHeight <= 0)
+      return;
     const double maxDim = 400.0;
-    final double scale = (naturalWidth > naturalHeight ? maxDim / naturalWidth : maxDim / naturalHeight)
-        .clamp(0.0, 1.0);
+    final double scale =
+        (naturalWidth > naturalHeight
+                ? maxDim / naturalWidth
+                : maxDim / naturalHeight)
+            .clamp(0.0, 1.0);
     setState(() {
       inst.baseWidth = naturalWidth * scale;
       inst.baseHeight = naturalHeight * scale;
@@ -2345,7 +3029,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       color: Colors.transparent,
       child: Container(
         decoration: BoxDecoration(
-          color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+          color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
@@ -2391,11 +3075,48 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     // decoding a frame (no lightweight probe available
                     // here) -- start at a sensible fixed 16:9 box; the
                     // generic 'resize' handle can adjust it afterwards.
-                    _insertMediaEmbed(entry, isGif: false, naturalWidth: 320, naturalHeight: 180);
+                    _insertMediaEmbed(
+                      entry,
+                      isGif: false,
+                      naturalWidth: 320,
+                      naturalHeight: 180,
+                    );
                   }
                 },
                 onTemplateSelected: _insertTemplate,
               ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSpinnerToolbarButton() {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        decoration: BoxDecoration(
+          color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+          border: Border.all(color: context.glassBorder),
+        ),
+        child: IconButton(
+          icon: const Icon(Icons.casino_rounded, color: Colors.orangeAccent),
+          tooltip: 'Student Spinner',
+          onPressed: () {
+            final auth = Provider.of<AuthProvider>(context, listen: false);
+            final batches = auth.profile?['batches'] as List? ?? [];
+            showDialog(
+              context: context,
+              builder: (_) => StudentSpinnerDialog(batches: batches),
             );
           },
         ),
@@ -2411,9 +3132,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       strokeWidth: _penWidth,
     );
     arcLine.invalidateCache();
-    _undoHistory.clear();
+
     _lines.add(arcLine);
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
   }
 
   /// A placed text label: the text itself is IgnorePointer'd (dragging is
@@ -2532,50 +3254,62 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return Positioned(
       left: _textEditorWorldPos!.dx,
       top: _textEditorWorldPos!.dy - 26,
-      child: Material(
-        color: Colors.transparent,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.black.withOpacity(0.4) : Colors.white.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05),
-                  width: 1,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {}, // Absorb taps so they don't fall through to the canvas
+        onPanDown: (_) {}, // Absorb pan/scale gestures
+        child: Material(
+          color: Colors.transparent,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.black.withOpacity(0.4)
+                      : Colors.white.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withOpacity(0.1)
+                        : Colors.black.withOpacity(0.05),
+                    width: 1,
                   ),
-                ],
-              ),
-              child: SizedBox(
-                width: 140,
-                child: TextField(
-                  controller: _textEditorController,
-                  autofocus: true,
-                  cursorColor: isDark ? Colors.white : Colors.black87,
-                  style: TextStyle(
-                    color: isDark ? Colors.white : const Color(0xFF1E293B),
-                    fontSize: 16,
-                    letterSpacing: -0.3,
-                  ),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
-                    hintText: 'Label text…',
-                    hintStyle: TextStyle(
-                      color: isDark ? Colors.white54 : Colors.black45,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
                     ),
+                  ],
+                ),
+                child: SizedBox(
+                  width: 140,
+                  child: TextField(
+                    controller: _textEditorController,
+                    autofocus: true,
+                    cursorColor: isDark ? Colors.white : Colors.black87,
+                    style: TextStyle(
+                      color: isDark ? Colors.white : const Color(0xFF1E293B),
+                      fontSize: 16,
+                      letterSpacing: -0.3,
+                    ),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      hintText: 'Label text…',
+                      hintStyle: TextStyle(
+                        color: isDark ? Colors.white54 : Colors.black45,
+                      ),
+                    ),
+                    onSubmitted: (_) => _commitTextEditor(),
+                    textInputAction: TextInputAction.done,
                   ),
-                  onSubmitted: (_) => _commitTextEditor(),
-                  textInputAction: TextInputAction.done,
                 ),
               ),
             ),
@@ -2643,7 +3377,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Widget _buildInstrumentWidget(InstrumentState inst) {
-    final isDark = context.isDark;
+    final isDark = _isDarkTheme;
     if (inst is RulerState) {
       return RulerWidget(
         key: ValueKey(inst),
@@ -2880,12 +3614,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   bool _isPencilArmed(InstrumentState inst) {
     if (inst is RulerState) return inst.pencilArmed;
     if (inst is SetSquareState) return inst.pencilArmed;
+    if (inst is ProtractorState) return inst.pencilArmed;
     return false;
   }
 
   void _togglePencilArmed(InstrumentState inst) {
     if (inst is RulerState) inst.pencilArmed = !inst.pencilArmed;
     if (inst is SetSquareState) inst.pencilArmed = !inst.pencilArmed;
+    if (inst is ProtractorState) inst.pencilArmed = !inst.pencilArmed;
   }
 
   (InstrumentState, String)? _hitTestInstrumentHandles(Offset worldPos) {
@@ -2917,7 +3653,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // rotate/resize handles (outside the rect) still take priority.
       if (inst is MediaEmbedState) {
         final local = inst.worldToLocal(worldPos);
-        if (local.dx.abs() <= inst.worldWidth / 2 && local.dy.abs() <= inst.worldHeight / 2) {
+        if (local.dx.abs() <= inst.worldWidth / 2 &&
+            local.dy.abs() <= inst.worldHeight / 2) {
           return (inst, 'move');
         }
       }
@@ -3047,7 +3784,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     setState(() {
       if (editingIndex != null) {
         if (value.isEmpty) {
+          final removedLabel = _textLabels[editingIndex];
           _textLabels.removeAt(editingIndex);
+          _recordAction(MathsPadAction(removedLabels: [removedLabel]));
           if (_selectedTextLabelIndex == editingIndex) {
             _selectedTextLabelIndex = null;
           }
@@ -3056,13 +3795,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           _selectedTextLabelIndex = editingIndex;
         }
       } else if (value.isNotEmpty && newPosition != null) {
-        _textLabels.add(
-          MathsPadTextLabel(
-            position: newPosition,
-            text: value,
-            color: _selectedColor,
-          ),
+        final newLabel = MathsPadTextLabel(
+          position: newPosition,
+          text: value,
+          color: _selectedColor,
         );
+        _textLabels.add(newLabel);
+        _recordAction(MathsPadAction(addedLabels: [newLabel]));
         _selectedTextLabelIndex = _textLabels.length - 1;
       }
       _textEditorController?.dispose();
@@ -3071,11 +3810,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _textEditingIndex = null;
       _textEditorWorldPos = null;
     });
+    // Reclaim focus for the canvas once the text editor is closed
+    if (!_canvasFocusNode.hasFocus) {
+      _canvasFocusNode.requestFocus();
+    }
   }
 
   void _deleteTextLabel(int index) {
     setState(() {
+      final removedLabel = _textLabels[index];
       _textLabels.removeAt(index);
+      _recordAction(MathsPadAction(removedLabels: [removedLabel]));
       if (_selectedTextLabelIndex != null) {
         if (_selectedTextLabelIndex == index) {
           _selectedTextLabelIndex = null;
@@ -3246,6 +3991,44 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           }
         }
       } else if (handle == 'pencil') {
+        if (inst is ProtractorState) {
+          final delta = worldPos - inst.pivot;
+          final cosR = cos(-inst.rotation);
+          final sinR = sin(-inst.rotation);
+          final localX = delta.dx * cosR - delta.dy * sinR;
+          final localY = delta.dx * sinR + delta.dy * cosR;
+          
+          // Constrain to the upper semicircle (y <= 0), which is angle from 0 to -pi
+          double angle = atan2(localY, localX);
+          if (angle > 0) {
+            angle = (localX >= 0) ? 0 : -pi;
+          }
+          inst.pencilAngle = angle;
+
+          final movedDist = (worldPos - _instrumentDragStartWorld!).distance;
+          if (movedDist > 6) {
+            _pencilDragMoved = true;
+            if (_isPencilArmed(inst)) {
+              final edgeWorldPos = inst.pivot + Offset(
+                inst.radius * cos(angle + inst.rotation),
+                inst.radius * sin(angle + inst.rotation),
+              );
+              
+              if (_currentLine == null) {
+                _currentLine = MathsPadLine(
+                  points: [MathsPadStrokePoint(edgeWorldPos)],
+                  color: _selectedColor,
+                  strokeWidth: _penWidth,
+                );
+              } else {
+                _currentLine!.points.add(MathsPadStrokePoint(edgeWorldPos));
+              }
+              _activeDrawingNotifier.value++;
+            }
+          }
+          return;
+        }
+
         // The attached drawing pencil: a plain tap (no real movement) arms
         // it (turns blue); dragging it -- armed or not -- slides it along
         // the instrument's ruled edge (for a Set Square, whichever of its
@@ -3314,10 +4097,30 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (inst != null && handle == 'pencil') {
       if (!_pencilDragMoved) {
         _togglePencilArmed(inst);
+        if (inst is ProtractorState) {
+          final edgeWorldPos = inst.pivot + Offset(
+            inst.radius * cos(inst.pencilAngle + inst.rotation),
+            inst.radius * sin(inst.pencilAngle + inst.rotation),
+          );
+          final dot = MathsPadLine(
+            points: [
+              MathsPadStrokePoint(edgeWorldPos),
+              MathsPadStrokePoint(edgeWorldPos + const Offset(0.1, 0.1)),
+            ],
+            color: _selectedColor,
+            strokeWidth: _penWidth * 1.5,
+          );
+          _lines.add(dot);
+          _recordAction(MathsPadAction(addedLines: [dot]));
+          _finishedStrokesNotifier.value++;
+          _maybeRebakeLines();
+        }
       } else if (_currentLine != null) {
         _currentLine!.invalidateCache();
         _lines.add(_currentLine!);
+        _recordAction(MathsPadAction(addedLines: [_currentLine!]));
         _finishedStrokesNotifier.value++;
+        _maybeRebakeLines();
         _currentLine = null;
       }
     }
@@ -3454,11 +4257,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return (p - proj).distance;
   }
 
-  // Find drawn stroke line closest to tapped world position
-  MathsPadLine? _findLineAt(Offset worldPos) {
+  // Find drawn stroke line closest to tapped world position. [includeImages]
+  // defaults true for normal tap-select/lasso use; the Eraser tool passes
+  // false so it can never hit (and delete) an image -- see
+  // `_findImageLineAt`'s doc comment for why images need their own
+  // proper rectangular hit-test anyway, separate from this one.
+  MathsPadLine? _findLineAt(Offset worldPos, {bool includeImages = true}) {
     for (int i = _lines.length - 1; i >= 0; i--) {
       final line = _lines[i];
       if (line.isEraser) continue;
+      if (!includeImages && line.fillImage != null) continue;
       final double hitRadius = (line.strokeWidth + 14.0) / _scale;
 
       if (line.points.length == 1) {
@@ -3478,6 +4286,46 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return null;
   }
 
+  /// Proper rectangular (rotation-aware) hit-test for image-backed lines
+  /// (`fillImage`) -- unlike `_findLineAt`, which treats every line as a
+  /// thin polyline path: for an image, whose `points` are just its two
+  /// opposite corners, that only ever hits the thin diagonal between
+  /// them, not the image's actual visible area. Used by the
+  /// double-tap-to-select-image gesture (see `_onPointerDown`), which
+  /// needs to hit anywhere within the image regardless of which tool is
+  /// currently active. Only considers pasted images, not Fill Tool
+  /// results -- double-tapping a flood-fill patch isn't a meaningful
+  /// "select this image" gesture the way it is for something you pasted.
+  MathsPadLine? _findImageLineAt(Offset worldPos) {
+    for (int i = _lines.length - 1; i >= 0; i--) {
+      final line = _lines[i];
+      if (!line.isPastedImage ||
+          line.fillImage == null ||
+          line.fillWorldBounds == null) {
+        continue;
+      }
+      Offset testPos = worldPos;
+      if (line.rotation != 0) {
+        // Undo the image's own rotation around its center so the test
+        // can stay a simple axis-aligned rect check.
+        final Offset center = line.fillWorldBounds!.center;
+        final Offset rel = worldPos - center;
+        final double cosA = cos(-line.rotation);
+        final double sinA = sin(-line.rotation);
+        testPos =
+            Offset(
+              rel.dx * cosA - rel.dy * sinA,
+              rel.dx * sinA + rel.dy * cosA,
+            ) +
+            center;
+      }
+      if (line.fillWorldBounds!.contains(testPos)) {
+        return line;
+      }
+    }
+    return null;
+  }
+
   void _updatePointerPos(Offset localPosition) {
     final newWorldPos = _screenToWorld(localPosition);
     if (_lastPointerWorldPos == null ||
@@ -3487,11 +4335,82 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _lastPointerWorldPos = newWorldPos;
   }
 
+  void _updateStylusBarrelState(PointerEvent event) {
+    final bool isPrimaryBarrel = event.kind == PointerDeviceKind.invertedStylus ||
+        (event.buttons & kSecondaryButton != 0);
+    final bool isSecondaryBarrel = (event.buttons & kTertiaryButton != 0);
+    final bool isBarrelOrInverted = isPrimaryBarrel || isSecondaryBarrel;
+
+    if (_isStylusBarrelPressed != isBarrelOrInverted) {
+      setState(() {
+        _isStylusBarrelPressed = isBarrelOrInverted;
+      });
+    }
+
+    if (_isPrimaryBarrelPressed != isPrimaryBarrel) {
+      _isPrimaryBarrelPressed = isPrimaryBarrel;
+      if (isPrimaryBarrel) {
+        final now = DateTime.now();
+        if (_lastPrimaryBarrelPressTime != null &&
+            now.difference(_lastPrimaryBarrelPressTime!) <= _kDoubleTapMaxGap) {
+          if (_toolMode != CanvasToolMode.pen) {
+            setState(() {
+              _toolMode = CanvasToolMode.pen;
+              _activeShapeTool = null;
+              _selectedLines.clear();
+            });
+          }
+          _lastPrimaryBarrelPressTime = null; 
+        } else {
+          _lastPrimaryBarrelPressTime = now;
+        }
+      }
+    }
+
+    if (_isSecondaryBarrelPressed != isSecondaryBarrel) {
+      _isSecondaryBarrelPressed = isSecondaryBarrel;
+      if (isSecondaryBarrel) {
+        final now = DateTime.now();
+        if (_lastSecondaryBarrelPressTime != null &&
+            now.difference(_lastSecondaryBarrelPressTime!) <= _kDoubleTapMaxGap) {
+          if (_toolMode != CanvasToolMode.lasso) {
+            setState(() {
+              _toolMode = CanvasToolMode.lasso;
+              _activeShapeTool = null;
+            });
+          }
+          _lastSecondaryBarrelPressTime = null; 
+        } else {
+          _lastSecondaryBarrelPressTime = now;
+        }
+      }
+    }
+  }
+
   void _onPointerHover(PointerHoverEvent event) {
     _updatePointerPos(event.localPosition);
+    _updateStylusBarrelState(event);
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    // Reclaim keyboard focus for the canvas on every single touch/click
+    // down on it -- without this, focus stays wherever it last landed
+    // (e.g. a toolbar `IconButton`/`ElevatedButton`, which Flutter gives
+    // focus to on tap by default), so Ctrl+Z/Ctrl+Y and the other
+    // keyboard shortcuts in this widget's `Focus.onKeyEvent` silently
+    // stop reaching it at all -- not a bug in `_undo()` itself, which
+    // never sees the key event to begin with. This is exactly what made
+    // undo look broken right after drawing a very first stroke (the
+    // canvas's own `autofocus` hadn't necessarily settled yet) or right
+    // after inserting a pasted image (see `_insertPastedImageBytes`,
+    // which reaches this same fix via its own explicit
+    // `_canvasFocusNode.requestFocus()` since pasting doesn't always
+    // involve a fresh pointer-down on the canvas itself).
+    // Note: We MUST NOT steal focus if the text editor is open, otherwise
+    // tapping inside the text editor's field will immediately dismiss its cursor!
+    if (!_textEditorOpen && !_canvasFocusNode.hasFocus) {
+      _canvasFocusNode.requestFocus();
+    }
     if (_isFullScreenMode && _toolbarRevealedInFullScreen) {
       setState(() {
         _toolbarRevealedInFullScreen = false;
@@ -3503,6 +4422,30 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _activePointers[event.pointer] = event.localPosition;
     _lastCentroid = _calculateCentroid();
     _currentPointerPressure = event.pressure;
+
+    // Double-tap-to-select-image tracking -- compare THIS down against
+    // the PREVIOUS one (recorded last time) before overwriting it, so
+    // `_onScaleStart` (which runs right after this, for the same touch)
+    // can just read `_isDoubleTapPointerDown` to know whether to select
+    // an image instead of starting a normal draw/tool action. See the
+    // field's doc comment for why this lives here rather than
+    // `GestureDetector.onDoubleTap`.
+    if (_activePointers.length == 1) {
+      final DateTime now = DateTime.now();
+      final DateTime? prevTime = _lastPointerDownTime;
+      final Offset? prevPos = _lastPointerDownScreenPos;
+      _isDoubleTapPointerDown =
+          prevTime != null &&
+          prevPos != null &&
+          now.difference(prevTime) <= _kDoubleTapMaxGap &&
+          (event.localPosition - prevPos).distance <= _kDoubleTapMaxDistance;
+      _lastPointerDownTime = now;
+      _lastPointerDownScreenPos = event.localPosition;
+    } else {
+      _isDoubleTapPointerDown = false;
+      _lastPointerDownTime = null;
+      _lastPointerDownScreenPos = null;
+    }
 
     // Arm the long-press-to-paste timer for a single-finger press. If a
     // second pointer joins (2-finger pan) or the finger moves too far
@@ -3518,15 +4461,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       });
     }
 
-    final bool isBarrelOrInverted =
-        event.kind == PointerDeviceKind.invertedStylus ||
-        (event.buttons & kSecondaryButton != 0) ||
-        (event.buttons & kTertiaryButton != 0);
-    if (_isStylusBarrelPressed != isBarrelOrInverted) {
-      setState(() {
-        _isStylusBarrelPressed = isBarrelOrInverted;
-      });
-    }
+    _updateStylusBarrelState(event);
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -3546,8 +4481,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_activePointers.containsKey(event.pointer)) {
       _activePointers[event.pointer] = event.localPosition;
 
-      // Chrome Web Multi-Touch 2-finger pan
-      if (_activePointers.length >= 2) {
+      // Chrome Web Multi-Touch 2-finger pan -- web-only fallback for a past
+      // Flutter Web limitation where `GestureDetector`'s own multi-touch
+      // `ScaleGestureRecognizer` (wired to `_onScaleUpdate`) didn't reliably
+      // recognize multi-touch trackpad/touch gestures. This branch does its
+      // own scale-AGNOSTIC centroid-only panning -- previously unconditional
+      // on `_activePointers.length >= 2` with no `kIsWeb` guard, so it also
+      // fired on every native platform (including Windows) during an actual
+      // pinch, fighting `_onScaleUpdate`'s focal-point-anchored zoom math
+      // every frame and overwriting it with plain panning -- this was the
+      // real reason "pinch-zoom to the exact focal point" kept failing even
+      // after `_onScaleUpdate` was fixed. Gate it to web only so native
+      // platforms rely purely on the correct `_onScaleUpdate` path.
+      if (kIsWeb && _activePointers.length >= 2) {
         _longPressPasteTimer?.cancel();
         _longPressPasteTimer = null;
         _longPressPasteDownScreenPos = null;
@@ -3563,7 +4509,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           final currentCentroid = _calculateCentroid();
           final delta = currentCentroid - _lastCentroid!;
           // Directly update notifier – zero rebuild, maximum frame rate
-          _panOffset += delta;
+          _panOffset = _clampPanIfLocked(_panOffset + delta);
           _panNotifier.value = _panOffset;
           _lastCentroid = currentCentroid;
         } else {
@@ -3573,15 +4519,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       }
     }
 
-    final bool isBarrelOrInverted =
-        event.kind == PointerDeviceKind.invertedStylus ||
-        (event.buttons & kSecondaryButton != 0) ||
-        (event.buttons & kTertiaryButton != 0);
-    if (_isStylusBarrelPressed != isBarrelOrInverted) {
-      setState(() {
-        _isStylusBarrelPressed = isBarrelOrInverted;
-      });
-    }
+    _updateStylusBarrelState(event);
   }
 
   void _onPointerUp(PointerUpEvent event) {
@@ -3627,21 +4565,123 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       final isControlPressed = HardwareKeyboard.instance.isControlPressed;
       if (isControlPressed) {
-        // Pinch-to-zoom on Chrome trackpad or Ctrl + Wheel
+        // Pinch-to-zoom on Chrome trackpad or Ctrl + Wheel -- direct
+        // notifier update, no `setState` (see `_zoomIn`/`_zoomOut`'s doc
+        // comment: a full widget-tree rebuild on every scroll tick was
+        // real, avoidable cost, and this branch previously didn't even
+        // update `_scaleNotifier.value` here, relying entirely on the
+        // `setState` rebuild to propagate the new `_scale` to anything
+        // that happened to read it -- nothing in `build()` actually does,
+        // so that's fixed here too, not just the performance). This branch
+        // is very likely the ACTUAL path a Windows precision-touchpad pinch
+        // routes through (its own original comment: "Pinch-to-zoom on
+        // Chrome trackpad or Ctrl + Wheel") -- it previously only touched
+        // `_scale`, never `_panOffset`, so zooming here always drifted
+        // around the canvas's pan origin instead of staying anchored under
+        // the pointer. Same focal-point-anchor fix as `_onScaleUpdate`,
+        // just using the pointer's current position (there's no persisted
+        // gesture-start focal point for a discrete scroll/pinch tick).
         if (!_zoomLocked) {
-          setState(() {
-            final double zoomFactor = event.scrollDelta.dy > 0 ? 0.93 : 1.07;
-            _scale = (_scale * zoomFactor).clamp(0.25, 4.0);
-          });
+          final Offset worldFocal = _screenToWorld(event.localPosition);
+          final double zoomFactor = event.scrollDelta.dy > 0 ? 0.93 : 1.07;
+          _scale = (_scale * zoomFactor).clamp(0.25, 4.0);
+          _scaleNotifier.value = _scale;
+          _panOffset = _clampPanIfLocked(
+            event.localPosition - worldFocal * _scale,
+          );
+          _panNotifier.value = _panOffset;
         }
       } else {
         // Butter-smooth 1.35x 360-degree trackpad pan – direct notifier, 0 rebuilds!
         final Offset delta =
             Offset(-event.scrollDelta.dx, -event.scrollDelta.dy) * 1.35;
-        _panOffset += delta;
+        _panOffset = _clampPanIfLocked(_panOffset + delta);
         _panNotifier.value = _panOffset;
       }
     }
+  }
+
+  /// Trackpad-driven pan/zoom start -- captures the same gesture-start
+  /// snapshot `_onScaleStart` does, but from the raw event, and marks
+  /// `_isPanZoomGestureActive` so `_onScaleUpdate`'s auto-synthesized calls
+  /// for this same gesture stand down (see its doc comment).
+  void _onTrackpadPanZoomStart(PointerPanZoomStartEvent event) {
+    _isPanZoomGestureActive = true;
+    _frictionController?.stop();
+    // Tracks `event.scale`/`event.pan` from the PREVIOUS update (identity
+    // at gesture start), so `_onTrackpadPanZoomUpdate` can work with
+    // INCREMENTAL, frame-to-frame deltas instead of the accumulated-since-
+    // start values.
+    _lastPanZoomScale = 1.0;
+    _lastPanZoomPan = Offset.zero;
+  }
+
+  /// Trackpad-driven pan/zoom update. `event.localPosition` is confirmed
+  /// (via a live diagnostic capture) to stay exactly fixed at the cursor
+  /// position for a stationary trackpad pinch -- the one genuinely
+  /// reliable anchor point available for zoom. `event.pan` looked at first
+  /// like a natural translation to combine with it, but it turns out to be
+  /// the SAME quantity `ScaleGestureRecognizer` uses internally to
+  /// synthesize its own (confirmed drifting) `localFocalPoint` --
+  /// `localPosition + pan` -- so using it to relocate the zoom anchor just
+  /// reproduced the identical bug through a different path; a stationary
+  /// pinch reports a large, growing `pan` that's an artifact of the pinch
+  /// motion itself, not real drag intent.
+  ///
+  /// A genuine 2-finger PAN (no pinch) is the other case this same event
+  /// stream carries, and there `event.pan`'s per-frame delta IS the real,
+  /// reliable signal (confirmed: `event.scale` stays exactly `1.0` frame
+  /// to frame for a pure drag, only actually changing once real pinching
+  /// starts) -- so route on whether THIS frame's scale actually changed:
+  /// no scale change this frame -> pure pan, trust `event.pan`'s delta;
+  /// scale changed -> pinch, anchor to the stable cursor position and
+  /// ignore `event.pan` entirely, exactly as before.
+  ///
+  /// Zooming genuinely costs more than panning to actually render (scaling
+  /// forces anti-aliased stroke edges to be recomputed for the new pixel
+  /// density; panning can just reuse what's already there), and a fast
+  /// trackpad pinch can report raw samples far faster than the display can
+  /// keep up with -- pushing every single one straight to `_scaleNotifier`
+  /// queues up more re-render work than the GPU can drain in real time.
+  /// `_scale`/`_panOffset` themselves are still updated every call (cheap,
+  /// no rendering cost), but the NOTIFIERS -- the thing that actually
+  /// triggers a new frame -- are only pushed at most once per
+  /// `_kPanZoomNotifyInterval`, coalescing a burst of raw samples into far
+  /// fewer actual render passes. `_onTrackpadPanZoomEnd` flushes the final
+  /// value so the view never ends a gesture visually stuck mid-throttle.
+  void _onTrackpadPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    if (widget.isTransparentBg) return;
+    final double incrementalScale = event.scale / _lastPanZoomScale;
+    final Offset panDelta = event.pan - _lastPanZoomPan;
+    _lastPanZoomScale = event.scale;
+    _lastPanZoomPan = event.pan;
+
+    if (!_zoomLocked && (incrementalScale - 1.0).abs() > 0.0001) {
+      final double newScale = (_scale * incrementalScale).clamp(0.25, 4.0);
+      final Offset worldFocal = (event.localPosition - _panOffset) / _scale;
+      _scale = newScale;
+      _panOffset = _clampPanIfLocked(event.localPosition - worldFocal * _scale);
+    } else {
+      _panOffset = _clampPanIfLocked(_panOffset + panDelta);
+    }
+
+    final DateTime now = DateTime.now();
+    if (_lastPanZoomNotifyTime == null ||
+        now.difference(_lastPanZoomNotifyTime!) >= _kPanZoomNotifyInterval) {
+      _lastPanZoomNotifyTime = now;
+      _scaleNotifier.value = _scale;
+      _panNotifier.value = _panOffset;
+    }
+  }
+
+  void _onTrackpadPanZoomEnd(PointerPanZoomEndEvent event) {
+    _isPanZoomGestureActive = false;
+    _lastPanZoomNotifyTime = null;
+    // Flush the final scale/pan in case the throttle above deferred the
+    // very last update -- otherwise the view could end a fast gesture
+    // visibly a frame or two behind where your fingers actually ended up.
+    _scaleNotifier.value = _scale;
+    _panNotifier.value = _panOffset;
   }
 
   void _onScaleStart(ScaleStartDetails details) {
@@ -3687,11 +4727,54 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       }
 
       // Tapping the canvas while the full-screen quick-tools box is open
-      // just folds it back, the same as tapping the box itself -- this
-      // tap doesn't also act as a drawing/tool action.
+      // collapses the box, but we don't return here so that the tap
+      // ALSO acts as a drawing/tool action (no need to tap twice).
       if (_quickToolsExpanded) {
         setState(() => _quickToolsExpanded = false);
-        return;
+      }
+
+      // Double-tap on an image selects it, no matter which tool is
+      // currently active -- checked before all the per-tool branching
+      // below so it truly overrides everything, same as the laser
+      // pointer/instrument-handle checks that follow. Once selected, the
+      // existing selection-handle hit-test just below (unconditional on
+      // `_toolMode`) already lets it be moved/resized/rotated regardless
+      // of tool, so nothing else needs to change to make that work. See
+      // `_isDoubleTapPointerDown`'s doc comment for how this is detected.
+      if (_isDoubleTapPointerDown) {
+        _isDoubleTapPointerDown = false;
+        final MathsPadLine? hitImage = _findImageLineAt(worldPos);
+        if (hitImage != null) {
+          setState(() {
+            // Same groupId-based expansion the `tapSelect` tool's own
+            // tap-to-select already does -- an image "stuck" to some ink
+            // (see `_toggleStickDrawingsToImage`) should select (and so
+            // move/rotate together with) that ink here too, not just the
+            // image alone.
+            final Set<MathsPadLine> group = hitImage.groupId != null
+                ? _lines.where((l) => l.groupId == hitImage.groupId).toSet()
+                : {hitImage};
+            _selectedLines
+              ..clear()
+              ..addAll(group);
+            _lassoPoints.clear();
+            // Also switch to the Select tool itself, so the just-selected
+            // image can immediately be moved/resized/rotated by dragging
+            // it directly, without an extra manual tool switch -- see
+            // `_toolModeBeforeDoubleTapImageSelect`'s doc comment. Only
+            // remember the PREVIOUS tool the first time (not if already
+            // in Select, e.g. double-tapping a second image without
+            // deselecting first), so it's the original tool -- not
+            // Select itself -- that gets restored later.
+            if (_toolMode != CanvasToolMode.tapSelect) {
+              _toolModeBeforeDoubleTapImageSelect = _toolMode;
+              _toolMode = CanvasToolMode.tapSelect;
+            }
+          });
+          return;
+        }
+        // Double-tapped somewhere that isn't an image -- fall through to
+        // whatever this tool would normally do with a tap here.
       }
 
       // Laser Pointer: purely a pointing aid, never touches instruments,
@@ -3737,7 +4820,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       if (_toolMode == CanvasToolMode.straightLine) {
         _handleStraightLineToolStart(worldPos);
-        _undoHistory.clear();
+
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
         return;
@@ -3745,14 +4828,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       if (_toolMode == CanvasToolMode.spacer) {
         _handleSpacerToolStart(worldPos);
-        _undoHistory.clear();
+
         _selectedLines.clear();
         return;
       }
 
       if (_toolMode == CanvasToolMode.angle) {
         _handleAngleToolStart(worldPos);
-        _undoHistory.clear();
+
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
         return;
@@ -3760,7 +4843,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       if (_toolMode == CanvasToolMode.polygonAngle) {
         _handlePolygonToolStart(worldPos);
-        _undoHistory.clear();
+
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
         return;
@@ -3768,7 +4851,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       if (_toolMode == CanvasToolMode.circleArc) {
         _handleCircleArcToolStart(worldPos);
-        _undoHistory.clear();
+
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
         return;
@@ -3776,7 +4859,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       if (_toolMode == CanvasToolMode.square) {
         _handleSquareToolStart(worldPos);
-        _undoHistory.clear();
+
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
         return;
@@ -3784,7 +4867,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       if (_toolMode == CanvasToolMode.fill) {
         // A tap-and-release action, not a drag -- handled entirely here.
-        _undoHistory.clear();
+
         _selectedLines.clear();
         _performBucketFill(details.localFocalPoint);
         return;
@@ -3848,6 +4931,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             }
           } else {
             _selectedLines.clear();
+            // Tapping empty canvas to deselect is also the trigger to
+            // leave the Select tool, if it was only entered automatically
+            // by double-tapping an image -- see
+            // `_toolModeBeforeDoubleTapImageSelect`'s doc comment.
+            if (_toolModeBeforeDoubleTapImageSelect != null) {
+              _toolMode = _toolModeBeforeDoubleTapImageSelect!;
+              _toolModeBeforeDoubleTapImageSelect = null;
+            }
           }
         });
       } else if (_toolMode == CanvasToolMode.lasso) {
@@ -3858,14 +4949,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       } else if ((_toolMode == CanvasToolMode.eraser ||
               _isStylusBarrelPressed) &&
           _eraserMode == EraserMode.stroke) {
-        // Stroke Eraser Mode: Tapping on a stroke line immediately erases the whole line!
-        final hitLine = _findLineAt(worldPos);
+        // Stroke Eraser Mode: Tapping on a stroke line immediately erases
+        // the whole line! `includeImages: false` -- the Eraser tool must
+        // never be able to touch an image, whichever kind (see
+        // `_findLineAt`'s doc comment).
+        final hitLine = _findLineAt(worldPos, includeImages: false);
         if (hitLine != null) {
           setState(() {
             final group = hitLine.groupId != null
                 ? _lines.where((l) => l.groupId == hitLine.groupId).toSet()
                 : {hitLine};
-            _undoHistory.addAll(group);
+            _recordAction(MathsPadAction(removedLines: group.toList()));
             _lines.removeWhere((l) => group.contains(l));
             _selectedLines.removeAll(group);
             _removeOrphanedAngleLabels(group);
@@ -3892,11 +4986,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           color: _selectedColor,
           strokeWidth: activeWidth,
           isEraser: isEraserStroke,
-          isMagic: !isEraserStroke && _toolMode == CanvasToolMode.pen && _isMagicPenMode,
+          isMagic:
+              !isEraserStroke &&
+              _toolMode == CanvasToolMode.pen &&
+              _isMagicPenMode,
         );
         _currentLine = newLine;
-        _resetPenAutoStraighten();
-        _undoHistory.clear();
+        _resetPenAutoShape();
+
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
       }
@@ -3904,6 +5001,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
+    // Trackpad-driven pinch/pan is handled entirely by `onPointerPanZoomUpdate`
+    // below (which has access to reliable raw pan/scale/cursor data) --
+    // `ScaleGestureRecognizer` ALSO auto-synthesizes `onScaleUpdate` calls
+    // from the same underlying `PointerPanZoomUpdateEvent` stream, but its
+    // synthesized `details.localFocalPoint` drifts far from the true cursor
+    // position as the gesture progresses (confirmed via diagnostic capture:
+    // cursor stayed fixed on screen while the synthesized focal point
+    // drifted from ~(640,280) to ~(-19,-59) over one pinch) -- a Flutter-
+    // level quirk with trackpad-sourced scale gestures, not something a
+    // different formula here can fix. Skip entirely so the two handlers
+    // don't fight over `_panOffset`/`_scale`.
+    if (_isPanZoomGestureActive) return;
     // 2-finger pinch/drag OR Hand/Pan tool -> Infinite Canvas Panning & Zooming
     if (!widget.isTransparentBg &&
         (details.pointerCount > 1 ||
@@ -3922,8 +5031,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _scale = (_initialScale * details.scale).clamp(0.25, 4.0);
         _scaleNotifier.value = _scale;
       }
-      final focalDelta = details.localFocalPoint - _initialFocalPoint;
-      _panOffset = _initialPanOffset + focalDelta;
+      // Anchor to the WORLD point that was under the focal point at gesture
+      // start, so it stays under the (possibly moving) focal point at every
+      // new scale -- the old formula (`_initialPanOffset + focalDelta`) only
+      // accounted for the focal point's own screen-space movement, not the
+      // scale change, so a pinch centered on one spot would zoom around the
+      // canvas's pan origin instead of around the pinch center. This
+      // reduces to the exact old panning formula when `_zoomLocked` (scale
+      // stays `_initialScale`), so locked-zoom panning is unaffected.
+      final Offset worldFocal =
+          (_initialFocalPoint - _initialPanOffset) / _initialScale;
+      _panOffset = _clampPanIfLocked(
+        details.localFocalPoint - worldFocal * _scale,
+      );
       _panNotifier.value = _panOffset;
       return;
     } else if (_draggedInstrument != null) {
@@ -3954,7 +5074,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           line.invalidateCache();
         }
         _transformStartPos = worldPos;
-        _finishedStrokesNotifier.value++;
+        // No `_finishedStrokesNotifier`/`_resetBaking()` here -- a
+        // selected line is skipped entirely by the Layer 1a/1b finished-
+        // strokes painters (see `_MathsPadFinishedStrokesPainter`'s
+        // `selectedLines` doc comment) and instead drawn live, every
+        // frame, by Layer 2 below, on top of everything else. That used
+        // to mean nuking EVERY baked chunk on the page on every single
+        // drag-update frame just to move one line -- catastrophically
+        // expensive on a heavy page, and the actual cause of the
+        // selection outline/drag feeling laggy, not the outline's own
+        // glow animation.
         _activeDrawingNotifier.value++;
       } else if (_activeHandle == SelectionHandleType.rotate &&
           _transformCenter != null) {
@@ -3992,7 +5121,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           }
           line.invalidateCache();
         }
-        _finishedStrokesNotifier.value++;
+        // See the Move branch above for why no `_finishedStrokesNotifier`/
+        // `_resetBaking()` here.
         _activeDrawingNotifier.value++;
       } else {
         // Corner Resize (Scale) Mode
@@ -4020,25 +5150,29 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             }
             line.invalidateCache();
           }
-          _finishedStrokesNotifier.value++;
+          // See the Move branch above for why no `_finishedStrokesNotifier`/
+          // `_resetBaking()` here.
           _activeDrawingNotifier.value++;
         }
       }
       return;
     } else if ((_toolMode == CanvasToolMode.eraser || _isStylusBarrelPressed) &&
         _eraserMode == EraserMode.stroke) {
-      // Stroke Eraser Mode: Dragging across stroke lines erases each whole line touched
+      // Stroke Eraser Mode: Dragging across stroke lines erases each whole
+      // line touched. `includeImages: false` -- same as the tap variant
+      // above, the Eraser tool must never touch an image.
       final worldPos = _screenToWorld(details.localFocalPoint);
-      final hitLine = _findLineAt(worldPos);
+      final hitLine = _findLineAt(worldPos, includeImages: false);
       if (hitLine != null) {
         final group = hitLine.groupId != null
             ? _lines.where((l) => l.groupId == hitLine.groupId).toSet()
             : {hitLine};
-        _undoHistory.addAll(group);
+        _recordAction(MathsPadAction(removedLines: group.toList()));
         _lines.removeWhere((l) => group.contains(l));
         _selectedLines.removeAll(group);
         _removeOrphanedAngleLabels(group);
         _finishedStrokesNotifier.value++;
+        _resetBaking();
         _activeDrawingNotifier.value++;
       }
       return;
@@ -4053,7 +5187,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         line.invalidateCache();
       }
       _lastDragWorldPos = worldPos;
-      _finishedStrokesNotifier.value++;
+      // See the handle-based Move branch above for why no
+      // `_finishedStrokesNotifier`/`_resetBaking()` here.
       _activeDrawingNotifier.value++;
     } else if (_toolMode == CanvasToolMode.laser) {
       _addLaserPoint(_screenToWorld(details.localFocalPoint));
@@ -4104,6 +5239,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // 1-finger freehand drawing stroke update
       final worldPos = _screenToWorld(details.localFocalPoint);
 
+      if (_penAutoCircled && _penAutoCircleCenter != null) {
+        // Already snapped to a circle by the hold -- keep resizing its
+        // radius to follow the pointer's distance from the center,
+        // instead of resuming freehand point sampling.
+        final double newRadius = (worldPos - _penAutoCircleCenter!).distance;
+        _currentLine!.points
+          ..clear()
+          ..addAll(_circleOutlinePoints(_penAutoCircleCenter!, newRadius));
+        _currentLine!.invalidateCache();
+        _activeDrawingNotifier.value++;
+        return;
+      }
+
       if (_penAutoStraightened) {
         // Already snapped to a straight line by the hold -- keep its
         // endpoint following the pointer, same as the Straight Line Tool,
@@ -4121,7 +5269,31 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           (worldPos - _currentLine!.points.last.offset).distance >= 1.2) {
         _currentLine!.points.add(MathsPadStrokePoint(worldPos));
         if (_currentLine!.isEraser) {
-          _finishedStrokesNotifier.value++;
+          // NOT `_finishedStrokesNotifier.value++` here -- the eraser
+          // stroke only gets merged into `_lines` at gesture-end (see
+          // `_onScaleEnd`), so during the drag `_lines` never actually
+          // changes; repainting the ENTIRE finished-strokes layer (every
+          // line on the page, behind a `saveLayer`) on every single move
+          // sample was producing pixel-identical output every time --
+          // pure wasted O(total ink) work every frame, and the dominant
+          // cause of "lag that gets worse the more you've drawn". The
+          // eraser's actual clearing effect still applies correctly in
+          // one shot when the stroke commits below. `_eraserCursorPos`
+          // instead drives a cheap live cursor ring on the (already
+          // per-frame-repainting) active overlay layer, so dragging the
+          // eraser still shows real-time feedback -- previously it
+          // showed none at all, since `BlendMode.clear` on the active
+          // layer's own separate compositing surface has no visible
+          // effect on the finished layer underneath it.
+          _eraserCursorPos = worldPos;
+        }
+        // Fold the stroke-so-far into Layer 2a's cached snapshot once
+        // enough new points have accumulated -- see `_kLiveBakeEvery`'s
+        // doc comment (fixes "writing a long line/sentence gets
+        // progressively slower the longer it runs").
+        if (_currentLine!.points.length - _currentLine!.liveBakedPointCount >=
+            _kLiveBakeEvery) {
+          _currentLine!.liveBakedPointCount = _currentLine!.points.length;
         }
         _activeDrawingNotifier.value++;
       }
@@ -4140,7 +5312,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           final Offset anchorForThisHold = worldPos;
           _penHoldTimer = Timer(const Duration(seconds: 1), () {
             if (!mounted || _currentLine != lineAtArm) return;
-            _tryAutoStraightenPenLine(anchorForThisHold);
+            _tryAutoShapePenLine(anchorForThisHold);
           });
         }
       }
@@ -4224,11 +5396,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           _lines.addAll(newShapeLines);
           _selectedLines.clear();
           _selectedLines.addAll(newShapeLines);
+          _recordAction(MathsPadAction(addedLines: newShapeLines));
           _toolMode = CanvasToolMode.pen;
           _selectedWidth = _penWidth;
           _activeShapeTool = null;
         });
         _finishedStrokesNotifier.value++;
+        _maybeRebakeLines();
         _activeDrawingNotifier.value++;
       }
       _shapeDragStartPos = null;
@@ -4287,13 +5461,124 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
 
     if (_currentLine != null) {
-      _currentLine!.invalidateCache();
-      _buildAndCachePath(_currentLine!);
-      _lines.add(_currentLine!);
-      _currentLine = null;
-      _resetPenAutoStraighten();
-      _finishedStrokesNotifier.value++;
-      _activeDrawingNotifier.value++;
+      final bool wasEraser = _currentLine!.isEraser;
+      
+      if (wasEraser && _eraserMode == EraserMode.area) {
+        final eraserLine = _currentLine!;
+        final double eraserRadius = (eraserLine.strokeWidth * 3.5) / 2.0;
+        final Rect eraserBounds = _computeLineBounds(eraserLine).inflate(eraserRadius);
+
+        List<MathsPadLine> newLines = [];
+        List<MathsPadLine> removedLines = [];
+        List<MathsPadLine> addedFragments = [];
+        bool anyCut = false;
+        
+        for (final line in _lines) {
+          if (line.isEraser || line.fillImage != null) {
+            newLines.add(line);
+            continue;
+          }
+          final Rect lineBounds = line.cachedBounds ?? _computeLineBounds(line);
+          if (!eraserBounds.overlaps(lineBounds)) {
+            newLines.add(line);
+            continue;
+          }
+
+          // Resample line points to handle long straight segments crossing the eraser
+          List<MathsPadStrokePoint> resampledPoints = [];
+          for (int i = 0; i < line.points.length - 1; i++) {
+            final p1 = line.points[i].offset;
+            final p2 = line.points[i + 1].offset;
+            double dist = (p2 - p1).distance;
+            int steps = (dist / 2.0).ceil().clamp(1, 9999);
+            for (int step = 0; step < steps; step++) {
+              resampledPoints.add(MathsPadStrokePoint(Offset.lerp(p1, p2, step / steps)!));
+            }
+          }
+          resampledPoints.add(line.points.last);
+
+          List<List<MathsPadStrokePoint>> keptSegments = [[]];
+          bool lineCut = false;
+          
+          for (final rp in resampledPoints) {
+            bool isErased = false;
+            if (eraserLine.points.length == 1) {
+              if ((rp.offset - eraserLine.points.first.offset).distance <= eraserRadius) {
+                isErased = true;
+              }
+            } else {
+              for (int j = 0; j < eraserLine.points.length - 1; j++) {
+                if (_distToSegment(rp.offset, eraserLine.points[j].offset, eraserLine.points[j+1].offset) <= eraserRadius) {
+                  isErased = true;
+                  break;
+                }
+              }
+            }
+
+            if (isErased) {
+              if (keptSegments.last.isNotEmpty) {
+                keptSegments.add([]);
+              }
+              lineCut = true;
+            } else {
+              keptSegments.last.add(rp);
+            }
+          }
+
+          if (!lineCut) {
+            newLines.add(line);
+          } else {
+            anyCut = true;
+            removedLines.add(line);
+            for (final seg in keptSegments) {
+              if (seg.length >= 2) {
+                final newLine = MathsPadLine(
+                  points: seg,
+                  color: line.color,
+                  strokeWidth: line.strokeWidth,
+                  isMagic: line.isMagic,
+                  isShape: line.isShape,
+                  groupId: line.groupId,
+                  isPastedImage: line.isPastedImage,
+                );
+                _buildAndCachePath(newLine);
+                newLines.add(newLine);
+                addedFragments.add(newLine);
+              }
+            }
+          }
+        }
+
+        if (anyCut) {
+          _lines.clear();
+          _lines.addAll(newLines);
+          _recordAction(MathsPadAction(addedLines: addedFragments, removedLines: removedLines));
+          _resetBaking();
+        }
+        
+        _currentLine = null;
+        _eraserCursorPos = null;
+        _resetPenAutoShape();
+        _finishedStrokesNotifier.value++;
+        _activeDrawingNotifier.value++;
+        
+      } else {
+        _currentLine!.invalidateCache();
+        _buildAndCachePath(_currentLine!);
+        _lines.add(_currentLine!);
+        _recordAction(MathsPadAction(addedLines: [_currentLine!]));
+        _currentLine = null;
+        _eraserCursorPos = null;
+        _resetPenAutoShape();
+        _finishedStrokesNotifier.value++;
+        _activeDrawingNotifier.value++;
+        
+        if (wasEraser) {
+          _resetBaking();
+        } else {
+          _maybeRebakeLines();
+        }
+      }
     }
     _snappedEdgeStart = null;
     _snappedEdgeVector = null;
@@ -4323,11 +5608,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     });
   }
 
-
   void _selectAllLines() {
     setState(() {
       _selectedLines.clear();
-      _selectedLines.addAll(_lines.where((line) => !line.isEraser && line.points.isNotEmpty));
+      _selectedLines.addAll(
+        _lines.where((line) => !line.isEraser && line.points.isNotEmpty),
+      );
     });
   }
 
@@ -4369,6 +5655,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           fillImage: line.fillImage,
           fillWorldBounds: line.fillWorldBounds,
           rotation: line.rotation,
+          isPastedImage: line.isPastedImage,
         );
       }).toList();
     });
@@ -4439,6 +5726,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         fillWorldBounds: line.fillWorldBounds?.shift(translation),
         rotation: line.rotation,
         groupId: newGroupId,
+        isPastedImage: line.isPastedImage,
       );
       _buildAndCachePath(newLine);
       return newLine;
@@ -4446,11 +5734,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
     setState(() {
       _lines.addAll(pasted);
-      _undoHistory.clear();
       _selectedLines.clear();
       _selectedLines.addAll(pasted);
+      _recordAction(MathsPadAction(addedLines: pasted));
     });
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
   }
 
   /// Pastes from the OS clipboard (content copied from OUTSIDE the app --
@@ -4532,13 +5821,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         final String trimmed = text?.trim() ?? '';
         if (trimmed.isNotEmpty) {
           setState(() {
-            _textLabels.add(
-              MathsPadTextLabel(
-                position: placementPos,
-                text: trimmed,
-                color: _selectedColor,
-              ),
+            final newLabel = MathsPadTextLabel(
+              position: placementPos,
+              text: trimmed,
+              color: _selectedColor,
             );
+            _textLabels.add(newLabel);
+            _recordAction(MathsPadAction(addedLabels: [newLabel]));
           });
           return;
         }
@@ -4614,13 +5903,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       strokeWidth: 0,
       fillImage: image,
       fillWorldBounds: bounds,
+      isPastedImage: true,
     );
 
     setState(() {
       _lines.add(pastedLine);
-      _undoHistory.clear();
+      _recordAction(MathsPadAction(addedLines: [pastedLine]));
     });
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
+    // Pasting doesn't always involve a fresh pointer-down on the canvas
+    // itself (e.g. the long-press "Paste" popup button, or Ctrl+V with
+    // nothing else clicked in between) -- without reclaiming focus here
+    // too, an immediate Ctrl+Z right after pasting an image would silently
+    // go nowhere. See `_onPointerDown`'s matching doc comment.
+    _canvasFocusNode.requestFocus();
   }
 
   // Duplicate Selected Strokes
@@ -4656,6 +5953,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         fillWorldBounds: line.fillWorldBounds?.shift(copyOffset),
         rotation: line.rotation,
         groupId: newGroupId,
+        isPastedImage: line.isPastedImage,
       );
       _buildAndCachePath(newLine);
       duplicatedLines.add(newLine);
@@ -4663,11 +5961,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
     setState(() {
       _lines.addAll(duplicatedLines);
-      _undoHistory.addAll(duplicatedLines);
+      _recordAction(MathsPadAction(addedLines: duplicatedLines));
       _selectedLines.clear();
       _selectedLines.addAll(duplicatedLines);
     });
     _finishedStrokesNotifier.value++;
+    _maybeRebakeLines();
   }
 
   /// Recolours every currently-selected stroke/shape in place (mutating
@@ -4685,18 +5984,136 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       }
     });
     _finishedStrokesNotifier.value++;
+    _resetBaking();
   }
 
   void _deleteSelectedLines() {
     if (_selectedLines.isNotEmpty) {
       setState(() {
-        _undoHistory.addAll(_selectedLines);
+        _recordAction(MathsPadAction(
+          removedLines: _selectedLines.toList(),
+        ));
         _lines.removeWhere((line) => _selectedLines.contains(line));
         _removeOrphanedAngleLabels(_selectedLines);
         _selectedLines.clear();
       });
       _finishedStrokesNotifier.value++;
+      _resetBaking();
     }
+  }
+
+  /// Moves every selected line to the very END of `_lines` -- since
+  /// `_MathsPadFinishedStrokesPainter.paint`'s Pass 2 now draws ink and
+  /// pasted images in true chronological order, that means drawing LAST,
+  /// i.e. on top of everything else once deselected (a selected line
+  /// already renders on top live regardless -- see
+  /// `_drawSelectedLinesOnTop` -- so this only visibly matters after
+  /// deselecting). Exposed for images specifically (see the Floating
+  /// Action Bar's "Bring to Front"/"Send to Back" buttons, only shown
+  /// when the selection includes a pasted image), but works for any
+  /// line -- a Fill Tool result just won't visibly move, since Pass 1
+  /// always draws it at the very bottom regardless of `_lines` order.
+  void _bringSelectedToFront() {
+    if (_selectedLines.isEmpty) return;
+    setState(() {
+      final List<MathsPadLine> moved = _lines
+          .where(_selectedLines.contains)
+          .toList();
+      _lines.removeWhere(_selectedLines.contains);
+      _lines.addAll(moved);
+    });
+    _finishedStrokesNotifier.value++;
+    // A one-off full reorder, not a per-frame drag update -- unlike the
+    // live move/rotate/resize case this doesn't need to avoid
+    // `_resetBaking()` (see `_onScaleUpdate`'s doc comments there); every
+    // baked chunk's assumed relative ordering is genuinely stale now and
+    // needs rebuilding, and this only runs once per button tap.
+    _resetBaking();
+  }
+
+  /// The mirror of `_bringSelectedToFront` -- moves every selected line
+  /// to the very START of `_lines` instead, so it draws first/underneath
+  /// everything else once deselected.
+  void _sendSelectedToBack() {
+    if (_selectedLines.isEmpty) return;
+    setState(() {
+      final List<MathsPadLine> moved = _lines
+          .where(_selectedLines.contains)
+          .toList();
+      _lines.removeWhere(_selectedLines.contains);
+      _lines.insertAll(0, moved);
+    });
+    _finishedStrokesNotifier.value++;
+    _resetBaking();
+  }
+
+  /// Whether the single selected image is currently "stuck" to any other
+  /// lines -- i.e. has a `groupId` at all. Drives the Floating Action
+  /// Bar's pin icon's on/off appearance; see `_toggleStickDrawingsToImage`.
+  bool get _selectedImageIsStuck =>
+      _selectedLines.length == 1 && _selectedLines.first.groupId != null;
+
+  /// Toggle for the Floating Action Bar's "stick" pin, shown only when
+  /// exactly one pasted image is selected. Reuses the same `groupId`
+  /// mechanism a Shape Tool result's pieces already share (so tap-select/
+  /// the Eraser tool/dragging a group already treat every member as one
+  /// unit, with no new plumbing needed elsewhere):
+  ///  - Not yet stuck (`groupId == null`): assigns a fresh `groupId` to
+  ///    the image AND to every OTHER line currently overlapping its
+  ///    bounds, so from now on they all move/rotate/resize together --
+  ///    "sticking" whatever ink is currently drawn on the image to it.
+  ///  - Already stuck: clears `groupId` from every line that shares it
+  ///    (the image included), releasing them all back to independent
+  ///    strokes.
+  /// Only lines overlapping the image AT THE MOMENT this is pressed get
+  /// stuck -- it's a one-shot grouping action, not an ongoing "everything
+  /// drawn on this image from now on auto-sticks" mode; press it again
+  /// after adding more ink on top to pull that in too.
+  void _toggleStickDrawingsToImage() {
+    if (_selectedLines.length != 1) return;
+    final MathsPadLine image = _selectedLines.first;
+    if (image.fillImage == null || image.fillWorldBounds == null) return;
+
+    setState(() {
+      if (image.groupId != null) {
+        final String gid = image.groupId!;
+        for (final line in _lines) {
+          if (line.groupId == gid) line.groupId = null;
+        }
+      } else {
+        final String gid =
+            '${DateTime.now().microsecondsSinceEpoch}_stick_${identityHashCode(image)}';
+        image.groupId = gid;
+        final Rect imageBounds = image.fillWorldBounds!;
+        for (final line in _lines) {
+          if (identical(line, image) || line.points.isEmpty) continue;
+          double minX = line.points.first.offset.dx;
+          double maxX = minX;
+          double minY = line.points.first.offset.dy;
+          double maxY = minY;
+          for (final p in line.points) {
+            if (p.offset.dx < minX) minX = p.offset.dx;
+            if (p.offset.dx > maxX) maxX = p.offset.dx;
+            if (p.offset.dy < minY) minY = p.offset.dy;
+            if (p.offset.dy > maxY) maxY = p.offset.dy;
+          }
+          final Rect bounds = Rect.fromLTRB(minX, minY, maxX, maxY);
+          if (bounds.overlaps(imageBounds)) {
+            line.groupId = gid;
+          }
+        }
+        // Reflect the newly-stuck members in the live selection too, so
+        // the neon outline/selection box immediately shows the whole
+        // group as selected -- matching what tapping any one member
+        // would already do via the existing groupId-based
+        // selection-expansion (see the `tapSelect` branch).
+        _selectedLines
+          ..clear()
+          ..addAll(_lines.where((l) => l.groupId == gid));
+      }
+    });
+    _finishedStrokesNotifier.value++;
+    _resetBaking();
   }
 
   static List<MathsPadLine> generateShapeLinesInRect(
@@ -5166,32 +6583,34 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     });
   }
 
+  // Direct notifier updates -- no `setState`, matching the pinch-to-zoom/
+  // trackpad-pan gesture handlers. A `setState` here would rebuild
+  // `_MathsPadWidgetState.build()`'s ENTIRE widget tree (toolbar, every
+  // instrument, every text label, ...) on every single zoom button tap --
+  // real, avoidable cost that was the direct cause of "zoom in/zoom out
+  // feels laggy" (`_scale`/`_panOffset` are only ever read inside event
+  // handlers, never during `build()`'s widget construction itself, so
+  // nothing actually needs that full rebuild to stay correct).
   void _resetView() {
     _frictionController?.stop();
-    setState(() {
-      _panOffset = Offset.zero;
-      _scale = 1.0;
-      _panNotifier.value = Offset.zero;
-      _scaleNotifier.value = 1.0;
-    });
+    _panOffset = _clampPanIfLocked(Offset.zero);
+    _scale = 1.0;
+    _panNotifier.value = _panOffset;
+    _scaleNotifier.value = 1.0;
   }
 
   void _zoomIn() {
     if (_zoomLocked) return;
     _frictionController?.stop();
-    setState(() {
-      _scale = (_scale * 1.2).clamp(0.25, 4.0);
-      _scaleNotifier.value = _scale;
-    });
+    _scale = (_scale * 1.2).clamp(0.25, 4.0);
+    _scaleNotifier.value = _scale;
   }
 
   void _zoomOut() {
     if (_zoomLocked) return;
     _frictionController?.stop();
-    setState(() {
-      _scale = (_scale / 1.2).clamp(0.25, 4.0);
-      _scaleNotifier.value = _scale;
-    });
+    _scale = (_scale / 1.2).clamp(0.25, 4.0);
+    _scaleNotifier.value = _scale;
   }
 
   void _compressCanvasSpace() {
@@ -5330,38 +6749,68 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
     setState(() {
       _finishedStrokesNotifier.value++;
+      _resetBaking();
       _activeDrawingNotifier.value++;
     });
   }
 
   void _undo() {
-    if (_lines.isNotEmpty) {
+    if (_undoHistory.isNotEmpty) {
       setState(() {
-        final removed = _lines.removeLast();
-        _undoHistory.add(removed);
-        _selectedLines.clear();
-        _removeOrphanedAngleLabels([removed]);
+        final action = _undoHistory.removeLast();
+        action.undo(this);
+        _redoHistory.add(action);
       });
-      _finishedStrokesNotifier.value++;
     }
   }
 
   void _redo() {
-    if (_undoHistory.isNotEmpty) {
-      final restored = _undoHistory.removeLast();
-      _buildAndCachePath(restored);
+    if (_redoHistory.isNotEmpty) {
       setState(() {
-        _lines.add(restored);
-        _selectedLines.clear();
+        final action = _redoHistory.removeLast();
+        action.redo(this);
+        _undoHistory.add(action);
       });
-      _finishedStrokesNotifier.value++;
     }
   }
 
+  void _recordAction(MathsPadAction action) {
+    _undoHistory.add(action);
+    _redoHistory.clear();
+  }
+
   void _clearCanvas() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear Canvas?'),
+        content: const Text('Are you sure you want to clear the entire canvas? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              Navigator.pop(context);
+              _executeClearCanvas();
+            },
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _executeClearCanvas() {
     setState(() {
       _lines.clear();
       _undoHistory.clear();
+      _redoHistory.clear();
       _selectedLines.clear();
       _lassoPoints.clear();
       _fixedAngleLabels.clear();
@@ -5373,6 +6822,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _textEditorWorldPos = null;
     });
     _finishedStrokesNotifier.value++;
+    _resetBaking();
   }
 
   @override
@@ -5396,6 +6846,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       focusNode: _canvasFocusNode,
       autofocus: true,
       onKeyEvent: (node, event) {
+        // `IgnorePointer` around the canvas/toolbar below only blocks
+        // pointer input -- keyboard shortcuts reach this `Focus` node
+        // regardless, so they need their own explicit guard to stay
+        // inert while a heavy page's content is still hydrating (see
+        // `_isHydratingInitialContent`).
+        if (_isHydratingInitialContent) return KeyEventResult.ignored;
         if (event is KeyDownEvent) {
           final hw = HardwareKeyboard.instance;
           final ctrl = hw.isControlPressed;
@@ -5474,7 +6930,77 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   ),
                 ],
         ),
-        child: _buildToolbarAndCanvas(context, isDark, bgColor),
+        child: Stack(
+          children: [
+            // Pointer input only (see the keyboard guard in `onKeyEvent`
+            // above for the other half) -- inert while a heavy page's
+            // `initialLines` are still being frame-batched into
+            // `_bakedChunks` (`_hydrateNextInitialBatch`), since drawing/
+            // undo/paste/tool-switching mid-hydration would race
+            // `_bakedLineCount`'s bookkeeping, which assumes hydration
+            // owns the front of `_lines` until it finishes.
+            IgnorePointer(
+              ignoring: _isHydratingInitialContent,
+              child: _buildToolbarAndCanvas(context, isDark, bgColor),
+            ),
+            if (_isHydratingInitialContent) _buildHydrationOverlay(isDark),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Shown only while `_isHydratingInitialContent` is true -- unlike the
+  /// freeze this replaced, the UI thread is never blocked for more than
+  /// one `_kBakeThreshold`-sized batch at a time now, so this genuinely
+  /// animates instead of appearing to hang. Deliberately subtle/
+  /// non-opaque: `_hydrateNextInitialBatch` seals one new baked chunk per
+  /// frame, so the page's strokes are visibly painting themselves in
+  /// underneath this the whole time, which reads as real progress rather
+  /// than a blank wait.
+  Widget _buildHydrationOverlay(bool isDark) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Container(
+          color: (isDark ? Colors.black : Colors.white).withValues(alpha: 0.12),
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF1E293B)
+                    : const Color(0xFFFFFFFF),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.4),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Loading page…',
+                    style: TextStyle(
+                      color: isDark ? Colors.white : const Color(0xFF1E293B),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -5555,6 +7081,34 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             Positioned(top: 0, bottom: 0, left: 8, child: Center(child: handle))
           else
             Positioned(left: 0, right: 0, top: 8, child: Center(child: handle)),
+          // Color palette sliding out from behind the quick tools.
+          // Positioned at the root stack level rather than inside a bounded inner stack
+          // so that flutter's hit testing correctly registers taps on it even when
+          // it animates upward (otherwise hits fall through to the canvas below).
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutBack,
+            left: 0,
+            right: 0,
+            bottom: _quickToolsExpanded ? 84 : 26,
+            child: AnimatedScale(
+              duration: const Duration(milliseconds: 320),
+              curve: Curves.easeOutBack,
+              scale: _quickToolsExpanded ? 1.0 : 0.0,
+              alignment: Alignment.bottomCenter,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 250),
+                opacity: _quickToolsExpanded ? 1.0 : 0.0,
+                child: IgnorePointer(
+                  ignoring: !_quickToolsExpanded,
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: _buildQuickColorsArc(isDark),
+                  ),
+                ),
+              ),
+            ),
+          ),
           // Floating glass quick-tools box -- bottom-centre, clear of the
           // pull-handle above regardless of which edge it's docked to.
           // Centering it here (rather than pinning to one side) is what
@@ -5564,31 +7118,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             left: 0,
             right: 0,
             bottom: 16,
-            child: Stack(
+            child: Align(
               alignment: Alignment.bottomCenter,
-              clipBehavior: Clip.none,
-              children: [
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 320),
-                  curve: Curves.easeOutBack,
-                  bottom: _quickToolsExpanded ? 68 : 10,
-                  child: AnimatedScale(
-                    duration: const Duration(milliseconds: 320),
-                    curve: Curves.easeOutBack,
-                    scale: _quickToolsExpanded ? 1.0 : 0.0,
-                    alignment: Alignment.bottomCenter,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 250),
-                      opacity: _quickToolsExpanded ? 1.0 : 0.0,
-                      child: IgnorePointer(
-                        ignoring: !_quickToolsExpanded,
-                        child: _buildQuickColorsArc(isDark),
-                      ),
-                    ),
-                  ),
-                ),
-                _buildFullScreenQuickTools(isDark),
-              ],
+              child: _buildFullScreenQuickTools(isDark),
             ),
           ),
         ],
@@ -5654,6 +7186,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 if (_selectedLines.isNotEmpty) {
                   _recolorSelectedLines(color);
                   setState(() => _selectedColor = color);
+                } else if (_selectedTextLabelIndex != null) {
+                  setState(() {
+                    _textLabels[_selectedTextLabelIndex!].color = color;
+                    _selectedColor = color;
+                  });
                 } else {
                   setState(() {
                     _selectedColor = color;
@@ -5769,7 +7306,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final Widget box = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => setState(() => _quickToolsExpanded = !_quickToolsExpanded),
-      onDoubleTap: () => setState(() {
+      onLongPress: () => setState(() {
         _isFullScreenMode = false;
         _toolbarRevealedInFullScreen = false;
         widget.onCanvasOnlyModeChanged?.call(false);
@@ -5816,11 +7353,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             // Left of the box.
             animatedTool(
               _quickToolIconButton(
-                icon: _toolMode == CanvasToolMode.pen && _isMagicPenMode ? Icons.auto_fix_high_rounded : Icons.edit_rounded,
+                icon: _toolMode == CanvasToolMode.pen && _isMagicPenMode
+                    ? Icons.auto_fix_high_rounded
+                    : Icons.edit_rounded,
                 iconColor: iconColor,
                 isSelected: _toolMode == CanvasToolMode.pen,
                 onTap: () => setState(() {
-                  if (_toolMode == CanvasToolMode.pen && _activeShapeTool == null) {
+                  if (_toolMode == CanvasToolMode.pen &&
+                      _activeShapeTool == null) {
                     _isMagicPenMode = !_isMagicPenMode;
                   } else {
                     _toolMode = CanvasToolMode.pen;
@@ -5829,19 +7369,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 }),
               ),
               4,
-            ),
-            animatedTool(
-              _quickToolIconButton(
-                icon: Icons.gesture_rounded,
-                iconColor: iconColor,
-                isSelected: _toolMode == CanvasToolMode.lasso,
-                onTap: () => setState(() {
-                  _toolMode = CanvasToolMode.lasso;
-                  _activeShapeTool = null;
-                  _selectedLines.clear();
-                }),
-              ),
-              3,
             ),
             animatedTool(
               _quickToolIconButton(
@@ -5854,6 +7381,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   _activeShapeTool = null;
                   _handleEraserButtonTap();
                 },
+              ),
+              3,
+            ),
+            animatedTool(
+              _quickToolIconButton(
+                icon: Icons.gesture_rounded,
+                iconColor: iconColor,
+                isSelected: _toolMode == CanvasToolMode.lasso,
+                onTap: () => setState(() {
+                  _toolMode = CanvasToolMode.lasso;
+                  _activeShapeTool = null;
+                  _selectedLines.clear();
+                }),
               ),
               2,
             ),
@@ -6104,72 +7644,269 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             onPointerCancel: _onPointerCancel,
             onPointerSignal: _onPointerSignal,
             onPointerHover: _onPointerHover,
+            // Trackpad-driven pan/zoom -- handled directly here instead of
+            // through `GestureDetector`'s auto-synthesized `onScaleUpdate`
+            // (see `_onScaleUpdate`'s doc comment for why: its synthesized
+            // focal point drifts away from the true cursor position for
+            // trackpad input). `event.localPosition` is the stable cursor
+            // position (fixed for the whole gesture on a trackpad, unlike
+            // an actual multi-touch pinch), `event.pan` is the raw
+            // translation and `event.scale` the cumulative zoom, both
+            // reliable straight from the platform.
+            onPointerPanZoomStart: _onTrackpadPanZoomStart,
+            onPointerPanZoomUpdate: _onTrackpadPanZoomUpdate,
+            onPointerPanZoomEnd: _onTrackpadPanZoomEnd,
             child: GestureDetector(
               onScaleStart: _onScaleStart,
               onScaleUpdate: _onScaleUpdate,
               onScaleEnd: _onScaleEnd,
-              // ValueListenableBuilder Dual-Layer Stack:
-              // Layer 1 (Finished Strokes): Repaints ONLY when _lines updates (0 repaints during live drag)
-              // Layer 2 (Active Drawing): Repaints live stroke overlay at 120 FPS
-              child: ValueListenableBuilder<Offset>(
-                valueListenable: _panNotifier,
-                builder: (_, pan, child) {
-                  return ValueListenableBuilder<double>(
-                    valueListenable: _scaleNotifier,
-                    builder: (_, sc, child) {
-                      return Stack(
-                        children: [
-                          // Layer 1: Finished Strokes & Background
-                          ValueListenableBuilder<int>(
-                            valueListenable: _finishedStrokesNotifier,
-                            builder: (_, _, child) {
-                              return RepaintBoundary(
-                                child: CustomPaint(
-                                  size: Size.infinite,
-                                  painter: _MathsPadFinishedStrokesPainter(
-                                    lines: _lines,
-                                    bgMode: _bgMode,
-                                    isDark: isDark,
-                                    canvasBgColor: bgColor,
-                                    panOffset: pan,
-                                    scale: sc,
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-
-                          // Layer 2: Active Drawing Overlay & Handles
-                          ValueListenableBuilder<int>(
-                            valueListenable: _activeDrawingNotifier,
-                            builder: (_, _, child) {
-                              return RepaintBoundary(
-                                child: CustomPaint(
-                                  size: Size.infinite,
-                                  painter: _MathsPadActiveOverlayPainter(
-                                    currentLine: _currentLine,
-                                    selectedLines: _selectedLines,
-                                    lassoPoints: _lassoPoints,
-                                    panOffset: pan,
-                                    scale: sc,
-                                    activeShapeTool: _activeShapeTool,
-                                    shapeDragStartPos: _shapeDragStartPos,
-                                    shapeDragCurrentPos: _shapeDragCurrentPos,
-                                    selectedColor: _selectedColor,
-                                    penWidth: _penWidth,
-                                    isDark: isDark,
-                                    laserTrail: _laserTrail,
-                                    selectionGlowPhase: _selectionGlowPhase,
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
+              // Layer 0 (Grid Background): cheap, tracks pan/zoom live.
+              // Layer 1 (Finished Strokes, 1a baked + 1b recent): positioned
+              // via a single ancestor `Transform` so panning/zooming is a
+              // GPU compositor op, NOT a Skia repaint of potentially a
+              // page's whole ink history -- see the Layer 1 comment below.
+              // Layer 2 (Active Drawing): repaints live stroke overlay,
+              // still needs live pan/scale every frame, but its own content
+              // is always small/bounded so that stays cheap.
+              child: Stack(
+                children: [
+                  // Layer 0: grid/ruled background pattern.
+                  ValueListenableBuilder<Offset>(
+                    valueListenable: _panNotifier,
+                    builder: (_, pan, child) {
+                      return ValueListenableBuilder<double>(
+                        valueListenable: _scaleNotifier,
+                        builder: (_, sc, child) {
+                          return RepaintBoundary(
+                            child: CustomPaint(
+                              size: Size.infinite,
+                              painter: _MathsPadGridBackgroundPainter(
+                                bgMode: _bgMode,
+                                isDark: isDark,
+                                panOffset: pan,
+                                scale: sc,
+                              ),
+                            ),
+                          );
+                        },
                       );
                     },
-                  );
-                },
+                  ),
+
+                  // Layer 1a+1b+2: baked chunks, the "recent" tail, AND the
+                  // live active-drawing overlay, all sharing ONE `Transform`.
+                  // Each of these three was at some point built with its
+                  // OWN separate `Transform` instance (even though all
+                  // three always read the same `_panNotifier`/
+                  // `_scaleNotifier` values) -- every such split is a real
+                  // opportunity for a frame to land with one updated and
+                  // another not, and a stroke transitions from being drawn
+                  // live on Layer 2 to being rendered as committed ink on
+                  // Layer 1b in a SINGLE frame, right when the pen lifts --
+                  // exactly where any mismatch between separate Transforms
+                  // would show up as ink visibly popping to a slightly
+                  // different position the instant it's drawn (confirmed:
+                  // this happened on every single stroke once Layer 1a/1b
+                  // moved off Layer 2's original CPU-canvas-transform
+                  // mechanism onto a GPU `TransformLayer`, and persisted
+                  // even after merging 1a+1b alone, until Layer 2 joined
+                  // them here too). Sharing one `Transform` for all three
+                  // makes that structurally impossible -- they're pixel-
+                  // identical by construction, not just by coincidence of
+                  // observing equal notifier values. Layer 1b/2's inner
+                  // `ValueListenableBuilder`s technically rebuild on every
+                  // pan/zoom frame now too, but `shouldRepaint`'s
+                  // `identical()` check (Layer 1b) and Layer 2's inherently
+                  // small/bounded content mean that costs nothing beyond
+                  // constructing a few Dart objects -- no real extra
+                  // repaint work.
+                  ValueListenableBuilder<Offset>(
+                    valueListenable: _panNotifier,
+                    builder: (_, pan, child) {
+                      return ValueListenableBuilder<double>(
+                        valueListenable: _scaleNotifier,
+                        builder: (_, sc, child) {
+                          // A generous pre-render margin (a full screen's
+                          // worth on every side, not just a small fixed
+                          // padding) for Layer 1a's viewport culling below
+                          // -- zooming OUT rapidly expands the viewport, so
+                          // without a wide margin many previously
+                          // off-screen chunks can all flip to "visible"
+                          // (and pay their one-time real render cost) in
+                          // the same final frame right as the gesture
+                          // settles, which looks like a delay right after
+                          // zoom. Pre-rendering chunks well before they'd
+                          // actually enter view spreads that cost across
+                          // earlier frames instead of concentrating it at
+                          // the end.
+                          final Rect viewport = Rect.fromLTWH(
+                            -pan.dx / sc,
+                            -pan.dy / sc,
+                            _canvasSize.width / sc,
+                            _canvasSize.height / sc,
+                          ).inflate(_canvasSize.longestSide / sc);
+                          return Transform(
+                            transform: Matrix4.identity()
+                              ..translate(pan.dx, pan.dy)
+                              ..scale(sc),
+                            child: Stack(
+                              children: [
+                                // Layer 1a: "Baked" finished strokes -- one
+                                // keyed RepaintBoundary PER SEALED CHUNK
+                                // (`_bakedChunks`), permanently mounted
+                                // (same `ValueKey`s, list length never
+                                // shrinks) -- an earlier version instead
+                                // excluded off-screen chunks from the
+                                // `Stack`'s children entirely, which meant
+                                // destroying and recreating a chunk's GPU
+                                // layer every time it crossed the viewport
+                                // edge; that churn caused a delayed
+                                // "everything freezes for a stretch" stall.
+                                // `isVisible` lets `_MathsPadFinishedStrokes
+                                // Painter.paint` skip its real work (Skia
+                                // recomputing anti-aliased stroke edges on
+                                // a scale change) for off-screen chunks
+                                // without ever touching mount state.
+                                ValueListenableBuilder<int>(
+                                  valueListenable: _bakedStrokesNotifier,
+                                  builder: (_, _, _) {
+                                    return Stack(
+                                      children: [
+                                        for (
+                                          int c = 0;
+                                          c < _bakedChunks.length;
+                                          c++
+                                        )
+                                          RepaintBoundary(
+                                            key: ValueKey('baked_chunk_$c'),
+                                            child: CustomPaint(
+                                              size: Size.infinite,
+                                              painter:
+                                                  _MathsPadFinishedStrokesPainter(
+                                                    lines: _bakedChunks[c],
+                                                    isVisible:
+                                                        _bakedChunkBounds[c]
+                                                            .overlaps(viewport),
+                                                    allSelectedLines:
+                                                        _selectedLines,
+                                                  ),
+                                            ),
+                                          ),
+                                      ],
+                                    );
+                                  },
+                                ),
+
+                                // Layer 1b: "Recent" finished strokes -- the
+                                // small tail not yet folded into a baked
+                                // chunk; always bounded to at most
+                                // `_kBakeThreshold` lines regardless of
+                                // page size, so it never needs viewport
+                                // culling of its own.
+                                ValueListenableBuilder<int>(
+                                  valueListenable: _finishedStrokesNotifier,
+                                  builder: (_, _, _) {
+                                    return RepaintBoundary(
+                                      child: CustomPaint(
+                                        size: Size.infinite,
+                                        painter:
+                                            _MathsPadFinishedStrokesPainter(
+                                              lines: _lines.sublist(
+                                                _bakedLineCount.clamp(
+                                                  0,
+                                                  _lines.length,
+                                                ),
+                                              ),
+                                              allSelectedLines: _selectedLines,
+                                            ),
+                                      ),
+                                    );
+                                  },
+                                ),
+
+                                // Layer 2: Active Drawing Overlay &
+                                // Handles -- merged into this SAME shared
+                                // `Transform` (rather than its own separate
+                                // one) for the same reason Layer 1a/1b were
+                                // merged: this is exactly where the live
+                                // in-progress stroke is drawn right up
+                                // until the instant it's committed and
+                                // handed off to Layer 1b, so any
+                                // possibility of these two using even
+                                // very-slightly different transforms is
+                                // exactly what would show up as a stroke
+                                // visibly popping to a different position
+                                // right when the pen lifts. Its own content
+                                // is always small/bounded, so still cheap
+                                // to redraw every frame even though it's
+                                // now inside the same rebuild-on-pan/zoom
+                                // subtree as Layer 1a.
+
+                                // Layer 2a: baked-so-far snapshot of the
+                                // CURRENTLY in-progress stroke -- see
+                                // `_kLiveBakeEvery`'s doc comment. Fixes
+                                // "writing a long line/sentence gets
+                                // progressively slower the longer it
+                                // runs" -- without this, Layer 2 below had
+                                // to rebuild+rerasterize the WHOLE
+                                // stroke-so-far every single frame.
+                                ValueListenableBuilder<int>(
+                                  valueListenable: _activeDrawingNotifier,
+                                  builder: (_, _, _) {
+                                    return RepaintBoundary(
+                                      child: CustomPaint(
+                                        size: Size.infinite,
+                                        painter:
+                                            _MathsPadLiveStrokeBakedPainter(
+                                              line: _currentLine,
+                                              bakedPointCount:
+                                                  _currentLine
+                                                      ?.liveBakedPointCount ??
+                                                  0,
+                                            ),
+                                      ),
+                                    );
+                                  },
+                                ),
+
+                                ValueListenableBuilder<int>(
+                                  valueListenable: _activeDrawingNotifier,
+                                  builder: (_, _, _) {
+                                    return RepaintBoundary(
+                                      child: CustomPaint(
+                                        size: Size.infinite,
+                                        painter: _MathsPadActiveOverlayPainter(
+                                          currentLine: _currentLine,
+                                          selectedLines: _selectedLines,
+                                          lassoPoints: _lassoPoints,
+                                          panOffset: pan,
+                                          scale: sc,
+                                          activeShapeTool: _activeShapeTool,
+                                          shapeDragStartPos: _shapeDragStartPos,
+                                          shapeDragCurrentPos:
+                                              _shapeDragCurrentPos,
+                                          selectedColor: _selectedColor,
+                                          penWidth: _penWidth,
+                                          isDark: isDark,
+                                          laserTrail: _laserTrail,
+                                          selectionGlowPhase:
+                                              _selectionGlowPhase,
+                                          eraserCursorPos: _eraserCursorPos,
+                                          eraserCursorRadius:
+                                              _eraserWidth * 1.75,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ],
               ),
             ),
           ),
@@ -6196,7 +7933,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       transform: Matrix4.identity()
                         ..translate(pan.dx, pan.dy)
                         ..scale(sc),
-                      child: Stack(
+                      child: _UnconstrainedHitTestStack(
                         clipBehavior: Clip.none,
                         children: [
                           ..._instruments.map(_buildInstrumentWidget),
@@ -6419,7 +8156,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                       ? Icons.keyboard_arrow_up_rounded
                                       : Icons.keyboard_arrow_down_rounded,
                                   size: 20,
-                                  color: context.textColor60,
+                                  color: _textColor60,
                                 ),
                               ),
                             ),
@@ -6432,7 +8169,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
-                              color: context.textColor,
+                              color: _textColor,
                               height: 1.35,
                             ),
                             maxLines: 4,
@@ -6497,7 +8234,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           // Floating Action Bar for Selected Items (Move, Duplicate, Delete)
           if (_selectedLines.isNotEmpty)
             Positioned(
-              bottom: 16,
+              bottom: (widget.isFullScreen || _isFullScreenMode) ? null : 16,
+              top: (widget.isFullScreen || _isFullScreenMode) ? 16 : null,
               left: 0,
               right: 0,
               child: Center(
@@ -6535,7 +8273,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
-                          color: context.textColor,
+                          color: _textColor,
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -6594,6 +8332,67 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           ),
                         ),
                       ),
+                      // Bring to Front / Send to Back -- only shown when
+                      // the selection includes a pasted image (see
+                      // `_bringSelectedToFront`'s doc comment for why
+                      // reordering is meaningless for a Fill Tool
+                      // result, always forced to the very bottom
+                      // regardless).
+                      if (_selectedLines.any((l) => l.isPastedImage)) ...[
+                        const SizedBox(width: 6),
+                        Tooltip(
+                          message: 'Bring to Front',
+                          child: IconButton(
+                            icon: const Icon(Icons.flip_to_front, size: 18),
+                            onPressed: _bringSelectedToFront,
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(),
+                            padding: const EdgeInsets.all(6),
+                            color: _textColor70,
+                          ),
+                        ),
+                        Tooltip(
+                          message: 'Send to Back',
+                          child: IconButton(
+                            icon: const Icon(Icons.flip_to_back, size: 18),
+                            onPressed: _sendSelectedToBack,
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(),
+                            padding: const EdgeInsets.all(6),
+                            color: _textColor70,
+                          ),
+                        ),
+                      ],
+                      // Stick/Unstick Drawings To Image -- only shown when
+                      // exactly ONE pasted image is selected (see
+                      // `_toggleStickDrawingsToImage`'s doc comment for
+                      // why it needs a single clear "target" image). The
+                      // pin fills in once stuck, so its own state doubles
+                      // as the toggle's current status at a glance.
+                      if (_selectedLines.length == 1 &&
+                          _selectedLines.first.isPastedImage) ...[
+                        const SizedBox(width: 6),
+                        Tooltip(
+                          message: _selectedImageIsStuck
+                              ? 'Unstick Drawings From Image'
+                              : 'Stick Drawings To Image',
+                          child: IconButton(
+                            icon: Icon(
+                              _selectedImageIsStuck
+                                  ? Icons.push_pin_rounded
+                                  : Icons.push_pin_outlined,
+                              size: 18,
+                            ),
+                            onPressed: _toggleStickDrawingsToImage,
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(),
+                            padding: const EdgeInsets.all(6),
+                            color: _selectedImageIsStuck
+                                ? const Color(0xFF6366F1)
+                                : _textColor70,
+                          ),
+                        ),
+                      ],
                       const SizedBox(width: 6),
                       ElevatedButton.icon(
                         onPressed: _deleteSelectedLines,
@@ -6671,7 +8470,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                             ? Icons.back_hand_rounded
                                             : Icons.edit_rounded))),
                       size: 14,
-                      color: context.textColor70,
+                      color: _textColor70,
                     ),
                     const SizedBox(width: 4),
                     ValueListenableBuilder<double>(
@@ -6690,10 +8489,59 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
-                            color: context.textColor70,
+                            color: _textColor70,
                           ),
                         );
                       },
+                    ),
+                    const SizedBox(width: 6),
+                    // Pan-Direction Lock -- once on, panning/scrolling can
+                    // only reveal more canvas below/to the right of
+                    // wherever it was engaged, never back up/left past it
+                    // (handy for not accidentally scrolling away from
+                    // where you're currently writing). See
+                    // `_clampPanIfLocked`'s doc comment.
+                    Tooltip(
+                      message: _panLocked
+                          ? 'Pan Locked (tap to unlock) • can\'t scroll up/left'
+                          : 'Lock Pan Direction • only allow scrolling down/right',
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () {
+                          setState(() {
+                            _panLocked = !_panLocked;
+                            _panLockWorldTopLeft = _panLocked
+                                ? Offset(
+                                    -_panOffset.dx / _scale,
+                                    -_panOffset.dy / _scale,
+                                  )
+                                : null;
+                          });
+                          SharedPreferences.getInstance().then(
+                            (prefs) => prefs.setBool('mathpad_pan_locked', _panLocked),
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                _panLocked
+                                    ? 'Pan Locked • can only scroll down/right'
+                                    : 'Pan Unlocked',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(
+                            _panLocked
+                                ? Icons.lock_rounded
+                                : Icons.lock_open_rounded,
+                            size: 14,
+                            color: _panLocked ? Colors.redAccent : _textColor70,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -6801,6 +8649,44 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               _activeShapeTool = null;
                               _selectedWidth = _penWidth;
                               _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: _eraserMode == EraserMode.stroke
+                                ? Icons.auto_fix_high_rounded
+                                : Icons.cleaning_services_rounded,
+                            tooltip: _eraserMode == EraserMode.stroke
+                                ? 'Stroke Eraser: ACTIVE (Tap stroke to erase line • Double-click/Tap icon to switch to Area Eraser)'
+                                : 'Area Eraser: ACTIVE (Double-click/Tap icon to switch to Stroke Eraser)',
+                            isSelected: _toolMode == CanvasToolMode.eraser,
+                            onTap: () {
+                              _activeShapeTool = null;
+                              _handleEraserButtonTap();
+                            },
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.gesture_rounded,
+                            tooltip: 'Lasso Select, Move & Duplicate Area',
+                            isSelected: _toolMode == CanvasToolMode.lasso,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.lasso;
+                              _activeShapeTool = null;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.touch_app_rounded,
+                            tooltip: 'Tap Line to Select, Move & Duplicate',
+                            isSelected: _toolMode == CanvasToolMode.tapSelect,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.tapSelect;
+                              _activeShapeTool = null;
                             }),
                           ),
                         ),
@@ -6972,44 +8858,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             }),
                           ),
                         ),
-                        animated(
-                          _buildIconButton(
-                            icon: _eraserMode == EraserMode.stroke
-                                ? Icons.auto_fix_high_rounded
-                                : Icons.cleaning_services_rounded,
-                            tooltip: _eraserMode == EraserMode.stroke
-                                ? 'Stroke Eraser: ACTIVE (Tap stroke to erase line • Double-click/Tap icon to switch to Area Eraser)'
-                                : 'Area Eraser: ACTIVE (Double-click/Tap icon to switch to Stroke Eraser)',
-                            isSelected: _toolMode == CanvasToolMode.eraser,
-                            onTap: () {
-                              _activeShapeTool = null;
-                              _handleEraserButtonTap();
-                            },
-                          ),
-                        ),
-                        animated(
-                          _buildIconButton(
-                            icon: Icons.touch_app_rounded,
-                            tooltip: 'Tap Line to Select, Move & Duplicate',
-                            isSelected: _toolMode == CanvasToolMode.tapSelect,
-                            onTap: () => setState(() {
-                              _toolMode = CanvasToolMode.tapSelect;
-                              _activeShapeTool = null;
-                            }),
-                          ),
-                        ),
-                        animated(
-                          _buildIconButton(
-                            icon: Icons.gesture_rounded,
-                            tooltip: 'Lasso Select, Move & Duplicate Area',
-                            isSelected: _toolMode == CanvasToolMode.lasso,
-                            onTap: () => setState(() {
-                              _toolMode = CanvasToolMode.lasso;
-                              _activeShapeTool = null;
-                              _selectedLines.clear();
-                            }),
-                          ),
-                        ),
+
                         animated(
                           _buildIconButton(
                             icon: Icons.back_hand_rounded,
@@ -7135,6 +8984,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             setState(() => _selectedColor = color);
                             return;
                           }
+                          if (_selectedTextLabelIndex != null) {
+                            setState(() {
+                              _textLabels[_selectedTextLabelIndex!].color = color;
+                              _selectedColor = color;
+                            });
+                            return;
+                          }
                           setState(() {
                             _selectedColor = color;
                             _toolMode = CanvasToolMode.pen;
@@ -7181,15 +9037,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           Icon(
                             Icons.line_weight_rounded,
                             size: 18,
-                            color: context.textColor,
+                            color: _textColor,
                           ),
                           const SizedBox(width: 2),
                           Text(
                             '${_selectedWidth.toInt()}px',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: context.textColor,
-                            ),
+                            style: TextStyle(fontSize: 11, color: _textColor),
                           ),
                         ],
                       ),
@@ -7257,14 +9110,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               size: 18,
                               color: _activeShapeTool != null
                                   ? const Color(0xFF6366F1)
-                                  : context.textColor,
+                                  : _textColor,
                             ),
                             Icon(
                               Icons.arrow_drop_down_rounded,
                               size: 16,
                               color: _activeShapeTool != null
                                   ? const Color(0xFF6366F1)
-                                  : context.textColor,
+                                  : _textColor,
                             ),
                           ],
                         ),
@@ -7314,7 +9167,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                       size: 19,
                                       color: isSelected
                                           ? const Color(0xFF6366F1)
-                                          : context.textColor,
+                                          : _textColor,
                                     ),
                                   ),
                                 ),
@@ -7342,7 +9195,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                       ? Icons.notes_rounded
                                       : Icons.crop_portrait_rounded),
                             size: 18,
-                            color: context.textColor,
+                            color: _textColor,
                           ),
                         ],
                       ),
@@ -7383,7 +9236,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                             ? Icons.dark_mode_rounded
                                             : Icons.light_mode_rounded)),
                             size: 18,
-                            color: context.textColor,
+                            color: _textColor,
                           ),
                         ],
                       ),
@@ -7465,7 +9318,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                     fontWeight: FontWeight.bold,
                                     color: _zoomLocked
                                         ? Colors.redAccent
-                                        : context.textColor70,
+                                        : _textColor70,
                                   ),
                                 ),
                                 if (_zoomLocked) ...[
@@ -7761,6 +9614,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             quarterTurns: _toolbarOnLeft ? -1 : 0,
             child: _buildAssetLibraryToolbarButton(),
           ),
+          const SizedBox(width: 12),
+          RotatedBox(
+            quarterTurns: _toolbarOnLeft ? -1 : 0,
+            child: _buildSpinnerToolbarButton(),
+          ),
         ],
       ),
     );
@@ -7777,7 +9635,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }) {
     final Color resolvedColor = isDisabled
         ? Colors.grey.withOpacity(0.3)
-        : (isSelected ? const Color(0xFF6366F1) : (color ?? context.textColor));
+        : (isSelected ? const Color(0xFF6366F1) : (color ?? _textColor));
     return Tooltip(
       message: tooltip,
       child: InkWell(
@@ -7868,7 +9726,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        final isDark = _isDarkTheme;
         return AlertDialog(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
@@ -8024,6 +9882,75 @@ double _shortestAngleDelta(double from, double to) {
 }
 
 // ── Top-Level Helper Utilities for High Performance Curve Smoothing ─────────────
+
+/// How many new raw points accumulate before `_buildLivePath` re-runs full
+/// Chaikin smoothing over the live stroke-so-far, rather than reusing the
+/// last smoothing pass plus a cheap straight tail segment. See the comment
+/// at its use site for why this exists.
+const int _kLiveSmoothRebuildEvery = 6;
+
+/// How many new raw points accumulate, while a single freehand/eraser
+/// stroke is still being drawn, before its already-drawn portion gets
+/// folded into Layer 2a -- its own small `RepaintBoundary`-cached
+/// snapshot, exactly like the ones committed strokes get via
+/// `_bakedChunks`. Without this, `_MathsPadActiveOverlayPainter` had to
+/// rebuild AND re-rasterize a path covering the ENTIRE stroke-so-far on
+/// every single drawing frame -- cheap for a short stroke, but for one
+/// long continuous line (e.g. writing a full sentence without lifting
+/// the pen, thousands of points before it's committed) that cost grows
+/// with the stroke itself, which is exactly why drawing got progressively
+/// slower the longer a single stroke ran. Baking the stable prefix into a
+/// real GPU-cached layer bounds the live per-frame work to roughly the
+/// last `_kLiveBakeEvery` points, regardless of how long the whole stroke
+/// ends up being -- same idea as `_kBakeThreshold`, just applied within
+/// one still-in-progress stroke instead of across many finished ones.
+const int _kLiveBakeEvery = 40;
+
+/// Builds a (optionally Chaikin-smoothed) path for just `line.points[start,
+/// end)`, instead of the whole stroke -- the range-based twin of
+/// `_buildLivePath`, used by Layer 2a (the baked-so-far snapshot, a large
+/// but infrequently-rebuilt range) and Layer 2's live tail (a small range
+/// rebuilt every frame). Smoothing a sub-range independently of its
+/// neighbours can leave an imperceptible seam where the two meet -- points
+/// are dense enough (see the `>= 1.2` spacing check at the call site) that
+/// this isn't visible in practice, matching the same trade-off
+/// `_kLiveSmoothRebuildEvery`'s cached-tail already makes.
+Path _buildLivePathRange(MathsPadLine line, int start, int end) {
+  final path = Path();
+  final int s = start.clamp(0, line.points.length);
+  final int e = end.clamp(0, line.points.length);
+  if (e - s <= 0) return path;
+
+  path.moveTo(line.points[s].offset.dx, line.points[s].offset.dy);
+  if (e - s == 1) return path;
+  if (e - s == 2) {
+    path.lineTo(line.points[s + 1].offset.dx, line.points[s + 1].offset.dy);
+    return path;
+  }
+
+  if (line.isShape) {
+    for (int i = s + 1; i < e; i++) {
+      path.lineTo(line.points[i].offset.dx, line.points[i].offset.dy);
+    }
+    return path;
+  }
+
+  final List<Offset> rawOffsets = line.points
+      .sublist(s, e)
+      .map((p) => p.offset)
+      .toList();
+  final List<Offset> smoothPts = _chaikinSmooth(rawOffsets, iterations: 2);
+  for (int i = 1; i < smoothPts.length - 1; i++) {
+    final pPrev = smoothPts[i];
+    final pNext = smoothPts[i + 1];
+    final midX = (pPrev.dx + pNext.dx) / 2;
+    final midY = (pPrev.dy + pNext.dy) / 2;
+    path.quadraticBezierTo(pPrev.dx, pPrev.dy, midX, midY);
+  }
+  path.lineTo(line.points[e - 1].offset.dx, line.points[e - 1].offset.dy);
+  return path;
+}
+
 List<Offset> _chaikinSmooth(List<Offset> pts, {int iterations = 3}) {
   if (pts.length < 3) return pts;
 
@@ -8135,233 +10062,395 @@ void _buildAndCachePath(MathsPadLine line) {
   line.cachedBounds = Rect.fromLTRB(minX, minY, maxX, maxY);
 }
 
-// ── Layer 1: Finished Strokes & Background Painter ─────────────────────────────
-class _MathsPadFinishedStrokesPainter extends CustomPainter {
-  final List<MathsPadLine> lines;
+// ── Background grid/ruled paper pattern -- its own screen-space painter,
+// separate from the ink-content painter below. It still needs live pan/
+// scale every frame to know which grid lines are actually on screen, but
+// that's cheap (a few dozen straight `drawLine` calls, no anti-aliased
+// stroke paths/shaders/saveLayer) unlike real ink content, so it can keep
+// tracking a live pan/zoom gesture at full frame rate for free while the
+// (potentially large) finished-strokes layers below sit behind a single
+// ancestor `Transform` instead (see `build`'s Layer 1a/1b) and don't
+// repaint at all during panning.
+class _MathsPadGridBackgroundPainter extends CustomPainter {
   final CanvasBgMode bgMode;
   final bool isDark;
-  final Color canvasBgColor;
   final Offset panOffset;
   final double scale;
 
-  _MathsPadFinishedStrokesPainter({
-    required this.lines,
+  _MathsPadGridBackgroundPainter({
     required this.bgMode,
     required this.isDark,
-    required this.canvasBgColor,
     required this.panOffset,
     required this.scale,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (bgMode == CanvasBgMode.blank) return;
+    final double startX = ((-panOffset.dx) / scale);
+    final double endX = ((size.width - panOffset.dx) / scale);
+    final double startY = ((-panOffset.dy) / scale);
+    final double endY = ((size.height - panOffset.dy) / scale);
+
     canvas.save();
-    try {
-      canvas.translate(panOffset.dx, panOffset.dy);
-      canvas.scale(scale);
+    canvas.translate(panOffset.dx, panOffset.dy);
+    canvas.scale(scale);
+    final gridPaint = Paint()
+      ..color = (isDark ? Colors.white : Colors.indigo).withOpacity(0.07)
+      ..strokeWidth = 1.0 / scale;
 
-      final double startX = ((-panOffset.dx) / scale);
-      final double endX = ((size.width - panOffset.dx) / scale);
-      final double startY = ((-panOffset.dy) / scale);
-      final double endY = ((size.height - panOffset.dy) / scale);
+    if (bgMode == CanvasBgMode.grid) {
+      const double step = 28.0;
+      final double gridStartX = (startX / step).floor() * step - step;
+      final double gridEndX = (endX / step).ceil() * step + step;
+      final double gridStartY = (startY / step).floor() * step - step;
+      final double gridEndY = (endY / step).ceil() * step + step;
 
-      // 1. Draw Paper Pattern
-      final gridPaint = Paint()
-        ..color = (isDark ? Colors.white : Colors.indigo).withOpacity(0.07)
-        ..strokeWidth = 1.0 / scale;
-
-      if (bgMode == CanvasBgMode.grid) {
-        const double step = 28.0;
-        final double gridStartX = (startX / step).floor() * step - step;
-        final double gridEndX = (endX / step).ceil() * step + step;
-        final double gridStartY = (startY / step).floor() * step - step;
-        final double gridEndY = (endY / step).ceil() * step + step;
-
-        for (double x = gridStartX; x <= gridEndX; x += step) {
-          canvas.drawLine(
-            Offset(x, gridStartY),
-            Offset(x, gridEndY),
-            gridPaint,
-          );
-        }
-        for (double y = gridStartY; y <= gridEndY; y += step) {
-          canvas.drawLine(
-            Offset(gridStartX, y),
-            Offset(gridEndX, y),
-            gridPaint,
-          );
-        }
-      } else if (bgMode == CanvasBgMode.ruled) {
-        const double lineStep = 32.0;
-        final double gridStartX =
-            (startX / lineStep).floor() * lineStep - lineStep;
-        final double gridEndX = (endX / lineStep).ceil() * lineStep + lineStep;
-        final double lineStartY =
-            (startY / lineStep).floor() * lineStep - lineStep;
-        final double lineEndY = (endY / lineStep).ceil() * lineStep + lineStep;
-
-        for (double y = lineStartY; y <= lineEndY; y += lineStep) {
-          canvas.drawLine(
-            Offset(gridStartX, y),
-            Offset(gridEndX, y),
-            gridPaint,
-          );
-        }
+      for (double x = gridStartX; x <= gridEndX; x += step) {
+        canvas.drawLine(Offset(x, gridStartY), Offset(x, gridEndY), gridPaint);
       }
-
-      // 2. Viewport Spatial Culling Optimization
-      final visibleLines = lines.where((line) {
-        if (line.points.isEmpty) return false;
-        if (line.cachedBounds == null) {
-          double minX = line.points.first.offset.dx;
-          double maxX = minX;
-          double minY = line.points.first.offset.dy;
-          double maxY = minY;
-          for (int i = 1; i < line.points.length; i++) {
-            final p = line.points[i].offset;
-            if (p.dx < minX) minX = p.dx;
-            if (p.dx > maxX) maxX = p.dx;
-            if (p.dy < minY) minY = p.dy;
-            if (p.dy > maxY) maxY = p.dy;
-          }
-          line.cachedBounds = Rect.fromLTRB(minX, minY, maxX, maxY);
-        }
-        final b = line.cachedBounds!;
-        return b.right >= startX - 100 &&
-            b.left <= endX + 100 &&
-            b.bottom >= startY - 100 &&
-            b.top <= endY + 100;
-      }).toList();
-
-      // 3. Render Strokes
-      final bool hasPixelEraser = visibleLines.any((l) => l.isEraser);
-      if (hasPixelEraser) {
-        final Rect layerBounds = Rect.fromLTRB(
-          startX - 100,
-          startY - 100,
-          endX + 100,
-          endY + 100,
-        );
-        canvas.saveLayer(layerBounds, Paint());
-        try {
-          _drawStrokes(canvas, visibleLines);
-        } finally {
-          canvas.restore();
-        }
-      } else {
-        _drawStrokes(canvas, visibleLines);
+      for (double y = gridStartY; y <= gridEndY; y += step) {
+        canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
       }
-    } finally {
-      canvas.restore();
+    } else if (bgMode == CanvasBgMode.ruled) {
+      const double lineStep = 32.0;
+      final double gridStartX =
+          (startX / lineStep).floor() * lineStep - lineStep;
+      final double gridEndX = (endX / lineStep).ceil() * lineStep + lineStep;
+      final double lineStartY =
+          (startY / lineStep).floor() * lineStep - lineStep;
+      final double lineEndY = (endY / lineStep).ceil() * lineStep + lineStep;
+
+      for (double y = lineStartY; y <= lineEndY; y += lineStep) {
+        canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
+      }
     }
+    canvas.restore();
   }
 
-  void _drawFillImageLine(Canvas canvas, MathsPadLine line) {
-    final bool rotated = line.rotation != 0;
-    if (rotated) {
-      canvas.save();
-      final Offset center = line.fillWorldBounds!.center;
-      canvas.translate(center.dx, center.dy);
-      canvas.rotate(line.rotation);
-      canvas.translate(-center.dx, -center.dy);
-    }
-    canvas.drawImageRect(
-      line.fillImage!,
-      Rect.fromLTWH(
-        0,
-        0,
-        line.fillImage!.width.toDouble(),
-        line.fillImage!.height.toDouble(),
-      ),
-      line.fillWorldBounds!,
-      Paint(),
-    );
-    if (rotated) {
-      canvas.restore();
-    }
+  @override
+  bool shouldRepaint(covariant _MathsPadGridBackgroundPainter oldDelegate) {
+    return oldDelegate.panOffset != panOffset ||
+        oldDelegate.scale != scale ||
+        oldDelegate.bgMode != bgMode ||
+        oldDelegate.isDark != isDark;
   }
+}
 
-  void _drawStrokes(Canvas canvas, List<MathsPadLine> visibleLines) {
-    // Two passes so every Fill Tool result always renders *underneath*
-    // every ink stroke, regardless of which was actually drawn/filled most
-    // recently -- `_lines` itself stays strictly chronological (`_undo()`
-    // depends on `removeLast()` picking whatever was really added last),
-    // so this reordering is purely visual. The Fill Tool deliberately
-    // extends its filled pixels a little way under the boundary strokes
-    // (see `_performBucketFill`); drawing strokes second lets their own
-    // antialiased edge blend naturally on top of the fill colour there
-    // instead of the fill flatly overwriting it. Relative order is
-    // preserved within each pass, so a newer fill still shows above an
-    // older one wherever two fills overlap.
-    for (final line in visibleLines) {
-      if (line.fillImage == null || line.fillWorldBounds == null) continue;
-      _drawFillImageLine(canvas, line);
+// ── Layer 1: Finished Strokes Painter ───────────────────────────────────────
+class _MathsPadFinishedStrokesPainter extends CustomPainter {
+  final List<MathsPadLine> lines;
+  // True for the "recent" layer (always) and for a baked chunk whose
+  // precomputed bounds currently overlap the viewport -- an off-screen
+  // chunk still gets a `CustomPaint` (see `build`'s Layer 1a: EVERY chunk
+  // stays permanently mounted, on purpose, to avoid the GPU layer
+  // create/destroy churn a widget-level mount/unmount version of this
+  // caused -- confirmed by the user as the cause of a delayed
+  // "everything freezes for a stretch" stall after zooming), it just
+  // skips its own drawing work below when this is false, which is the
+  // actual expensive part (scaling forces Skia to recompute anti-aliased
+  // stroke edges, unlike panning which can reuse what's already there).
+  final bool isVisible;
+
+  /// Only the lines from [lines] that are ALSO currently selected --
+  /// computed once here from the full page-wide selection passed in as
+  /// [allSelectedLines], rather than storing that whole set as-is, so
+  /// `shouldRepaint` below can cheaply and CORRECTLY detect a selection
+  /// change that actually matters to THIS chunk specifically (via
+  /// `setEquals`), regardless of what else changed in the selection
+  /// elsewhere on the page. A single "does this chunk contain ANY
+  /// selected line" bool would not be precise enough: e.g. deselecting
+  /// one line in this chunk while selecting a DIFFERENT line also in
+  /// this chunk, in the same update, would leave such a bool unchanged
+  /// even though this chunk's rendering needs to skip a different line
+  /// now. Skipped here entirely -- not drawn by this layer at all -- a
+  /// selected line's actual content is instead drawn live by
+  /// `_MathsPadActiveOverlayPainter` (Layer 2), on top of everything
+  /// else, for as long as it stays selected; see that class's
+  /// `_drawSelectedLinesOnTop`.
+  final Set<MathsPadLine> selectedInThisLayer;
+
+  _MathsPadFinishedStrokesPainter({
+    required this.lines,
+    this.isVisible = true,
+    Set<MathsPadLine> allSelectedLines = const {},
+  }) : selectedInThisLayer = (lines.isEmpty || allSelectedLines.isEmpty)
+           ? const {}
+           : lines.where(allSelectedLines.contains).toSet();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!isVisible) return;
+    // No camera transform here -- an ancestor `Transform` (see `build`'s
+    // Layer 1a/1b) positions this whole layer in world space instead, so
+    // panning/zooming is a GPU compositor operation that reuses this
+    // layer's already-rasterized content instead of re-running these
+    // paint calls on every pan/zoom frame. `lines` is always a small,
+    // bounded list (one sealed chunk, or the capped "recent" tail -- see
+    // `_kBakeThreshold`), so drawing it unconditionally (no viewport
+    // culling) is cheap; culling existed only to bound cost against a
+    // page's ENTIRE history, which chunking already does structurally.
+
+    // Pass 1: Fill Tool underlays -- always bottom, regardless of when
+    // they were actually created (`_lines` itself stays strictly
+    // chronological -- `_undo()` depends on `removeLast()` picking
+    // whatever was really added last -- so this reordering is purely
+    // visual). Drawn OUTSIDE the ink `saveLayer`(s) below for the same
+    // reason pasted images are (see Pass 2): an eraser line's
+    // `BlendMode.clear` clears whatever else shares its `saveLayer`
+    // scope regardless of draw order, so an image can only be guaranteed
+    // immune to the Eraser tool by never sharing that scope at all.
+    for (final line in lines) {
+      if (line.fillImage == null ||
+          line.fillWorldBounds == null ||
+          line.isPastedImage ||
+          selectedInThisLayer.contains(line)) {
+        continue;
+      }
+      _paintFillImage(canvas, line);
     }
-    for (final line in visibleLines) {
-      if (line.fillImage != null && line.fillWorldBounds != null) continue;
-      if (line.points.isEmpty) continue;
 
-      final paint = Paint()
-        ..isAntiAlias = true
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-
-      if (line.isEraser) {
-        paint.blendMode = BlendMode.clear;
-        paint.strokeWidth = line.strokeWidth * 3.5;
-      } else {
-        if (line.isMagic && line.points.isNotEmpty) {
-          paint.shader = const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFFFF7A00),
-              Color(0xFFFF2E9A),
-              Color(0xFF00E5FF),
-              Color(0xFF39FF14),
-              Color(0xFFFF7A00),
-            ],
-            tileMode: TileMode.repeated,
-          ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
-        } else {
-          paint.shader = null;
-          paint.color = line.color;
+    // Pass 2: ink and pasted images, interleaved in TRUE chronological
+    // order (unlike a Fill Tool image, always forced to the bottom in
+    // Pass 1) -- a pasted image renders above whatever came before it
+    // and below whatever came after, images or ink alike, matching any
+    // ordinary note-taking app: paste a photo, annotate over it, and
+    // that annotation stays on top; paste a second photo on top of the
+    // first afterward, and IT stays on top. Grouped into contiguous
+    // "runs" of ink between pasted images (rather than one flat loop
+    // like Pass 1/the old Pass 3) so an eraser line's `saveLayer`/
+    // `BlendMode.clear` scope -- still needed per run, exactly as
+    // before -- can never end up including a pasted image no matter how
+    // the two interleave in `lines`: an image is only ever guaranteed
+    // immune to the Eraser tool by never sharing that scope at all.
+    int i = 0;
+    while (i < lines.length) {
+      final MathsPadLine line = lines[i];
+      if (selectedInThisLayer.contains(line)) {
+        i++;
+        continue;
+      }
+      if (line.fillImage != null && line.fillWorldBounds != null) {
+        if (line.isPastedImage) {
+          _paintFillImage(canvas, line);
         }
-        paint.strokeWidth = line.strokeWidth;
+        // A Fill Tool image was already drawn back in Pass 1 -- nothing
+        // to do for it here.
+        i++;
+        continue;
       }
 
-      if (line.points.length == 1) {
-        paint.style = PaintingStyle.fill;
-        canvas.drawCircle(
-          line.points.first.offset,
-          paint.strokeWidth / 2,
-          paint,
-        );
-      } else {
-        if (line.cachedPath == null) {
-          _buildAndCachePath(line);
-        }
-
-        if (!line.isEraser) {
-          final softUnderPaint = Paint()
-            ..isAntiAlias = true
-            ..strokeCap = StrokeCap.round
-            ..strokeJoin = StrokeJoin.round
-            ..style = PaintingStyle.stroke
-            ..color = line.color.withValues(alpha: 0.12)
-            ..strokeWidth = line.strokeWidth * 1.35;
-          canvas.drawPath(line.cachedPath!, softUnderPaint);
-        }
-
-        canvas.drawPath(line.cachedPath!, paint);
+      // Collect a contiguous run of ink lines, up to the next image or
+      // selected line -- guaranteed non-empty: `lines[i]` itself is
+      // neither (both cases above already `continue`d), so this inner
+      // loop always advances `i` at least once.
+      final int start = i;
+      while (i < lines.length) {
+        final MathsPadLine l = lines[i];
+        if (l.fillImage != null || selectedInThisLayer.contains(l)) break;
+        i++;
+      }
+      final List<MathsPadLine> inkRun = lines.sublist(start, i);
+      for (final l in inkRun) {
+        _paintInkLine(canvas, l);
       }
     }
   }
 
   @override
   bool shouldRepaint(covariant _MathsPadFinishedStrokesPainter oldDelegate) {
-    return true;
+    // A sealed baked chunk passes the EXACT SAME `List<MathsPadLine>`
+    // instance in on every rebuild (see `_bakedChunks`) -- `identical()`
+    // catches that cheaply (no need to diff contents) and lets the
+    // compositor keep reusing that chunk's already-rasterized layer
+    // instead of re-running every stroke's paint calls each time a later
+    // chunk/rebuild touches an unrelated sibling. The "recent" sub-layer's
+    // list is a fresh `sublist()` every time by design (it's the one
+    // that's actually supposed to redraw on every new commit), so this
+    // still repaints it as before. No `panOffset`/`scale` fields to
+    // compare -- an ancestor `Transform` handles positioning now (see
+    // `build`'s Layer 1a/1b), so this painter is never re-run just because
+    // the user panned or zoomed. `isVisible` DOES need comparing: a chunk
+    // whose viewport-overlap status flips between frames genuinely needs
+    // to actually draw (or actually stop drawing) its content -- but a
+    // chunk that STAYS visible (or stays invisible) across consecutive
+    // frames, with the same `lines`, still correctly skips repainting.
+    // `selectedInThisLayer` (via `setEquals`, see its own doc comment for
+    // why a plain identity/bool check isn't precise enough) covers a
+    // selection change that adds/removes one of THIS chunk's own lines --
+    // including throughout an active move/rotate/resize drag, which no
+    // longer touches `lines`/`isVisible` at all (see `_onScaleUpdate`),
+    // so without this the chunk would never repaint to actually hide a
+    // freshly-selected line.
+    return !identical(oldDelegate.lines, lines) ||
+        oldDelegate.isVisible != isVisible ||
+        !setEquals(oldDelegate.selectedInThisLayer, selectedInThisLayer);
+  }
+}
+
+/// Draws a single line's actual image content at its current position --
+/// shared by `_MathsPadFinishedStrokesPainter` (normal committed
+/// rendering, both Fill Tool and pasted images) and
+/// `_MathsPadActiveOverlayPainter` (drawing a SELECTED image's content a
+/// second time, live, on top of everything else -- see
+/// `_drawSelectedLinesOnTop`).
+void _paintFillImage(Canvas canvas, MathsPadLine line) {
+  final bool rotated = line.rotation != 0;
+  if (rotated) {
+    canvas.save();
+    final Offset center = line.fillWorldBounds!.center;
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(line.rotation);
+    canvas.translate(-center.dx, -center.dy);
+  }
+  canvas.drawImageRect(
+    line.fillImage!,
+    Rect.fromLTWH(
+      0,
+      0,
+      line.fillImage!.width.toDouble(),
+      line.fillImage!.height.toDouble(),
+    ),
+    line.fillWorldBounds!,
+    Paint(),
+  );
+  if (rotated) {
+    canvas.restore();
+  }
+}
+
+/// Draws a single line's actual ink content (a stroke or eraser path) at
+/// its current position -- shared by `_MathsPadFinishedStrokesPainter`
+/// (normal committed rendering) and `_MathsPadActiveOverlayPainter`
+/// (drawing a SELECTED stroke's content a second time, live, on top of
+/// everything else -- see `_drawSelectedLinesOnTop`). Callers are
+/// responsible for skipping image lines themselves (this never checks
+/// `fillImage`) and for any `saveLayer` an eraser line needs.
+void _paintInkLine(Canvas canvas, MathsPadLine line) {
+  if (line.points.isEmpty) return;
+
+  final paint = Paint()
+    ..isAntiAlias = true
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..style = PaintingStyle.stroke;
+
+  if (line.isMagic && line.points.isNotEmpty) {
+    paint.shader = const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFFFF7A00),
+        Color(0xFFFF2E9A),
+        Color(0xFF00E5FF),
+        Color(0xFF39FF14),
+        Color(0xFFFF7A00),
+      ],
+      tileMode: TileMode.repeated,
+    ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
+  } else {
+    paint.shader = null;
+    paint.color = line.color;
+  }
+  paint.strokeWidth = line.strokeWidth;
+
+  if (line.points.length == 1) {
+    paint.style = PaintingStyle.fill;
+    canvas.drawCircle(line.points.first.offset, paint.strokeWidth / 2, paint);
+  } else {
+    if (line.cachedPath == null) {
+      _buildAndCachePath(line);
+    }
+
+    if (!line.isEraser) {
+      final softUnderPaint = Paint()
+        ..isAntiAlias = true
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke
+        ..color = line.color.withValues(alpha: 0.12)
+        ..strokeWidth = line.strokeWidth * 1.35;
+      canvas.drawPath(line.cachedPath!, softUnderPaint);
+    }
+
+    canvas.drawPath(line.cachedPath!, paint);
+  }
+}
+
+// ── Layer 2a: Baked-So-Far Snapshot of the In-Progress Stroke ──────────────────
+/// A GPU-cached snapshot (via the `RepaintBoundary` this is wrapped in --
+/// see `build()`) of everything already drawn for the CURRENTLY
+/// in-progress freehand/eraser stroke, up to `bakedPointCount` raw points.
+/// Exactly the same idea as `_bakedChunks` for committed strokes, applied
+/// within one still-in-progress stroke: `shouldRepaint` only returns true
+/// when `bakedPointCount` actually changes (every `_kLiveBakeEvery` new
+/// points), so this only pays real rasterization cost once per bake, not
+/// on every single drawing frame. The rest of the still-changing tail is
+/// drawn separately, live, by `_MathsPadActiveOverlayPainter` below.
+class _MathsPadLiveStrokeBakedPainter extends CustomPainter {
+  final MathsPadLine? line;
+  final int bakedPointCount;
+
+  _MathsPadLiveStrokeBakedPainter({
+    required this.line,
+    required this.bakedPointCount,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final MathsPadLine? l = line;
+    if (l == null || bakedPointCount < 2) return;
+
+    final Path path = _buildLivePathRange(l, 0, bakedPointCount);
+    final paint = Paint()
+      ..isAntiAlias = true
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    if (l.isEraser) {
+      // Draw the eraser path as a translucent red "highlighter" trail so the
+      // user can see exactly what they're erasing before they lift their finger.
+      paint.color = const Color(0xFFF43F5E).withValues(alpha: 0.35); // Rose-500
+      paint.strokeWidth = l.strokeWidth * 3.5;
+      canvas.drawPath(path, paint);
+      return;
+    }
+
+    if (l.isMagic) {
+      paint.shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Color(0xFFFF7A00),
+          Color(0xFFFF2E9A),
+          Color(0xFF00E5FF),
+          Color(0xFF39FF14),
+          Color(0xFFFF7A00),
+        ],
+        tileMode: TileMode.repeated,
+      ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
+    } else {
+      paint.shader = null;
+      paint.color = l.color;
+    }
+    paint.strokeWidth = l.strokeWidth;
+
+    final softUnderPaint = Paint()
+      ..isAntiAlias = true
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke
+      ..color = l.color.withValues(alpha: 0.12)
+      ..strokeWidth = l.strokeWidth * 1.35;
+    canvas.drawPath(path, softUnderPaint);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MathsPadLiveStrokeBakedPainter oldDelegate) {
+    return !identical(oldDelegate.line, line) ||
+        oldDelegate.bakedPointCount != bakedPointCount;
   }
 }
 
@@ -8380,6 +10469,8 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
   final bool isDark;
   final List<_LaserTrailPoint> laserTrail;
   final double selectionGlowPhase;
+  final Offset? eraserCursorPos;
+  final double eraserCursorRadius;
 
   _MathsPadActiveOverlayPainter({
     required this.currentLine,
@@ -8395,6 +10486,8 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
     required this.isDark,
     this.laserTrail = const [],
     this.selectionGlowPhase = 0.0,
+    this.eraserCursorPos,
+    this.eraserCursorRadius = 20.0,
   });
 
   /// Mirrors `_MathsPadWidgetState._selectedImageRotation` -- when exactly
@@ -8431,11 +10524,27 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // No camera transform here -- an ancestor `Transform` (see `build`,
+    // merged into the SAME shared Transform as Layer 1a/1b) positions this
+    // whole layer in world space instead, same as the finished-strokes
+    // painter. This used to apply `canvas.translate(panOffset)`/`canvas.
+    // scale(scale)` directly here, which is EXACTLY what the
+    // finished-strokes painter did too before today's pan/zoom performance
+    // work moved it to the ancestor-`Transform` approach -- leaving this
+    // painter on the old CPU-canvas-transform mechanism while the
+    // committed-stroke layers moved to a GPU `TransformLayer` introduced a
+    // small but consistent precision/rounding mismatch between the two,
+    // which showed up as every single stroke visibly popping to a very
+    // slightly different position the instant it was committed (this
+    // painter draws the live in-progress stroke; the finished layers draw
+    // it from the moment after). `panOffset` is no longer used for a
+    // transform, only `scale` -- still needed throughout this painter's
+    // OTHER code below to size handles/labels/glow radii as a constant
+    // SCREEN size regardless of zoom (dividing by `scale`), unrelated to
+    // which mechanism applies the top-level transform.
     canvas.save();
     try {
-      canvas.translate(panOffset.dx, panOffset.dy);
-      canvas.scale(scale);
-
+      // 1. Draw Active Stroke Live Path
       // 1. Draw Active Stroke Live Path
       if (currentLine != null && currentLine!.points.isNotEmpty) {
         final line = currentLine!;
@@ -8446,26 +10555,29 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           ..style = PaintingStyle.stroke;
 
         if (line.isEraser) {
-          paint.blendMode = BlendMode.clear;
+          // Draw the eraser path as a translucent red "highlighter" trail so the
+          // user can see exactly what they're erasing before they lift their finger.
+          paint.color = const Color(0xFFF43F5E).withValues(alpha: 0.35); // Rose-500
           paint.strokeWidth = line.strokeWidth * 3.5;
+        } else if (line.isMagic && line.points.isNotEmpty) {
+          paint.shader = const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFFFF7A00),
+              Color(0xFFFF2E9A),
+              Color(0xFF00E5FF),
+              Color(0xFF39FF14),
+              Color(0xFFFF7A00),
+            ],
+            tileMode: TileMode.repeated,
+          ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
         } else {
-          if (line.isMagic && line.points.isNotEmpty) {
-            paint.shader = const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color(0xFFFF7A00),
-                Color(0xFFFF2E9A),
-                Color(0xFF00E5FF),
-                Color(0xFF39FF14),
-                Color(0xFFFF7A00),
-              ],
-              tileMode: TileMode.repeated,
-            ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
-          } else {
-            paint.shader = null;
-            paint.color = line.color;
-          }
+          paint.shader = null;
+          paint.color = line.color;
+        }
+        
+        if (!line.isEraser) {
           paint.strokeWidth = line.strokeWidth;
         }
 
@@ -8477,7 +10589,22 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
             paint,
           );
         } else {
-          final Path livePath = _buildLivePath(line);
+          // Only draw what Layer 2a's cached "stroke-so-far" snapshot
+          // doesn't already cover -- a few points of overlap for
+          // smoothing continuity at the seam -- instead of the whole
+          // line every frame. See `_kLiveBakeEvery`'s doc comment. When
+          // nothing's baked yet (a short stroke, or the first
+          // `_kLiveBakeEvery` points of a new one) this is just the
+          // whole line, same as before this layer existed.
+          final int bakedCount = line.liveBakedPointCount;
+          final int tailStart = bakedCount <= 0
+              ? 0
+              : (bakedCount - 3).clamp(0, line.points.length - 1);
+          final Path livePath = _buildLivePathRange(
+            line,
+            tailStart,
+            line.points.length,
+          );
           if (!line.isEraser) {
             final softUnderPaint = Paint()
               ..isAntiAlias = true
@@ -8491,6 +10618,44 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           canvas.drawPath(livePath, paint);
         }
       }
+
+      // 1b. Live eraser cursor ring -- see `_eraserCursorPos`'s doc comment:
+      // this is the only visible feedback an in-progress area-eraser drag
+      // gets (the actual clear-blend on `currentLine` above has no visible
+      // effect on the finished layer underneath it, and the finished layer
+      // itself no longer repaints mid-drag), so draw a simple ring at the
+      // eraser's current position/size to show where it'll actually erase.
+      if (eraserCursorPos != null) {
+        final ringPaint = Paint()
+          ..isAntiAlias = true
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5 / scale
+          ..color = (isDark ? Colors.white : Colors.black87).withValues(
+            alpha: 0.55,
+          );
+        final fillPaint = Paint()
+          ..isAntiAlias = true
+          ..style = PaintingStyle.fill
+          ..color = (isDark ? Colors.white : Colors.black87).withValues(
+            alpha: 0.08,
+          );
+        canvas.drawCircle(eraserCursorPos!, eraserCursorRadius, fillPaint);
+        canvas.drawCircle(eraserCursorPos!, eraserCursorRadius, ringPaint);
+      }
+
+      // 1c. Draw each selected line's actual content a second time, live,
+      // on top of everything else. Layer 1a/1b
+      // (`_MathsPadFinishedStrokesPainter`) skip a line entirely for as
+      // long as it's selected (see that class's `selectedInThisLayer`
+      // doc comment) -- this is the ONLY place a selected line's
+      // ink/image actually gets drawn while selected. That's what makes
+      // a selected item visually pop to the front of anything it
+      // overlaps, and lets it track a live move/rotate/resize drag every
+      // single frame without touching (or re-baking) the rest of the
+      // page at all -- see `_onScaleUpdate`'s Move/Rotate/Resize
+      // branches, which used to nuke every baked chunk on the page on
+      // every drag-update frame just to move one line.
+      _drawSelectedLinesOnTop(canvas);
 
       // 2. Draw each selected stroke's own neon outline, then the group
       // bounding box & handles on top of it.
@@ -8658,13 +10823,39 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
     // Chaikin-smooth the live preview too (same treatment
     // `_buildAndCachePath` gives the finished stroke), so the ink doesn't
     // visibly "settle"/refine the instant the pen lifts -- what you see
-    // while drawing is what you get. Fewer iterations than the commit-time
-    // pass (2 vs 3): this reruns over every point of the stroke-so-far on
-    // every live-drawing frame, so keeping it cheaper here matters more
-    // than matching the final smoothing exactly; the full pass still runs
-    // once at commit.
-    final List<Offset> rawOffsets = line.points.map((p) => p.offset).toList();
-    final List<Offset> smoothPts = _chaikinSmooth(rawOffsets, iterations: 2);
+    // while drawing is what you get.
+    //
+    // Re-running the smoothing pass itself over EVERY point of the
+    // stroke-so-far, on every single drawing frame, was the dominant
+    // per-frame allocation source during a long freehand stroke (a fresh
+    // `List<Offset>` plus, per Chaikin iteration, another list roughly 2x
+    // the size of the last -- all discarded every frame just to add one
+    // more point) -- felt as stutter that gets worse the longer a stroke
+    // (and, via the resulting GC pressure, a whole session) runs. The
+    // smoothed point set is cached on the line and only recomputed every
+    // `_kLiveSmoothRebuildEvery` new points; in between, the path is
+    // rebuilt from that cached smoothing plus one cheap straight segment
+    // out to the actual newest point (Chaikin always preserves a curve's
+    // first/last input point exactly, so `smoothPts.last` and the newest
+    // raw point coincide the instant the cache IS fresh -- this is a
+    // strict extension, not an approximation, when unstaled). The tail
+    // reads as a short straight segment for at most a few frames during
+    // fast drawing -- imperceptible in practice -- and none of this
+    // touches the FINAL committed stroke, which `_buildAndCachePath`
+    // always builds fresh (3 iterations, over the complete final point
+    // set) once at commit, never from this live cache.
+    final int rawCount = line.points.length;
+    List<Offset> smoothPts;
+    if (line.liveCachedSmoothPts != null &&
+        rawCount >= line.liveCachedRawPointCount &&
+        rawCount - line.liveCachedRawPointCount < _kLiveSmoothRebuildEvery) {
+      smoothPts = line.liveCachedSmoothPts!;
+    } else {
+      final List<Offset> rawOffsets = line.points.map((p) => p.offset).toList();
+      smoothPts = _chaikinSmooth(rawOffsets, iterations: 2);
+      line.liveCachedSmoothPts = smoothPts;
+      line.liveCachedRawPointCount = rawCount;
+    }
 
     for (int i = 1; i < smoothPts.length - 1; i++) {
       final pPrev = smoothPts[i];
@@ -8673,8 +10864,24 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
       final midY = (pPrev.dy + pNext.dy) / 2;
       path.quadraticBezierTo(pPrev.dx, pPrev.dy, midX, midY);
     }
-    path.lineTo(smoothPts.last.dx, smoothPts.last.dy);
+    path.lineTo(line.points.last.offset.dx, line.points.last.offset.dy);
     return path;
+  }
+
+  /// Draws every selected line's actual content (see the call site's doc
+  /// comment for why this needs to happen at all) -- images and ink both,
+  /// using the exact same shared paint functions the finished-strokes
+  /// layers use, so a selected line looks pixel-identical here to how it
+  /// looked before selection, just now on top instead of wherever it
+  /// normally sits in the page's chronological stacking order.
+  void _drawSelectedLinesOnTop(Canvas canvas) {
+    for (final line in selectedLines) {
+      if (line.fillImage != null && line.fillWorldBounds != null) {
+        _paintFillImage(canvas, line);
+      } else {
+        _paintInkLine(canvas, line);
+      }
+    }
   }
 
   // Neon mix used by every selected-stroke outline -- cycles through
@@ -8723,12 +10930,25 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           bounds.inflate(4.5 / scale),
           const Radius.circular(8),
         );
-        _paintNeonRing(
-          canvas,
-          Path()..addRRect(ring),
-          neonShader,
-          1.6 / scale,
-        );
+        // `fillWorldBounds` itself deliberately stays axis-aligned when
+        // an image is rotated -- only `rotation` changes, applied
+        // separately at paint time around the bounds' own center (see
+        // `_paintFillImage`, and the doc comment on `_onScaleUpdate`'s
+        // Rotate branch for why). The outline has to apply that same
+        // rotation itself here, the same way, or it stays axis-aligned
+        // while the image underneath visibly spins.
+        final bool rotated = line.rotation != 0;
+        if (rotated) {
+          canvas.save();
+          final Offset center = bounds.center;
+          canvas.translate(center.dx, center.dy);
+          canvas.rotate(line.rotation);
+          canvas.translate(-center.dx, -center.dy);
+        }
+        _paintNeonRing(canvas, Path()..addRRect(ring), neonShader, 1.6 / scale);
+        if (rotated) {
+          canvas.restore();
+        }
         continue;
       }
 
@@ -9099,5 +11319,62 @@ class _NeonBorderPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _NeonBorderPainter oldDelegate) {
     return oldDelegate.angle != angle;
+  }
+}
+
+/// A custom Stack that bypasses Flutter's default bounds-checking during hit tests.
+/// This allows interactive children (like text editors or instruments) to receive taps 
+/// even when panned far outside the Stack's original screen-sized layout bounds on the 
+/// infinite canvas.
+class _UnconstrainedHitTestStack extends Stack {
+  _UnconstrainedHitTestStack({
+    Key? key,
+    AlignmentGeometry alignment = AlignmentDirectional.topStart,
+    TextDirection? textDirection,
+    StackFit fit = StackFit.loose,
+    Clip clipBehavior = Clip.hardEdge,
+    List<Widget> children = const <Widget>[],
+  }) : super(
+          key: key,
+          alignment: alignment,
+          textDirection: textDirection,
+          fit: fit,
+          clipBehavior: clipBehavior,
+          children: children,
+        );
+
+  @override
+  RenderStack createRenderObject(BuildContext context) {
+    return _RenderUnconstrainedHitTestStack(
+      alignment: alignment,
+      textDirection: textDirection ?? Directionality.maybeOf(context),
+      fit: fit,
+      clipBehavior: clipBehavior,
+    );
+  }
+}
+
+class _RenderUnconstrainedHitTestStack extends RenderStack {
+  _RenderUnconstrainedHitTestStack({
+    AlignmentGeometry alignment = AlignmentDirectional.topStart,
+    TextDirection? textDirection,
+    StackFit fit = StackFit.loose,
+    Clip clipBehavior = Clip.hardEdge,
+  }) : super(
+          alignment: alignment,
+          textDirection: textDirection,
+          fit: fit,
+          clipBehavior: clipBehavior,
+        );
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    // Bypass the `size.contains(position)` check that a normal RenderBox does,
+    // allowing hits to fall through to children far outside our layout bounds.
+    if (hitTestChildren(result, position: position) || hitTestSelf(position)) {
+      result.add(BoxHitTestEntry(this, position));
+      return true;
+    }
+    return false;
   }
 }

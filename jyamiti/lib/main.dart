@@ -24,8 +24,15 @@ import 'package:media_kit/media_kit.dart';
 import 'services/api_service.dart';
 import 'services/offline_sync_service.dart';
 import 'presentation/widgets/theme_reveal.dart';
+import 'presentation/features/mathpad/mathpad_shader_warmup.dart';
 
 void main() {
+  // Must be set before `WidgetsFlutterBinding.ensureInitialized()` --
+  // `PaintingBinding.initInstances()` (which that call triggers) is what
+  // actually runs it. See `MathPadShaderWarmUp`'s doc comment for the real
+  // jank this fixes (found via a live DevTools capture: a single frame
+  // spending 461ms compiling shaders mid-drawing on a heavily-used page).
+  PaintingBinding.shaderWarmUp = const MathPadShaderWarmUp();
   WidgetsFlutterBinding.ensureInitialized();
   // Must run once before any `media_kit` Player is created -- backs the
   // Math Pad Asset Library's video embeds (see `MediaEmbedWidget`).

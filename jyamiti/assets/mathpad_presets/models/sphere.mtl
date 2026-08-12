@@ -1,7 +1,7 @@
 # Material for sphere
 newmtl sphereMaterial
-Ka 0.022 0.254 0.177
-Kd 0.063 0.725 0.506
+Ka 0.410 0.410 0.420
+Kd 0.820 0.820 0.840
 Ks 0.25 0.25 0.25
 Ns 20
 d 1.0

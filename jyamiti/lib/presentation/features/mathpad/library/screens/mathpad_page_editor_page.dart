@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -76,6 +77,11 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
   // really does get the whole screen instead of just its own toolbar.
   bool _isPadCanvasOnly = false;
   MathsPadLiveStateReader? _liveReader;
+  // Registered by the currently-mounted `MathsPadWidget` (re-registered on
+  // every page switch, same as `_liveReader`) -- called right after every
+  // save to regenerate that page's cached preview image (see
+  // `_saveCurrentLive`/`onSaveRequested` below).
+  Future<Uint8List?> Function()? _thumbnailCapture;
   Timer? _autosaveTimer;
   bool _showBottomBar = true;
   Timer? _bottomBarTimer;
@@ -86,22 +92,36 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
   // `_saveCurrentLive`.
   Future<void> _pendingSave = Future.value();
 
-  final Map<String, MathPadPageSnapshot> _pagePreviews = {};
+  // Cached preview images (PNG bytes, or `null` while none has been
+  // generated yet -- see `MathPadLibraryStorageService.loadThumbnail`),
+  // keyed by page id. Deliberately NOT full `MathPadPageSnapshot`s: the
+  // pages sidebar only ever needs to show a small image, so loading it
+  // this way skips the full JSON/stroke/image-codec decode `loadPage`
+  // does entirely -- that decode is real, non-trivial work (the same cost
+  // that used to freeze opening a heavy page), and doing it once per page
+  // just to populate a drawer was the actual reason it felt slow.
+  final Map<String, Uint8List?> _pageThumbnails = {};
 
   Future<void> _loadAllPreviews() async {
-    for (int i = 0; i < _pages.length; i++) {
-      final ref = _pages[i];
-      try {
-        final snapshot = await widget.storage.loadPage(widget.batchId, ref.id);
-        if (mounted) {
-          setState(() {
-            _pagePreviews[ref.id] = snapshot;
-          });
+    // Plain file reads with no shared resource to serialize on (unlike
+    // `savePage`'s `images_tmp` writes) -- parallelize rather than the
+    // sequential `await` loop this replaced.
+    final results = await Future.wait(
+      _pages.map((ref) async {
+        try {
+          return MapEntry(ref.id, await widget.storage.loadThumbnail(widget.batchId, ref.id));
+        } catch (e) {
+          debugPrint('Failed to load thumbnail for page ${ref.id}: $e');
+          return MapEntry(ref.id, null);
         }
-      } catch (e) {
-        debugPrint('Failed to load preview for page ${ref.id}: $e');
+      }),
+    );
+    if (!mounted) return;
+    setState(() {
+      for (final entry in results) {
+        _pageThumbnails[entry.key] = entry.value;
       }
-    }
+    });
   }
 
   @override
@@ -114,7 +134,11 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
     // Everything drawn here is autosaved continuously -- no explicit save
     // step needed, and nothing is lost if the app closes unexpectedly
     // mid-drawing (page-switch/close already save immediately on top of
-    // this periodic tick).
+    // this periodic tick). Deliberately NOT capturing a thumbnail on this
+    // tick (see `_saveCurrentLive`'s `captureThumbnail` doc comment) --
+    // that's real rasterization work, and doing it every 5 seconds while
+    // actively drawing/panning was landing a stutter in the middle of
+    // whatever gesture was in progress.
     _autosaveTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _saveCurrentLive(),
@@ -156,6 +180,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       _snapshot = snapshot;
       _loading = false;
       _liveReader = null; // the freshly-keyed MathsPadWidget will re-register
+      _thumbnailCapture = null; // ditto
     });
     // Record this as the tutor's current spot so the sidebar's Math Pad
     // tab can resume directly here next time, instead of always showing
@@ -165,6 +190,10 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       nodeId: _nodeId,
       pageId: ref.id,
     ));
+    
+    // Add to recent pages and persist
+    widget.libraryIndex.recordPageOpened(ref.id);
+    widget.onPagesChanged?.call();
   }
 
   /// Silently persists whatever's currently on screen (via the live reader
@@ -179,7 +208,21 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
   /// writes there race and can crash with a `PathNotFoundException`. Queuing
   /// guarantees only one `savePage` call for a given page is ever in flight
   /// at a time.
-  Future<void> _saveCurrentLive() {
+  ///
+  /// [captureThumbnail] defaults to false and must be opted into explicitly
+  /// by callers that represent actually LEAVING this page (page switch,
+  /// add-page, switching library node) -- NOT the plain periodic 5-second
+  /// autosave tick. Capturing a thumbnail means rasterizing the whole
+  /// canvas (`RenderRepaintBoundary.toImage` + PNG encode), which is real,
+  /// non-trivial work regardless of the output image's small size -- doing
+  /// that on every autosave tick meant it was firing continuously while
+  /// the tutor was actively drawing/panning, landing a real stutter every
+  /// 5 seconds in the middle of whatever gesture was in progress. Once per
+  /// page-leave (a much rarer, already-loading-spinner-covered moment) is
+  /// what "once per save" should have meant in practice; the periodic tick
+  /// still saves the lightweight JSON exactly as before this feature
+  /// existed.
+  Future<void> _saveCurrentLive({bool captureThumbnail = false}) {
     final reader = _liveReader;
     if (reader == null) return _pendingSave;
     final live = reader();
@@ -192,12 +235,20 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       bgMode: live.bgMode,
       themeMode: live.themeMode,
     );
+    final capture = captureThumbnail ? _thumbnailCapture : null;
     _pendingSave = _pendingSave.then((_) async {
       await widget.storage.savePage(widget.batchId, ref.id, snapshot);
       ref.updatedAt = DateTime.now();
+      Uint8List? thumbBytes;
+      if (capture != null) {
+        thumbBytes = await capture();
+        if (thumbBytes != null) {
+          await widget.storage.saveThumbnail(widget.batchId, ref.id, thumbBytes);
+        }
+      }
       if (mounted) {
         setState(() {
-          _pagePreviews[ref.id] = snapshot;
+          if (thumbBytes != null) _pageThumbnails[ref.id] = thumbBytes;
         });
       }
       await widget.onPagesChanged();
@@ -209,12 +260,12 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
     if (index == _currentIndex || index < 0 || index >= _pages.length) {
       return;
     }
-    await _saveCurrentLive();
+    await _saveCurrentLive(captureThumbnail: true);
     await _loadPage(index);
   }
 
   Future<void> _addPage() async {
-    await _saveCurrentLive();
+    await _saveCurrentLive(captureThumbnail: true);
     final newRef = MathPadPageRef.create('Page ${_pages.length + 1}');
     setState(() => _pages.add(newRef));
     await widget.onPagesChanged();
@@ -385,8 +436,8 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
   /// Switches the pad in place to a different Chapter/Topic/Sub-topic
   /// picked from the library drawer -- saves whatever was on screen for
   /// the OLD node first, then loads (or starts) page 1 of the new one.
-  Future<void> _switchToNode(MathPadFoundNode node) async {
-    await _saveCurrentLive();
+  Future<void> _switchToNode(MathPadFoundNode node, {String? initialPageId}) async {
+    await _saveCurrentLive(captureThumbnail: true);
     if (!mounted) return;
     Navigator.of(context).pop(); // close the drawer
     setState(() {
@@ -394,7 +445,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       _nodeTitle = node.nodeTitle;
       _pages = node.pages;
     });
-    await _ensurePagesAndLoad();
+    await _ensurePagesAndLoad(preferredPageId: initialPageId);
   }
 
   /// The Book › Chapter › ... › Page breadcrumb -- shown above the page
@@ -624,7 +675,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                 itemBuilder: (ctx, i) {
                   final page = _pages[i];
                   final isCurrent = i == _currentIndex;
-                  final snapshot = _pagePreviews[page.id];
+                  final thumbBytes = _pageThumbnails[page.id];
 
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 12),
@@ -663,15 +714,32 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                         clipBehavior: Clip.hardEdge,
                         child: Stack(
                           children: [
-                            if (snapshot != null && snapshot.lines.isNotEmpty)
-                              Positioned.fill(
-                                child: Opacity(
-                                  opacity: isCurrent ? 1.0 : 0.6,
-                                  child: CustomPaint(
-                                    painter: _PreviewStrokesPainter(snapshot.lines),
-                                  ),
-                                ),
+                            Positioned.fill(
+                              child: Opacity(
+                                opacity: isCurrent ? 1.0 : 0.6,
+                                // A cached image generated once per save
+                                // (see `_saveCurrentLive`/`onThumbnailCaptureReady`
+                                // in mathpad.dart) -- trivially cheap to
+                                // display, unlike the live vector redraw
+                                // this replaced. A placeholder icon shows
+                                // for a page that's never been saved since
+                                // this feature shipped.
+                                child: thumbBytes != null
+                                    ? Image.memory(
+                                        thumbBytes,
+                                        fit: BoxFit.contain,
+                                      )
+                                    : Center(
+                                        child: Icon(
+                                          Icons.description_outlined,
+                                          size: 36,
+                                          color: context.textColor.withValues(
+                                            alpha: 0.25,
+                                          ),
+                                        ),
+                                      ),
                               ),
+                            ),
                             Positioned(
                               right: 4,
                               top: 4,
@@ -743,6 +811,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
               initialBgMode: _snapshot!.bgMode,
               initialThemeMode: _snapshot!.themeMode,
               onEditorReady: (reader) => _liveReader = reader,
+              onThumbnailCaptureReady: (capture) => _thumbnailCapture = capture,
               onSaveRequested:
                   ({
                     required lines,
@@ -761,6 +830,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                       bgMode: bgMode,
                       themeMode: themeMode,
                     );
+                    final capture = _thumbnailCapture;
                     // Queued the same way as `_saveCurrentLive` -- this
                     // fires from the pad's own Save button/close flow and
                     // must not run concurrently with the periodic autosave
@@ -768,6 +838,18 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                     _pendingSave = _pendingSave.then((_) async {
                       await widget.storage.savePage(widget.batchId, ref.id, snapshot);
                       ref.updatedAt = DateTime.now();
+                      // Regenerate the cached preview image alongside this
+                      // save too (see `_saveCurrentLive`'s matching
+                      // comment) -- both save paths keep it in sync.
+                      if (capture != null) {
+                        final thumbBytes = await capture();
+                        if (thumbBytes != null) {
+                          await widget.storage.saveThumbnail(widget.batchId, ref.id, thumbBytes);
+                          if (mounted) {
+                            setState(() => _pageThumbnails[ref.id] = thumbBytes);
+                          }
+                        }
+                      }
                       await widget.onPagesChanged();
                     });
                     return _pendingSave;
@@ -851,112 +933,4 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       ),
     );
   }
-}
-
-class _PreviewStrokesPainter extends CustomPainter {
-  final List<MathsPadLine> lines;
-  
-  _PreviewStrokesPainter(this.lines);
-  
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (lines.isEmpty) return;
-
-    double minX = double.infinity, minY = double.infinity;
-    double maxX = -double.infinity, maxY = -double.infinity;
-
-    for (final line in lines) {
-      if (line.fillWorldBounds != null) {
-        if (line.fillWorldBounds!.left < minX) minX = line.fillWorldBounds!.left;
-        if (line.fillWorldBounds!.right > maxX) maxX = line.fillWorldBounds!.right;
-        if (line.fillWorldBounds!.top < minY) minY = line.fillWorldBounds!.top;
-        if (line.fillWorldBounds!.bottom > maxY) maxY = line.fillWorldBounds!.bottom;
-      }
-      if (line.points.isNotEmpty) {
-        for (final p in line.points) {
-          if (p.offset.dx < minX) minX = p.offset.dx;
-          if (p.offset.dx > maxX) maxX = p.offset.dx;
-          if (p.offset.dy < minY) minY = p.offset.dy;
-          if (p.offset.dy > maxY) maxY = p.offset.dy;
-        }
-      }
-    }
-
-    if (minX == double.infinity) return;
-
-    final width = maxX - minX;
-    final height = maxY - minY;
-    
-    if (width == 0 && height == 0) return;
-
-    final scaleX = size.width / (width + 40);
-    final scaleY = size.height / (height + 40);
-    final scale = scaleX < scaleY ? scaleX : scaleY;
-
-    final centerX = minX + width / 2;
-    final centerY = minY + height / 2;
-
-    canvas.save();
-    canvas.translate(size.width / 2, size.height / 2);
-    canvas.scale(scale);
-    canvas.translate(-centerX, -centerY);
-
-    // 1. Draw fills
-    for (final line in lines) {
-      if (line.fillImage == null || line.fillWorldBounds == null) continue;
-      
-      final bool rotated = line.rotation != 0;
-      if (rotated) {
-        canvas.save();
-        final Offset center = line.fillWorldBounds!.center;
-        canvas.translate(center.dx, center.dy);
-        canvas.rotate(line.rotation);
-        canvas.translate(-center.dx, -center.dy);
-      }
-      
-      canvas.drawImageRect(
-        line.fillImage!,
-        Rect.fromLTWH(
-          0,
-          0,
-          line.fillImage!.width.toDouble(),
-          line.fillImage!.height.toDouble(),
-        ),
-        line.fillWorldBounds!,
-        Paint(),
-      );
-      
-      if (rotated) {
-        canvas.restore();
-      }
-    }
-
-    // 2. Draw strokes
-    for (final line in lines) {
-      if (line.points.isEmpty || line.isEraser || line.fillImage != null) continue;
-
-      final paint = Paint()
-        ..color = line.color
-        ..strokeWidth = line.strokeWidth
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-
-      if (line.cachedPath != null) {
-        canvas.drawPath(line.cachedPath!, paint);
-      } else {
-        final path = Path();
-        path.moveTo(line.points.first.offset.dx, line.points.first.offset.dy);
-        for (int i = 1; i < line.points.length; i++) {
-          path.lineTo(line.points[i].offset.dx, line.points[i].offset.dy);
-        }
-        canvas.drawPath(path, paint);
-      }
-    }
-    
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _PreviewStrokesPainter oldDelegate) => true;
 }

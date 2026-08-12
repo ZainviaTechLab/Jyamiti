@@ -318,9 +318,11 @@ class MathPadBook {
 class MathPadLibraryIndex {
   final String batchId;
   final List<MathPadBook> books;
+  final List<String> recentPageIds;
 
-  MathPadLibraryIndex({required this.batchId, List<MathPadBook>? books})
-    : books = books ?? [];
+  MathPadLibraryIndex({required this.batchId, List<MathPadBook>? books, List<String>? recentPageIds})
+    : books = books ?? [],
+      recentPageIds = recentPageIds ?? [];
 
   MathPadBook addBook(String title, {bool isDefault = false, String? sourceCourseId}) {
     final book = MathPadBook.create(
@@ -445,10 +447,58 @@ class MathPadLibraryIndex {
     );
   }
 
+  void recordPageOpened(String pageId) {
+    recentPageIds.remove(pageId);
+    recentPageIds.insert(0, pageId);
+    if (recentPageIds.length > 5) {
+      recentPageIds.removeLast();
+    }
+  }
+
+  MathPadFoundNode? findNodeForPage(String pageId) {
+    for (final book in books) {
+      for (final chapter in book.chapters) {
+        for (final topic in chapter.topics) {
+          for (final subTopic in topic.subTopics) {
+            for (final page in subTopic.pages) {
+              if (page.id == pageId) {
+                return (
+                  nodeId: subTopic.id,
+                  nodeTitle: '${book.title} › ${chapter.title} › ${topic.title} › ${subTopic.title}',
+                  pages: subTopic.pages,
+                );
+              }
+            }
+          }
+          for (final page in topic.pages) {
+            if (page.id == pageId) {
+              return (
+                nodeId: topic.id,
+                nodeTitle: '${book.title} › ${chapter.title} › ${topic.title}',
+                pages: topic.pages,
+              );
+            }
+          }
+        }
+        for (final page in chapter.pages) {
+          if (page.id == pageId) {
+            return (
+              nodeId: chapter.id,
+              nodeTitle: '${book.title} › ${chapter.title}',
+              pages: chapter.pages,
+            );
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   Map<String, dynamic> toJson() => {
     'version': 1,
     'batchId': batchId,
     'books': books.map((b) => b.toJson()).toList(),
+    'recentPageIds': recentPageIds,
   };
 
   factory MathPadLibraryIndex.fromJson(Map<String, dynamic> json) => MathPadLibraryIndex(
@@ -456,5 +506,6 @@ class MathPadLibraryIndex {
     books: (json['books'] as List? ?? [])
         .map((b) => MathPadBook.fromJson(b as Map<String, dynamic>))
         .toList(),
+    recentPageIds: (json['recentPageIds'] as List?)?.map((e) => e as String).toList(),
   );
 }

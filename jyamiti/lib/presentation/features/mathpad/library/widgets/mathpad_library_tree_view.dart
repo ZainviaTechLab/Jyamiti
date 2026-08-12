@@ -20,7 +20,7 @@ class MathPadLibraryTreeView extends StatefulWidget {
   final MathPadLibraryIndex index;
   final MathPadLibraryStorageService storage;
   final Future<void> Function() onPersistIndex;
-  final void Function(MathPadFoundNode node) onOpenNode;
+  final void Function(MathPadFoundNode node, {String? initialPageId}) onOpenNode;
   // When opened from inside a page (e.g. the pad's own library drawer),
   // the node the tutor is currently on -- pre-navigates so it's visible
   // in the initially-shown list, highlighted with a bright border instead
@@ -317,6 +317,33 @@ class _MathPadLibraryTreeViewState extends State<MathPadLibraryTreeView> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
               ),
+              if (widget.index.recentPageIds.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                Text('Recent Pages', style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold, fontSize: 15)),
+                const SizedBox(height: 10),
+                ...widget.index.recentPageIds.map((pageId) {
+                  final node = widget.index.findNodeForPage(pageId);
+                  if (node == null) return const SizedBox.shrink();
+                  final page = node.pages.firstWhere((p) => p.id == pageId);
+                  
+                  return Card(
+                    color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      side: BorderSide(color: context.glassBorder),
+                    ),
+                    child: ListTile(
+                      leading: const Icon(Icons.description_rounded, color: Color(0xFF6366F1)),
+                      title: Text(page.title, style: TextStyle(color: context.textColor, fontWeight: FontWeight.w600)),
+                      subtitle: Text(node.nodeTitle, style: const TextStyle(color: Color(0xFF6366F1), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      trailing: const Icon(Icons.arrow_forward_rounded, size: 18),
+                      onTap: () {
+                         widget.onOpenNode(node, initialPageId: page.id);
+                      },
+                    ),
+                  );
+                }),
+              ],
             ],
           ),
         ),
@@ -388,7 +415,7 @@ class _MathPadLibraryTreeViewState extends State<MathPadLibraryTreeView> {
     bool isCurrent = false,
   }) {
     return GestureDetector(
-      onDoubleTap: () => _openNodePad(index),
+      onDoubleTap: isLeaf ? null : () => _drillInto(index),
       child: Card(
         color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
         shape: RoundedRectangleBorder(
@@ -413,10 +440,10 @@ class _MathPadLibraryTreeViewState extends State<MathPadLibraryTreeView> {
                   "You're here",
                   style: TextStyle(color: Color(0xFF22D3EE), fontSize: 11, fontWeight: FontWeight.bold),
                 )
-              : (isLeaf
-                    ? Text('Double-click to open', style: TextStyle(color: context.textColor60, fontSize: 11))
+              : (!isLeaf
+                    ? Text('Double-click to expand', style: TextStyle(color: context.textColor60, fontSize: 11))
                     : null),
-          onTap: isLeaf ? () => _openNodePad(index) : () => _drillInto(index),
+          onTap: () => _openNodePad(index),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

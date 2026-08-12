@@ -1,7 +1,7 @@
 # Material for square_pyramid
 newmtl square_pyramidMaterial
-Ka 0.191 0.126 0.338
-Kd 0.545 0.361 0.965
+Ka 0.410 0.410 0.420
+Kd 0.820 0.820 0.840
 Ks 0.25 0.25 0.25
 Ns 20
 d 1.0

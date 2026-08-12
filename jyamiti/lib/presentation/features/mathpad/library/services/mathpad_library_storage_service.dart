@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,6 +28,11 @@ const String _lastWorkedPrefsKey = 'jyamiti_mathpad_last_worked';
 ///       <pageId>/
 ///         page.json             // full MathPadPageSnapshot
 ///         images/line_2.png ... // any fillImage bytes referenced by page.json
+///         thumb.png             // cached small preview image (see saveThumbnail),
+///                                // regenerated on every save -- the pages
+///                                // sidebar reads ONLY this, never page.json,
+///                                // so opening it doesn't pay a full-decode
+///                                // cost per page.
 /// ```
 ///
 /// Not usable on web (no real filesystem) -- callers must gate on `kIsWeb`
@@ -156,6 +162,34 @@ class MathPadLibraryStorageService {
     }
     await tmpImagesDir.rename(imagesDir.path);
     await tmpPageFile.rename('${pageDir.path}/page.json');
+  }
+
+  /// Persists a small cached preview image for the page -- generated once
+  /// per save (see `_captureThumbnail` in `mathpad.dart`, the only place
+  /// that actually rasterizes the canvas), so the pages sidebar can just
+  /// display a static image instead of paying a full `loadPage` decode
+  /// (JSON parse + stroke reconstruction + image-codec work) and a live
+  /// vector re-render for every page just to show a thumbnail. Same
+  /// atomic tmp-then-rename pattern as `savePage`/`saveIndex`.
+  Future<void> saveThumbnail(String batchId, String pageId, Uint8List pngBytes) async {
+    final pageDir = await _pageDir(batchId, pageId);
+    if (!await pageDir.exists()) {
+      await pageDir.create(recursive: true);
+    }
+    final tmpFile = File('${pageDir.path}/thumb.png.tmp');
+    await tmpFile.writeAsBytes(pngBytes);
+    await tmpFile.rename('${pageDir.path}/thumb.png');
+  }
+
+  /// Returns `null` (not an exception) when no thumbnail has been
+  /// generated yet -- e.g. a page that's never been saved since this
+  /// feature shipped, or a page created and not yet autosaved. The pages
+  /// sidebar shows a placeholder icon in that case.
+  Future<Uint8List?> loadThumbnail(String batchId, String pageId) async {
+    final pageDir = await _pageDir(batchId, pageId);
+    final file = File('${pageDir.path}/thumb.png');
+    if (!await file.exists()) return null;
+    return file.readAsBytes();
   }
 
   /// Deletes the on-disk directory for every page in [pageIds]. The caller

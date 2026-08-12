@@ -109,11 +109,15 @@ class RulerState extends InstrumentState {
 
 class ProtractorState extends InstrumentState {
   double radius; // px
+  bool pencilArmed;
+  double pencilAngle; // radians, relative to local coordinate system (0 is right, -pi is left)
 
   ProtractorState({
     required super.pivot,
     super.rotation = 0,
     this.radius = 120,
+    this.pencilArmed = false,
+    this.pencilAngle = -pi / 4, // starts at 45 degrees to avoid overlapping 'remove' handle
   });
 
   @override
@@ -125,10 +129,10 @@ class ProtractorState extends InstrumentState {
   @override
   Map<String, Offset> handleWorldPositions() {
     return {
+      'pencil': rotatedLocal(radius * cos(pencilAngle), radius * sin(pencilAngle)),
       'move': rotatedLocal(0, 26),
       'rotate': rotatedLocal(radius + 18, 0),
       'resize': rotatedLocal(-radius - 18, 0),
-      'remove': rotatedLocal(0, -radius - 18),
     };
   }
 }
@@ -213,11 +217,11 @@ class SetSquareState extends InstrumentState {
     final legLen = _baseLegPx * scale;
     switch (kind) {
       case SetSquareKind.fortyFive:
-        return [Offset.zero, Offset(legLen, 0), Offset(0, legLen)];
+        return [Offset.zero, Offset(legLen, 0), Offset(0, -legLen)];
       case SetSquareKind.thirtySixty:
         // 60° angle at the origin's base neighbour -> height = legLen*tan(60°)
         final height = legLen * tan(pi / 3);
-        return [Offset.zero, Offset(legLen, 0), Offset(0, height)];
+        return [Offset.zero, Offset(legLen, 0), Offset(0, -height)];
     }
   }
 

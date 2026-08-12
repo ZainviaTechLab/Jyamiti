@@ -46,6 +46,8 @@ class ProtractorWidget extends StatelessWidget {
               _visualHandle(handles['move']!, InstrumentHandleRole.move),
               _visualHandle(handles['rotate']!, InstrumentHandleRole.rotate),
               _visualHandle(handles['resize']!, InstrumentHandleRole.resize),
+              if (handles.containsKey('pencil'))
+                _visualHandle(handles['pencil']!, InstrumentHandleRole.pencil, armed: state.pencilArmed),
             ],
           ),
         ),
@@ -53,12 +55,12 @@ class ProtractorWidget extends StatelessWidget {
     );
   }
 
-  Widget _visualHandle(Offset worldPos, InstrumentHandleRole role) {
+  Widget _visualHandle(Offset worldPos, InstrumentHandleRole role, {bool armed = false}) {
     const r = InstrumentHandle.size / 2;
     return Positioned(
       left: worldPos.dx - r,
       top: worldPos.dy - r,
-      child: InstrumentHandle(role: role, tooltip: ''),
+      child: InstrumentHandle(role: role, tooltip: '', armed: armed),
     );
   }
 }
