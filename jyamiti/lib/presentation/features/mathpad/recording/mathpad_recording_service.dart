@@ -730,13 +730,17 @@ class MathPadRecordingService extends ChangeNotifier {
       // `outPath` regardless of what happens from here -- everything
       // below is a strictly additive second pass that can only ever
       // improve on that, never take it away.
-      if (!cameraWasEnabled) return outPath;
+      if (!cameraWasEnabled) {
+        await _generateThumbnail(outPath);
+        return outPath;
+      }
 
       final File cameraFile = File(p.join(sessionDir.path, 'camera.mp4'));
       if (!await cameraFile.exists()) {
         onCameraWarning?.call(
           'Camera capture produced no video -- saved without it.',
         );
+        await _generateThumbnail(outPath);
         return outPath;
       }
       try {
@@ -752,10 +756,13 @@ class MathPadRecordingService extends ChangeNotifier {
           totalDurationSeconds: totalDurationSeconds,
           fastEncode: fastEncode,
         );
+        await _generateThumbnail(finalVideoPath);
+        return finalVideoPath;
       } catch (e) {
         onCameraWarning?.call(
           'Camera couldn\'t be added to the video -- saved without it.',
         );
+        await _generateThumbnail(outPath);
         return outPath;
       }
     } finally {
@@ -897,6 +904,21 @@ class MathPadRecordingService extends ChangeNotifier {
     }
     _state = MathPadRecordingState.idle;
     _emit();
+  }
+
+  Future<void> _generateThumbnail(String videoPath) async {
+    final String ffmpegPath = _resolveFfmpegPath();
+    final String thumbnailPath = videoPath.replaceAll('.mp4', '.png');
+    try {
+      await Process.run(ffmpegPath, [
+        '-y',
+        '-i', videoPath,
+        '-ss', '00:00:00.500',
+        '-vframes', '1',
+        '-q:v', '2',
+        thumbnailPath,
+      ]);
+    } catch (_) {}
   }
 
   String _resolveFfmpegPath() {

@@ -220,6 +220,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                         itemBuilder: (context, index) {
                           final file = files[index];
                           final fileName = file.path.split(Platform.pathSeparator).last;
+                          final thumbnailFile = File(file.path.replaceAll('.mp4', '.png'));
                           
                           int fileSize = 0;
                           DateTime? date;
@@ -247,17 +248,27 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                             ),
                             child: ListTile(
                               contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                              leading: Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF6366F1).withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Icon(
-                                  Icons.movie_creation_rounded,
-                                  color: Color(0xFF6366F1),
-                                ),
-                              ),
+                              leading: thumbnailFile.existsSync()
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Image.file(
+                                        thumbnailFile,
+                                        width: 44,
+                                        height: 44,
+                                        fit: BoxFit.cover,
+                                      ),
+                                    )
+                                  : Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: const Icon(
+                                        Icons.movie_creation_rounded,
+                                        color: Color(0xFF6366F1),
+                                      ),
+                                    ),
                               title: Text(
                                 fileName,
                                 style: TextStyle(
