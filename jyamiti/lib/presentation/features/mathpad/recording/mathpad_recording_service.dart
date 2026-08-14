@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
@@ -145,7 +146,7 @@ class MathPadRecordingService extends ChangeNotifier {
 
   /// Windows-only feature -- no bundled ffmpeg exists for other platforms,
   /// and mobile/web would need an entirely different capture mechanism.
-  static bool get isSupportedPlatform => Platform.isWindows;
+  static bool get isSupportedPlatform => Platform.isWindows || Platform.isMacOS;
 
   /// Best-effort probe for a usable webcam, so the UI can grey out/hide
   /// the camera toggle up front instead of the tutor only finding out
@@ -165,18 +166,48 @@ class MathPadRecordingService extends ChangeNotifier {
     if (!await File(ffmpegPath).exists()) return null;
     ProcessResult result;
     try {
-      result = await Process.run(ffmpegPath, [
-        '-hide_banner',
-        '-f', 'dshow',
-        '-list_devices', 'true',
-        '-i', 'dummy',
-      ]);
+      if (Platform.isMacOS) {
+        result = await Process.run(ffmpegPath, [
+          '-hide_banner',
+          '-f', 'avfoundation',
+          '-list_devices', 'true',
+          '-i', '""',
+        ]);
+      } else {
+        result = await Process.run(ffmpegPath, [
+          '-hide_banner',
+          '-f', 'dshow',
+          '-list_devices', 'true',
+          '-i', 'dummy',
+        ]);
+      }
     } catch (_) {
       return null;
     }
     final String output = result.stderr is String
         ? result.stderr as String
         : result.stderr.toString();
+        
+    if (Platform.isMacOS) {
+      bool inVideoSection = false;
+      for (final rawLine in output.split('\n')) {
+        final String line = rawLine.trim();
+        if (line.contains('AVFoundation video devices:')) {
+          inVideoSection = true;
+          continue;
+        }
+        if (line.contains('AVFoundation audio devices:')) {
+          inVideoSection = false;
+          continue;
+        }
+        if (inVideoSection) {
+          final match = RegExp(r'\[(\d+)\]').firstMatch(line);
+          if (match != null) return match.group(1);
+        }
+      }
+      return null;
+    }
+
     bool inVideoSection = false;
     for (final rawLine in output.split('\n')) {
       final String line = rawLine.trim();
@@ -260,14 +291,14 @@ class MathPadRecordingService extends ChangeNotifier {
     final Directory tempRoot = await getTemporaryDirectory();
     final String sessionId = DateTime.now().millisecondsSinceEpoch.toString();
     final Directory sessionDir = Directory(
-      '${tempRoot.path}${Platform.pathSeparator}mathpad_recording_$sessionId',
+      p.join(tempRoot.path, 'mathpad_recording_$sessionId'),
     );
     await sessionDir.create(recursive: true);
 
     try {
       await _audioRecorder.start(
         const RecordConfig(encoder: AudioEncoder.wav),
-        path: '${sessionDir.path}${Platform.pathSeparator}audio.wav',
+        path: p.join(sessionDir.path, 'audio.wav'),
       );
     } catch (e) {
       if (await sessionDir.exists()) {
@@ -294,18 +325,30 @@ class MathPadRecordingService extends ChangeNotifier {
     if (includeCamera) {
       try {
         final String? device = await _detectCameraDeviceName();
+        final String ffmpegPath = _resolveFfmpegPath();
         if (device == null) {
           onCameraWarning?.call('No camera was found -- recording without one.');
         } else {
-          _cameraProcess = await Process.start(_resolveFfmpegPath(), [
-            '-y',
-            '-f', 'dshow',
-            '-i', 'video=$device',
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-pix_fmt', 'yuv420p',
-            '${sessionDir.path}${Platform.pathSeparator}camera.mp4',
-          ]);
+          final List<String> cameraArgs = Platform.isMacOS 
+              ? [
+                  '-y',
+                  '-f', 'avfoundation',
+                  '-i', device,
+                  '-c:v', 'libx264',
+                  '-preset', 'veryfast',
+                  '-pix_fmt', 'yuv420p',
+                  p.join(sessionDir.path, 'camera.mp4'),
+                ]
+              : [
+                  '-y',
+                  '-f', 'dshow',
+                  '-i', 'video=$device',
+                  '-c:v', 'libx264',
+                  '-preset', 'veryfast',
+                  '-pix_fmt', 'yuv420p',
+                  p.join(sessionDir.path, 'camera.mp4'),
+                ];
+          _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
           // IMPORTANT: We must consume stdout and stderr, otherwise the OS 
           // pipe buffer fills up with ffmpeg's continuous status output and 
           // causes ffmpeg to freeze permanently.
@@ -427,7 +470,7 @@ class MathPadRecordingService extends ChangeNotifier {
             _writtenFrameIndex++;
             final String fileName =
                 'frame_${_writtenFrameIndex.toString().padLeft(6, '0')}.png';
-            final File file = File('${_sessionDir!.path}${Platform.pathSeparator}$fileName');
+            final File file = File(p.join(_sessionDir!.path, fileName));
             await file.writeAsBytes(pngBytes);
             _concatEntries.add(_ConcatEntry(fileName, durationSeconds));
             _lastFrameBytes = pngBytes;
@@ -533,7 +576,7 @@ class MathPadRecordingService extends ChangeNotifier {
 
       final Directory outDir = await getRecordingsDir();
       final String outPath =
-          '${outDir.path}${Platform.pathSeparator}MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4';
+          p.join(outDir.path, 'MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4');
 
       // A concat-demuxer manifest instead of a plain numbered-frame glob:
       // each entry says how long (in seconds) to hold one physical PNG,
@@ -551,7 +594,7 @@ class MathPadRecordingService extends ChangeNotifier {
         manifest.writeln('duration ${entry.durationSeconds.toStringAsFixed(6)}');
       }
       manifest.writeln("file '${concatEntries.last.fileName}'");
-      final File manifestFile = File('${sessionDir.path}${Platform.pathSeparator}frames.ffconcat');
+      final File manifestFile = File(p.join(sessionDir.path, 'frames.ffconcat'));
       await manifestFile.writeAsString(manifest.toString());
 
       // Total captured timeline length -- the denominator for turning
@@ -689,7 +732,7 @@ class MathPadRecordingService extends ChangeNotifier {
       // improve on that, never take it away.
       if (!cameraWasEnabled) return outPath;
 
-      final File cameraFile = File('${sessionDir.path}${Platform.pathSeparator}camera.mp4');
+      final File cameraFile = File(p.join(sessionDir.path, 'camera.mp4'));
       if (!await cameraFile.exists()) {
         onCameraWarning?.call(
           'Camera capture produced no video -- saved without it.',
@@ -740,7 +783,7 @@ class MathPadRecordingService extends ChangeNotifier {
     required bool fastEncode,
   }) async {
     final String finalPath =
-        '${outDir.path}${Platform.pathSeparator}MathPad_${DateTime.now().millisecondsSinceEpoch}_cam.mp4';
+        p.join(outDir.path, 'MathPad_${DateTime.now().millisecondsSinceEpoch}_cam.mp4');
     final List<String> args = [
       '-y',
       '-progress', 'pipe:1',
@@ -858,13 +901,15 @@ class MathPadRecordingService extends ChangeNotifier {
 
   String _resolveFfmpegPath() {
     final String exeDir = File(Platform.resolvedExecutable).parent.path;
-    final String binaryName = Platform.isWindows ? 'ffmpeg.exe' : 'ffmpeg';
-    return '$exeDir${Platform.pathSeparator}$binaryName';
+    if (Platform.isMacOS) {
+      return p.join(exeDir, 'ffmpeg');
+    }
+    return p.join(exeDir, 'ffmpeg.exe');
   }
 
   Future<Directory> getRecordingsDir() async {
     final Directory docs = await getApplicationDocumentsDirectory();
-    final Directory recordings = Directory('${docs.path}${Platform.pathSeparator}Jyamiti Recordings');
+    final Directory recordings = Directory(p.join(docs.path, 'Jyamiti Recordings'));
     if (!await recordings.exists()) {
       await recordings.create(recursive: true);
     }
