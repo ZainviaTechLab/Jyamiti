@@ -260,14 +260,14 @@ class MathPadRecordingService extends ChangeNotifier {
     final Directory tempRoot = await getTemporaryDirectory();
     final String sessionId = DateTime.now().millisecondsSinceEpoch.toString();
     final Directory sessionDir = Directory(
-      '${tempRoot.path}\\mathpad_recording_$sessionId',
+      '${tempRoot.path}${Platform.pathSeparator}mathpad_recording_$sessionId',
     );
     await sessionDir.create(recursive: true);
 
     try {
       await _audioRecorder.start(
         const RecordConfig(encoder: AudioEncoder.wav),
-        path: '${sessionDir.path}\\audio.wav',
+        path: '${sessionDir.path}${Platform.pathSeparator}audio.wav',
       );
     } catch (e) {
       if (await sessionDir.exists()) {
@@ -304,7 +304,7 @@ class MathPadRecordingService extends ChangeNotifier {
             '-c:v', 'libx264',
             '-preset', 'veryfast',
             '-pix_fmt', 'yuv420p',
-            '${sessionDir.path}\\camera.mp4',
+            '${sessionDir.path}${Platform.pathSeparator}camera.mp4',
           ]);
           // IMPORTANT: We must consume stdout and stderr, otherwise the OS 
           // pipe buffer fills up with ffmpeg's continuous status output and 
@@ -427,7 +427,7 @@ class MathPadRecordingService extends ChangeNotifier {
             _writtenFrameIndex++;
             final String fileName =
                 'frame_${_writtenFrameIndex.toString().padLeft(6, '0')}.png';
-            final File file = File('${_sessionDir!.path}\\$fileName');
+            final File file = File('${_sessionDir!.path}${Platform.pathSeparator}$fileName');
             await file.writeAsBytes(pngBytes);
             _concatEntries.add(_ConcatEntry(fileName, durationSeconds));
             _lastFrameBytes = pngBytes;
@@ -533,7 +533,7 @@ class MathPadRecordingService extends ChangeNotifier {
 
       final Directory outDir = await getRecordingsDir();
       final String outPath =
-          '${outDir.path}\\MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4';
+          '${outDir.path}${Platform.pathSeparator}MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
       // A concat-demuxer manifest instead of a plain numbered-frame glob:
       // each entry says how long (in seconds) to hold one physical PNG,
@@ -551,7 +551,7 @@ class MathPadRecordingService extends ChangeNotifier {
         manifest.writeln('duration ${entry.durationSeconds.toStringAsFixed(6)}');
       }
       manifest.writeln("file '${concatEntries.last.fileName}'");
-      final File manifestFile = File('${sessionDir.path}\\frames.ffconcat');
+      final File manifestFile = File('${sessionDir.path}${Platform.pathSeparator}frames.ffconcat');
       await manifestFile.writeAsString(manifest.toString());
 
       // Total captured timeline length -- the denominator for turning
@@ -689,7 +689,7 @@ class MathPadRecordingService extends ChangeNotifier {
       // improve on that, never take it away.
       if (!cameraWasEnabled) return outPath;
 
-      final File cameraFile = File('${sessionDir.path}\\camera.mp4');
+      final File cameraFile = File('${sessionDir.path}${Platform.pathSeparator}camera.mp4');
       if (!await cameraFile.exists()) {
         onCameraWarning?.call(
           'Camera capture produced no video -- saved without it.',
@@ -740,7 +740,7 @@ class MathPadRecordingService extends ChangeNotifier {
     required bool fastEncode,
   }) async {
     final String finalPath =
-        '${outDir.path}\\MathPad_${DateTime.now().millisecondsSinceEpoch}_cam.mp4';
+        '${outDir.path}${Platform.pathSeparator}MathPad_${DateTime.now().millisecondsSinceEpoch}_cam.mp4';
     final List<String> args = [
       '-y',
       '-progress', 'pipe:1',
@@ -858,12 +858,13 @@ class MathPadRecordingService extends ChangeNotifier {
 
   String _resolveFfmpegPath() {
     final String exeDir = File(Platform.resolvedExecutable).parent.path;
-    return '$exeDir\\ffmpeg.exe';
+    final String binaryName = Platform.isWindows ? 'ffmpeg.exe' : 'ffmpeg';
+    return '$exeDir${Platform.pathSeparator}$binaryName';
   }
 
   Future<Directory> getRecordingsDir() async {
     final Directory docs = await getApplicationDocumentsDirectory();
-    final Directory recordings = Directory('${docs.path}\\Jyamiti Recordings');
+    final Directory recordings = Directory('${docs.path}${Platform.pathSeparator}Jyamiti Recordings');
     if (!await recordings.exists()) {
       await recordings.create(recursive: true);
     }
