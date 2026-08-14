@@ -748,7 +748,7 @@ class MathPadRecordingService extends ChangeNotifier {
         encodingProgress = 0.0;
         onEncodingProgress?.call(0.0);
         notifyListeners();
-        return await _overlayCamera(
+        final String finalVideoPath = await _overlayCamera(
           ffmpegPath: ffmpegPath,
           canvasVideoPath: outPath,
           cameraVideoPath: cameraFile.path,
