@@ -24,6 +24,8 @@ import '../../../widgets/writing_pad_widget.dart';
 import '../../competitions/screens/tutor_competition_host_screen.dart';
 import '../../competitions/screens/tutor_arena_history_screen.dart';
 import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
+import 'tutor_recordings_screen.dart';
+import '../../mathpad/recording/mathpad_recording_service.dart';
 
 class TutorDashboard extends StatefulWidget {
   const TutorDashboard({super.key});
@@ -232,6 +234,8 @@ class _TutorDashboardState extends State<TutorDashboard> {
           batches: profile?['batches'] as List?,
           isInline: true,
         );
+      case 11:
+        return const TutorRecordingsScreen(isInline: true);
       default:
         return _buildOverviewTab(profile);
     }
@@ -1273,6 +1277,36 @@ class _TutorDashboardState extends State<TutorDashboard> {
                           7,
                           'My Notes',
                           Icons.note_alt_rounded,
+                        ),
+                        
+                        Consumer<MathPadRecordingService>(
+                          builder: (context, recordingService, child) {
+                            final bool isEncoding = recordingService.state == MathPadRecordingState.encoding;
+                            return Stack(
+                              children: [
+                                _buildSidebarItem(
+                                  11,
+                                  'Recordings',
+                                  Icons.video_library_rounded,
+                                ),
+                                if (isEncoding)
+                                  Positioned(
+                                    right: 24,
+                                    top: 18,
+                                    child: SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          Color(0xFFF43F5E),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
                         ),
 
 

@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import 'package:jyamiti/providers/theme_provider.dart';
+import '../../recording/mathpad_recording_service.dart';
 
 import '../../screens/mathpad.dart';
 import '../models/mathpad_library_models.dart';
@@ -153,6 +155,19 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
     _autosaveTimer?.cancel();
     _bottomBarTimer?.cancel();
     _hoverTimer?.cancel();
+    
+    // Auto-stop recording if they leave the editor entirely
+    try {
+      final recordingService = Provider.of<MathPadRecordingService>(context, listen: false);
+      if (recordingService.state == MathPadRecordingState.recording) {
+        recordingService.stopCapture().then((_) {
+          recordingService.encode(fastEncode: true);
+        });
+      }
+    } catch (_) {
+      // Ignore if Provider can't be read during dispose
+    }
+    
     super.dispose();
   }
 

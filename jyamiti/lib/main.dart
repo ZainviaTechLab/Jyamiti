@@ -26,6 +26,7 @@ import 'services/api_service.dart';
 import 'services/offline_sync_service.dart';
 import 'presentation/widgets/theme_reveal.dart';
 import 'presentation/features/mathpad/mathpad_shader_warmup.dart';
+import 'presentation/features/mathpad/recording/mathpad_recording_service.dart';
 
 void main() {
   // Must be set before `WidgetsFlutterBinding.ensureInitialized()` --
@@ -54,6 +55,7 @@ void main() {
         providers: [
           ChangeNotifierProvider(create: (_) => AuthProvider()),
           ChangeNotifierProvider(create: (_) => ThemeProvider()),
+          ChangeNotifierProvider(create: (_) => MathPadRecordingService()),
         ],
         child: const LearningPlatformApp(),
       ),

@@ -1352,9 +1352,24 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // See `MathPadRecordingService` -- the key is what lets it snapshot just
   // the canvas below, not the toolbar or anything outside this widget.
   final GlobalKey _canvasCaptureKey = GlobalKey();
-  final MathPadRecordingService _recordingService = MathPadRecordingService();
+  late MathPadRecordingService _recordingService;
   MathPadRecordingState _recordingState = MathPadRecordingState.idle;
   Duration _recordingElapsed = Duration.zero;
+  // 0..1 while `_recordingState == encoding` -- drives the neon progress
+  // bar under the top bar, see `_buildEncodingProgressBar`.
+  double _encodingProgress = 0.0;
+  // Shown in the encoding badge -- swaps to "Adding camera…" for the
+  // second overlay pass of a camera-enabled recording (see
+  // `MathPadRecordingService.onEncodingPhaseChanged`); stays "Encoding…"
+  // the whole time for a plain recording, so that badge text is
+  // completely unchanged from before this field existed.
+  String _encodingPhaseLabel = 'Encoding…';
+  // Opt-in toggle next to the record button -- OFF by default, so a
+  // recording behaves exactly as it always has unless the tutor
+  // explicitly turns this on before hitting Record. See
+  // `MathPadRecordingService.start`'s `includeCamera`.
+  bool _recordWithCamera = false;
+  Completer<bool>? _fastEncodeCompleter;
 
   // A small pixel ratio, not the device's real one -- this is only ever
   // displayed at ~120px tall in the Math Pad Library's pages sidebar, so a
@@ -1656,12 +1671,42 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _selectionGlowPhase += 0.9;
       _activeDrawingNotifier.value++;
     });
+    
+    _recordingService = Provider.of<MathPadRecordingService>(context, listen: false);
+    
+    _recordingState = _recordingService.state;
+    if (_recordingState == MathPadRecordingState.recording) {
+      _recordingService.updateCanvasKey(_canvasCaptureKey);
+    }
+    
     _recordingService.onUpdate = (state, elapsed) {
       if (!mounted) return;
       setState(() {
         _recordingState = state;
         _recordingElapsed = elapsed;
+        if (state != MathPadRecordingState.encoding) {
+          _encodingProgress = 0.0;
+          _encodingPhaseLabel = 'Encoding…';
+        }
       });
+    };
+    _recordingService.onEncodingProgress = (progress) {
+      if (!mounted) return;
+      setState(() => _encodingProgress = progress);
+    };
+    _recordingService.onEncodingPhaseChanged = (label) {
+      if (!mounted) return;
+      setState(() => _encodingPhaseLabel = label);
+    };
+    _recordingService.onCameraWarning = (message) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.orange.shade800,
+          duration: const Duration(seconds: 5),
+        ),
+      );
     };
     widget.onEditorReady?.call(
       () => (
@@ -1690,7 +1735,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _bakedStrokesNotifier.dispose();
     _activeDrawingNotifier.dispose();
     _frictionController?.dispose();
-    _recordingService.dispose();
+
+    _recordingService.onUpdate = null;
+    _recordingService.onEncodingProgress = null;
+    _recordingService.onEncodingPhaseChanged = null;
     _laserFadeTimer?.cancel();
     _selectionGlowTimer?.cancel();
     super.dispose();
@@ -1699,7 +1747,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Future<void> _toggleRecording() async {
     if (_recordingState == MathPadRecordingState.recording) {
       try {
-        final String path = await _recordingService.stop();
+        await _recordingService.stopCapture();
+        
+        _fastEncodeCompleter = Completer<bool>();
+        // Wait up to 3 seconds for the user to make a choice
+        Timer(const Duration(seconds: 3), () {
+          if (_fastEncodeCompleter != null && !_fastEncodeCompleter!.isCompleted) {
+            _fastEncodeCompleter!.complete(false); // Default to standard encode
+          }
+        });
+
+        final bool fastEncode = await _fastEncodeCompleter!.future;
+        _fastEncodeCompleter = null;
+
+        final String path = await _recordingService.encode(fastEncode: fastEncode);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1722,7 +1783,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
     if (_recordingState != MathPadRecordingState.idle) return;
     try {
-      await _recordingService.start(_canvasCaptureKey);
+      await _recordingService.start(
+        _canvasCaptureKey,
+        includeCamera: _recordWithCamera,
+      );
     } on MathPadRecordingException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -6945,7 +7009,69 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               child: _buildToolbarAndCanvas(context, isDark, bgColor),
             ),
             if (_isHydratingInitialContent) _buildHydrationOverlay(isDark),
+            // Lives in THIS outer `Stack`, not inside the toolbar/canvas
+            // subtree that `_isFullScreenMode` swaps layouts within -- so
+            // it keeps showing at the very top edge (the bottom of the
+            // docked top bar in the normal layout) even when Full Screen
+            // hides the rest of the toolbar chrome.
+            if (_recordingState == MathPadRecordingState.encoding)
+              _buildEncodingProgressBar(),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// A thin neon progress bar reflecting real encode progress (from
+  /// `MathPadRecordingService.onEncodingProgress`, parsed off ffmpeg's own
+  /// `-progress` output -- see that service) instead of the old
+  /// indeterminate spinner, so a lecture-length encode reads as "working,
+  /// N% done" rather than "stuck". Same neon palette as
+  /// `_NeonBorderPainter`'s live-recording border, so the two read as one
+  /// continuous "something is actively happening" visual language across
+  /// record -> encode.
+  Widget _buildEncodingProgressBar() {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+          child: SizedBox(
+            height: 4,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final double fraction = _encodingProgress.clamp(0.0, 1.0);
+                return Stack(
+                  children: [
+                    Container(color: Colors.black.withValues(alpha: 0.35)),
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOut,
+                      width: constraints.maxWidth * fraction,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [
+                            Color(0xFF00F5FF), // cyan
+                            Color(0xFF6366F1), // brand indigo
+                            Color(0xFFFF00E5), // magenta
+                          ],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF6366F1).withValues(alpha: 0.9),
+                            blurRadius: 10,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -7512,7 +7638,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         children: [
           _buildCanvasCaptureArea(context, isDark, bgColor),
           if (_recordingState == MathPadRecordingState.recording)
-            const _RecordingNeonBorder(),
+            _RecordingNeonBorder(showCameraIcon: _recordWithCamera),
           if (_recordingState != MathPadRecordingState.idle)
             _buildRecordingBadge(context),
         ],
@@ -7522,6 +7648,69 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   Widget _buildRecordingBadge(BuildContext context) {
     final bool encoding = _recordingState == MathPadRecordingState.encoding;
+    final bool waitingChoice = _recordingState == MathPadRecordingState.waitingForEncodeChoice;
+
+    Widget badgeContent;
+    if (waitingChoice) {
+      badgeContent = GestureDetector(
+        onTap: () {
+          if (_fastEncodeCompleter != null && !_fastEncodeCompleter!.isCompleted) {
+            _fastEncodeCompleter!.complete(true);
+          }
+        },
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.bolt, size: 16, color: Colors.amber),
+            SizedBox(width: 6),
+            Text(
+              'FAST ENCODE (Click!)',
+              style: TextStyle(
+                color: Colors.amber,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      badgeContent = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (encoding)
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+                value: _encodingProgress > 0 ? _encodingProgress : null,
+              ),
+            )
+          else
+            const Icon(
+              Icons.fiber_manual_record_rounded,
+              size: 14,
+              color: Colors.redAccent,
+            ),
+          const SizedBox(width: 8),
+          Text(
+            encoding
+                ? (_encodingProgress > 0
+                      ? '$_encodingPhaseLabel ${(_encodingProgress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                      : _encodingPhaseLabel)
+                : 'REC ${_formatRecordingElapsed(_recordingElapsed)}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      );
+    }
+
     return Positioned(
       top: 16,
       left: 0,
@@ -7540,37 +7729,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ),
             ],
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (encoding)
-                const SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              else
-                const Icon(
-                  Icons.fiber_manual_record_rounded,
-                  size: 14,
-                  color: Colors.redAccent,
-                ),
-              const SizedBox(width: 8),
-              Text(
-                encoding
-                    ? 'Encoding…'
-                    : 'REC ${_formatRecordingElapsed(_recordingElapsed)}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
+          child: badgeContent,
         ),
       ),
     );
@@ -8423,7 +8582,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       ),
                       const SizedBox(width: 4),
                       IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 18),
+                        icon: Icon(Icons.close_rounded, size: 18, color: _textColor70),
                         onPressed: () => setState(() => _selectedLines.clear()),
                         tooltip: 'Deselect',
                       ),
@@ -9058,25 +9217,25 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       }
                     }),
                     itemBuilder: (ctx) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 2.0,
-                        child: Text('Fine (2px)'),
+                        child: Text('Fine (2px)', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 4.0,
-                        child: Text('Medium (4px)'),
+                        child: Text('Medium (4px)', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 6.0,
-                        child: Text('Bold (6px)'),
+                        child: Text('Bold (6px)', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 8.0,
-                        child: Text('Thick (8px)'),
+                        child: Text('Thick (8px)', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 14.0,
-                        child: Text('Marker (14px)'),
+                        child: Text('Marker (14px)', style: TextStyle(color: _textColor)),
                       ),
                     ],
                   ),
@@ -9204,17 +9363,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     color: isDark ? const Color(0xFF1E293B) : Colors.white,
                     onSelected: (m) => setState(() => _bgMode = m),
                     itemBuilder: (ctx) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: CanvasBgMode.grid,
-                        child: Text('📐 Math Grid'),
+                        child: Text('📐 Math Grid', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: CanvasBgMode.ruled,
-                        child: Text('📝 Ruled Lines'),
+                        child: Text('📝 Ruled Lines', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: CanvasBgMode.blank,
-                        child: Text('📄 Blank Canvas'),
+                        child: Text('📄 Blank Canvas', style: TextStyle(color: _textColor)),
                       ),
                     ],
                   ),
@@ -9232,7 +9391,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             _themeMode == MathPadTheme.cosmos
                                 ? Icons.auto_awesome_rounded
                                 : (_themeMode == MathPadTheme.aswadLail
-                                      ? Icons.brightness_1_rounded
+                                      ? Icons.nights_stay_rounded
                                       : (_themeMode == MathPadTheme.dark
                                             ? Icons.dark_mode_rounded
                                             : Icons.light_mode_rounded)),
@@ -9251,21 +9410,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       await prefs.setString('mathpad_default_theme', m.name);
                     },
                     itemBuilder: (ctx) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: MathPadTheme.light,
-                        child: Text('☀️ Light Mode'),
+                        child: Text('☀️ Light Mode', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: MathPadTheme.dark,
-                        child: Text('🌙 Dark Mode'),
+                        child: Text('🌙 Dark Mode', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: MathPadTheme.cosmos,
-                        child: Text('🌌 Jyamiti Cosmos (#0F2B52)'),
+                        child: Text('🌌 Jyamiti Cosmos (#0F2B52)', style: TextStyle(color: _textColor)),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: MathPadTheme.aswadLail,
-                        child: Text('⚫ Aswad Lail (#000000)'),
+                        child: Text('⚫ Aswad Lail (#000000)', style: TextStyle(color: _textColor)),
                       ),
                     ],
                   ),
@@ -9522,7 +9681,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
                   const SizedBox(width: 8),
                   IconButton(
-                    icon: const Icon(Icons.view_sidebar_rounded, size: 20),
+                    icon: Icon(Icons.view_sidebar_rounded, size: 20, color: _textColor),
                     onPressed: () =>
                         setState(() => _toolbarOnLeft = !_toolbarOnLeft),
                     tooltip: _toolbarOnLeft
@@ -9533,6 +9692,49 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   if (!kIsWeb &&
                       MathPadRecordingService.isSupportedPlatform) ...[
                     const SizedBox(width: 8),
+                    // Opt-in, off by default -- only changes what a NEW
+                    // recording does when you press the record button
+                    // next; never touches the plain canvas+voice
+                    // recording itself. Baked into the exported video
+                    // only (never shown live here on the canvas), so
+                    // toggling it doesn't add anything to what you're
+                    // looking at while you draw.
+                    IconButton(
+                      icon: Icon(
+                        _recordWithCamera
+                            ? Icons.videocam_rounded
+                            : Icons.videocam_off_rounded,
+                        size: 20,
+                        color: _recordWithCamera
+                            ? const Color(0xFF6366F1)
+                            : _textColor,
+                      ),
+                      onPressed: _recordingState == MathPadRecordingState.idle
+                          ? () async {
+                              if (!_recordWithCamera) {
+                                final hasCam = await _recordingService.hasCamera();
+                                if (!hasCam) {
+                                  if (!mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('No camera found'),
+                                      backgroundColor: Colors.redAccent,
+                                      duration: Duration(seconds: 3),
+                                    ),
+                                  );
+                                  return;
+                                }
+                              }
+                              setState(
+                                () => _recordWithCamera = !_recordWithCamera,
+                              );
+                            }
+                          : null,
+                      tooltip: _recordWithCamera
+                          ? 'Camera box will be added to the exported video -- tap to turn off'
+                          : 'Add a small camera box to the exported video -- tap to turn on',
+                    ),
+                    const SizedBox(width: 8),
                     IconButton(
                       icon: Icon(
                         _recordingState == MathPadRecordingState.recording
@@ -9542,7 +9744,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         color:
                             _recordingState == MathPadRecordingState.recording
                             ? Colors.redAccent
-                            : null,
+                            : _textColor,
                       ),
                       onPressed:
                           _recordingState == MathPadRecordingState.encoding
@@ -9553,7 +9755,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           ? 'Stop Recording'
                           : (_recordingState == MathPadRecordingState.encoding
                                 ? 'Encoding…'
-                                : 'Record Board + Voice'),
+                                : (_recordWithCamera
+                                      ? 'Record Board + Voice + Camera'
+                                      : 'Record Board + Voice')),
                     ),
                   ],
 
@@ -9564,6 +9768,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           ? Icons.fullscreen_exit_rounded
                           : Icons.fullscreen_rounded,
                       size: 20,
+                      color: _textColor,
                     ),
                     onPressed: () => setState(() {
                       _isFullScreenMode = !_isFullScreenMode;
@@ -9578,7 +9783,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   if (widget.onClose != null) ...[
                     const SizedBox(width: 8),
                     IconButton(
-                      icon: const Icon(Icons.close_rounded, size: 20),
+                      icon: Icon(Icons.close_rounded, size: 20, color: _textColor),
                       onPressed: _handleCloseTap,
                       tooltip: 'Close Writing Screen',
                     ),
@@ -10618,6 +10823,29 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           }
           canvas.drawPath(livePath, paint);
         }
+
+        // Draw a distinct pen tip at the very end of the stroke so viewers of
+        // the recorded video can clearly see the exact drawing position.
+        if (!line.isEraser) {
+          final Offset tipPos = line.points.last.offset;
+          
+          // Draw a small contrasting halo/shadow to make the tip pop against any line color
+          final haloPaint = Paint()
+            ..isAntiAlias = true
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.0 / scale
+            ..color = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.3);
+            
+          final tipPaint = Paint()
+            ..isAntiAlias = true
+            ..style = PaintingStyle.fill
+            ..color = isDark ? Colors.white : Colors.black87;
+
+          final double radius = (line.strokeWidth / 2) + (1.5 / scale);
+          
+          canvas.drawCircle(tipPos, radius, tipPaint);
+          canvas.drawCircle(tipPos, radius, haloPaint);
+        }
       }
 
       // 1b. Live eraser cursor ring -- see `_eraserCursorPos`'s doc comment:
@@ -11203,7 +11431,8 @@ class MathsPadFullScreenPage extends StatelessWidget {
 }
 
 class _RecordingNeonBorder extends StatefulWidget {
-  const _RecordingNeonBorder();
+  final bool showCameraIcon;
+  const _RecordingNeonBorder({this.showCameraIcon = false});
 
   @override
   State<_RecordingNeonBorder> createState() => _RecordingNeonBorderState();
@@ -11252,8 +11481,21 @@ class _RecordingNeonBorderState extends State<_RecordingNeonBorder>
                   );
             return Opacity(
               opacity: opacity,
-              child: CustomPaint(
-                painter: _NeonBorderPainter(angle: _controller.value * 2 * pi),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (widget.showCameraIcon)
+                    Center(
+                      child: Icon(
+                        Icons.filter_center_focus,
+                        size: 120,
+                        color: Colors.white.withValues(alpha: 0.15),
+                      ),
+                    ),
+                  CustomPaint(
+                    painter: _NeonBorderPainter(angle: _controller.value * 2 * pi),
+                  ),
+                ],
               ),
             );
           },

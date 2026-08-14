@@ -1,16 +1,18 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
-enum MathPadRecordingState { idle, recording, encoding }
+enum MathPadRecordingState { idle, recording, waitingForEncodeChoice, encoding }
 
 class MathPadRecordingException implements Exception {
   final String message;
@@ -22,14 +24,36 @@ class MathPadRecordingException implements Exception {
 /// Records the Math Pad canvas (not the whole screen/window) plus
 /// microphone narration into one .mp4 -- Windows only.
 ///
-/// The "video" side is just repeated `RenderRepaintBoundary.toImage()`
-/// snapshots of the canvas (the same technique `ThemeReveal` already uses
-/// for its transition screenshot) written out as numbered PNG frames,
-/// since Flutter has no built-in screen/window capture or video encoder.
-/// [stop] hands those frames + the recorded WAV audio to a bundled
+/// Optionally also a small webcam picture-in-picture box, baked into the
+/// exported video only (never shown live on the canvas while drawing) --
+/// see `start`'s `includeCamera` and the "Camera capture" section below.
+/// That webcam side runs as its own completely independent `ffmpeg`
+/// process capturing straight from the DirectShow device to its own file
+/// for the whole session, and is only ever combined with the canvas video
+/// as a SEPARATE overlay pass after the normal (unchanged) canvas encode
+/// below has already finished and produced a complete, valid video on its
+/// own. That ordering is deliberate: the canvas capture/encode path here
+/// is never touched or made conditional on the camera in any way, so a
+/// plain recording (`includeCamera: false`, the default) behaves
+/// identically to before this existed, and a camera failure of any kind
+/// (no webcam, permission denied, overlay pass errors out) can only ever
+/// cost the camera video-in-video, never the underlying recording.
+///
+/// The "video" side is repeated `RenderRepaintBoundary.toImage()` snapshots
+/// of the canvas (the same technique `ThemeReveal` already uses for its
+/// transition screenshot), since Flutter has no built-in screen/window
+/// capture or video encoder. A snapshot only gets written to disk as a new
+/// PNG frame when it's actually different from the last one written --
+/// otherwise the stretch of time it covers (the board sitting idle while
+/// the tutor talks, or a slow capture falling behind) is just added as
+/// extra hold-duration on that existing frame, tracked in `_concatEntries`.
+/// This keeps both disk I/O during a long recording and ffmpeg's work at
+/// `stop()` proportional to how much actually changed on the board, not to
+/// how long the recording ran. [stop] hands that frame set (as a concat
+/// manifest -- see `stop()`) + the recorded WAV audio to a bundled
 /// `ffmpeg.exe` (installed next to the app exe by the Windows build, see
 /// `windows/CMakeLists.txt`) to mux/encode into the final video.
-class MathPadRecordingService {
+class MathPadRecordingService extends ChangeNotifier {
   MathPadRecordingService();
 
   // 60fps to match how fluid the live drawing itself already feels (the
@@ -53,26 +77,166 @@ class MathPadRecordingService {
   bool _frameCallbackRegistered = false;
   bool _captureInFlight = false;
   Directory? _sessionDir;
+  // `_frameCount` is the *timeline* position in 1/fps slots (used to keep
+  // the video's length truthful to real elapsed time, same as before).
+  // It's no longer 1:1 with the number of PNG files actually written --
+  // see `_lastFrameBytes` below.
   int _frameCount = 0;
   DateTime? _startedAt;
   GlobalKey? _canvasKey;
+
+  // Intermediate state for delayed encode choice
+  List<_ConcatEntry>? _capturedConcatEntries;
+  Directory? _capturedSessionDir;
+  bool _capturedCameraWasEnabled = false;
+  String? _capturedAudioPath;
+
+  // Byte-for-byte content of the most recently *written* frame, so an
+  // unchanged board (the tutor pausing to talk, or a slow capture falling
+  // behind on a static frame) doesn't get re-encoded and rewritten to disk
+  // on every single 1/fps tick. A long recording spends most of its time
+  // with nothing actually changing on screen, so skipping those repeats
+  // is what keeps both disk I/O during capture and ffmpeg's decode work
+  // at `stop()` proportional to how much the board actually changed, not
+  // to how long the recording ran.
+  Uint8List? _lastFrameBytes;
+  int _writtenFrameIndex = 0;
+  final List<_ConcatEntry> _concatEntries = [];
+
+  // ─── Camera capture (optional, additive -- see the class doc above) ────
+  // Entirely separate from everything above: its own ffmpeg process
+  // writing its own file, started/stopped alongside the canvas
+  // capture/mic but never read from or written into by any of it.
+  Process? _cameraProcess;
+  bool _cameraEnabled = false;
 
   MathPadRecordingState _state = MathPadRecordingState.idle;
   MathPadRecordingState get state => _state;
   Duration elapsed = Duration.zero;
 
+  /// 0..1 once encoding starts producing real output -- parsed from
+  /// ffmpeg's own `-progress` stream in `stop()`, not estimated.
+  double encodingProgress = 0.0;
+
   /// Called on every state change and roughly once a second while
   /// recording (to update the elapsed-time badge).
   void Function(MathPadRecordingState state, Duration elapsed)? onUpdate;
+
+  /// Called (throttled to a few times a second) with `encodingProgress`
+  /// while `state == encoding`, so the UI can show a real percentage
+  /// instead of an indeterminate spinner.
+  void Function(double progress)? onEncodingProgress;
+
+  /// Fired if a `start(includeCamera: true)` recording's camera couldn't
+  /// be captured or added to the final video, for any reason (no webcam,
+  /// permission denied, the overlay pass itself failing) -- purely
+  /// informational, never thrown, since none of those should ever cost
+  /// the tutor the actual recording (which is already saved by the time
+  /// any camera-overlay failure could happen).
+  void Function(String message)? onCameraWarning;
+
+  /// Fired only during a camera-enabled recording's `stop()`, right as
+  /// encoding moves from the normal canvas pass into the second
+  /// camera-overlay pass -- lets the UI swap "Encoding…" for something
+  /// like "Adding camera…" instead of the progress bar silently
+  /// restarting from 0% with no explanation. Never fired at all for a
+  /// plain recording, so existing (no-camera) UI text is unaffected.
+  void Function(String label)? onEncodingPhaseChanged;
 
   /// Windows-only feature -- no bundled ffmpeg exists for other platforms,
   /// and mobile/web would need an entirely different capture mechanism.
   static bool get isSupportedPlatform => Platform.isWindows;
 
+  /// Best-effort probe for a usable webcam, so the UI can grey out/hide
+  /// the camera toggle up front instead of the tutor only finding out
+  /// "no camera" after already hitting Record.
+  Future<bool> hasCamera() async => (await _detectCameraDeviceName()) != null;
+
+  /// Parses ffmpeg's own `-f dshow -list_devices true` output (it prints
+  /// the device list to stderr as a side effect of intentionally failing
+  /// to open the fake "dummy" device) to find the first available video
+  /// capture device's exact name, e.g. `"Integrated Camera"` -- the form
+  /// `-f dshow -i video="<name>"` needs. Returns null (never throws) on
+  /// anything going wrong, from "ffmpeg missing" to "no camera plugged
+  /// in" to "ffmpeg's output format changed" -- every caller treats null
+  /// as just "no camera available" and degrades gracefully.
+  Future<String?> _detectCameraDeviceName() async {
+    final String ffmpegPath = _resolveFfmpegPath();
+    if (!await File(ffmpegPath).exists()) return null;
+    ProcessResult result;
+    try {
+      result = await Process.run(ffmpegPath, [
+        '-hide_banner',
+        '-f', 'dshow',
+        '-list_devices', 'true',
+        '-i', 'dummy',
+      ]);
+    } catch (_) {
+      return null;
+    }
+    final String output = result.stderr is String
+        ? result.stderr as String
+        : result.stderr.toString();
+    bool inVideoSection = false;
+    for (final rawLine in output.split('\n')) {
+      final String line = rawLine.trim();
+      
+      // Modern ffmpeg output includes "(video)" inline.
+      if (line.contains('(video)')) {
+        final match = RegExp(r'"([^"]+)"').firstMatch(line);
+        if (match != null) return match.group(1);
+      }
+
+      if (line.contains('DirectShow video devices')) {
+        inVideoSection = true;
+        continue;
+      }
+      if (line.contains('DirectShow audio devices')) {
+        inVideoSection = false;
+        continue;
+      }
+      // Skip a device's "Alternative name" sub-line -- only the primary
+      // friendly name (what `-i video="..."` expects) is wanted.
+      if (inVideoSection && !line.contains('Alternative name')) {
+        final match = RegExp(r'"([^"]+)"').firstMatch(line);
+        if (match != null) return match.group(1);
+      }
+    }
+    return null;
+  }
+
+  /// Gracefully finishes the camera ffmpeg process (if one was started)
+  /// by writing 'q' to its stdin -- the standard way to tell an
+  /// interactive ffmpeg process to finish and flush its output cleanly;
+  /// just killing it can leave `camera.mp4` without a valid trailer.
+  /// Falls back to a hard kill if it doesn't exit promptly, so callers
+  /// (`stop()`/`cancel()`) can never hang waiting on this.
+  Future<void> _stopCameraCapture() async {
+    final Process? process = _cameraProcess;
+    _cameraProcess = null;
+    if (process == null) return;
+    try {
+      process.stdin.writeln('q');
+      await process.stdin.flush();
+    } catch (_) {}
+    try {
+      await process.exitCode.timeout(const Duration(seconds: 5));
+    } catch (_) {
+      process.kill(ProcessSignal.sigkill);
+    }
+  }
+
   /// [canvasKey] must point at a `RepaintBoundary` that already paints a
   /// fully opaque background itself (Math Pad's capture area does) --
   /// this service just snapshots it as-is, no post-capture compositing.
-  Future<void> start(GlobalKey canvasKey) async {
+  ///
+  /// [includeCamera] (default false, so every existing call site behaves
+  /// exactly as before) additionally starts an independent webcam capture
+  /// alongside the canvas/mic -- see the class doc comment. Any camera
+  /// failure (no device, permission denied) only ever disables the
+  /// camera for this recording (reported via [onCameraWarning]); it never
+  /// prevents or aborts the recording itself the way a mic failure does.
+  Future<void> start(GlobalKey canvasKey, {bool includeCamera = false}) async {
     if (_state != MathPadRecordingState.idle) return;
     if (!Platform.isWindows) {
       throw MathPadRecordingException(
@@ -115,8 +279,48 @@ class MathPadRecordingService {
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
     _frameCount = 0;
+    _lastFrameBytes = null;
+    _writtenFrameIndex = 0;
+    _concatEntries.clear();
+    encodingProgress = 0.0;
     _startedAt = DateTime.now();
     elapsed = Duration.zero;
+
+    // Camera is best-effort and starts AFTER the canvas/mic side is
+    // already fully committed above -- so any trouble here (no webcam,
+    // permission denied, ffmpeg failing to spawn) only ever disables the
+    // camera for this recording, never the recording itself.
+    _cameraEnabled = false;
+    if (includeCamera) {
+      try {
+        final String? device = await _detectCameraDeviceName();
+        if (device == null) {
+          onCameraWarning?.call('No camera was found -- recording without one.');
+        } else {
+          _cameraProcess = await Process.start(_resolveFfmpegPath(), [
+            '-y',
+            '-f', 'dshow',
+            '-i', 'video=$device',
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-pix_fmt', 'yuv420p',
+            '${sessionDir.path}\\camera.mp4',
+          ]);
+          // IMPORTANT: We must consume stdout and stderr, otherwise the OS 
+          // pipe buffer fills up with ffmpeg's continuous status output and 
+          // causes ffmpeg to freeze permanently.
+          _cameraProcess!.stdout.listen((_) {});
+          _cameraProcess!.stderr.listen((_) {});
+          
+          _cameraEnabled = true;
+        }
+      } catch (e) {
+        _cameraProcess = null;
+        _cameraEnabled = false;
+        onCameraWarning?.call('Could not start the camera -- recording without it.');
+      }
+    }
+
     _state = MathPadRecordingState.recording;
     _emit();
 
@@ -199,21 +403,34 @@ class MathPadRecordingService {
         if (bytes != null && _sessionDir != null) {
           final Uint8List pngBytes = bytes.buffer.asUint8List();
           // The capture above (toImage + PNG-encode) can take longer than
-          // one frame interval on a big/complex board, so more
-          // than one frame-slot may be due by the time it finishes.
-          // Writing this same just-captured frame into every due slot
-          // keeps the final video's length truthful to how long the
-          // recording actually ran -- otherwise a slow capture would
-          // quietly make the video shorter than the on-screen timer, and
-          // since `stop()` mixes it with a real-time-length audio track
-          // using `-shortest`, that would also chop the tail off the
-          // narration to match.
+          // one frame interval on a big/complex board, so more than one
+          // frame-slot may be due by the time it finishes -- `fillTo` is
+          // however many 1/fps slots have now elapsed. The video's length
+          // must stay truthful to that regardless (otherwise it drifts
+          // short of the real-time-length audio track, chopping the tail
+          // off the narration when `stop()` muxes with `-shortest`), but
+          // that no longer means writing this frame to disk once per slot:
+          // if it's byte-identical to the last frame we actually wrote
+          // (the board didn't change -- e.g. the tutor paused to talk),
+          // every one of those slots is just added as extra duration on
+          // the existing concat entry instead of a fresh file. Only a
+          // genuinely different frame gets written and starts a new entry.
           final int fillTo = max(_targetFrameCountNow(), _frameCount + 1);
-          for (int n = _frameCount + 1; n <= fillTo; n++) {
-            final File file = File(
-              '${_sessionDir!.path}\\frame_${n.toString().padLeft(6, '0')}.png',
-            );
+          final int slotsElapsed = fillTo - _frameCount;
+          final double durationSeconds = slotsElapsed / fps;
+
+          final bool sameAsLast =
+              _lastFrameBytes != null && _bytesEqual(_lastFrameBytes!, pngBytes);
+          if (sameAsLast && _concatEntries.isNotEmpty) {
+            _concatEntries.last.durationSeconds += durationSeconds;
+          } else {
+            _writtenFrameIndex++;
+            final String fileName =
+                'frame_${_writtenFrameIndex.toString().padLeft(6, '0')}.png';
+            final File file = File('${_sessionDir!.path}\\$fileName');
             await file.writeAsBytes(pngBytes);
+            _concatEntries.add(_ConcatEntry(fileName, durationSeconds));
+            _lastFrameBytes = pngBytes;
           }
           _frameCount = fillTo;
         }
@@ -229,19 +446,20 @@ class MathPadRecordingService {
     _emit();
   }
 
-  /// Stops capturing, encodes what was captured into an .mp4 via the
-  /// bundled ffmpeg, saves it under Documents\Jyamiti Recordings, and
-  /// returns the final file path. Throws [MathPadRecordingException] on
-  /// failure (nothing captured, ffmpeg missing/failed, etc.) -- always
-  /// clears the temp session first either way.
-  Future<String> stop() async {
+  /// Stops capturing, halts all inputs, and moves to a waiting state.
+  /// Call `encode()` immediately after to process the captured data.
+  void updateCanvasKey(GlobalKey canvasKey) {
+    _canvasKey = canvasKey;
+  }
+
+  Future<void> stopCapture() async {
     if (_state != MathPadRecordingState.recording) {
       throw MathPadRecordingException('Not currently recording.');
     }
     _frameTimer?.cancel();
     _frameTimer = null;
-    // Let any in-flight frame capture finish before we start reading
-    // `_frameCount`/muxing, instead of racing it.
+    
+    // Let any in-flight frame capture finish before we freeze state
     while (_captureInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
     }
@@ -250,16 +468,41 @@ class MathPadRecordingService {
     try {
       audioPath = await _audioRecorder.stop();
     } catch (e) {
-      // The mic recorder failing to stop cleanly shouldn't leave this
-      // service stuck thinking it's still "recording" forever (with no
-      // way for the UI to retry) -- fall through with no audio track
-      // rather than aborting the whole capture.
       audioPath = null;
     }
-    final Directory sessionDir = _sessionDir!;
-    final int frameCount = _frameCount;
-    _sessionDir = null;
+
+    await _stopCameraCapture();
+
+    _capturedConcatEntries = List.of(_concatEntries);
+    _capturedSessionDir = _sessionDir;
+    _capturedCameraWasEnabled = _cameraEnabled;
+    _capturedAudioPath = audioPath;
+
     _canvasKey = null;
+    _sessionDir = null;
+    _startedAt = null;
+    _cameraProcess = null;
+    _cameraEnabled = false;
+    _frameCount = 0;
+    _writtenFrameIndex = 0;
+    _lastFrameBytes = null;
+    _concatEntries.clear();
+
+    _state = MathPadRecordingState.waitingForEncodeChoice;
+    _emit();
+  }
+
+  /// Encodes the captured frames and audio into an .mp4 via the bundled ffmpeg.
+  /// If [fastEncode] is true, uses much faster compression presets.
+  Future<String> encode({bool fastEncode = false}) async {
+    if (_state != MathPadRecordingState.waitingForEncodeChoice) {
+      throw MathPadRecordingException('Not waiting for encode.');
+    }
+
+    final List<_ConcatEntry> concatEntries = _capturedConcatEntries ?? [];
+    final Directory sessionDir = _capturedSessionDir!;
+    final bool cameraWasEnabled = _capturedCameraWasEnabled;
+    final String? audioPath = _capturedAudioPath;
 
     _state = MathPadRecordingState.encoding;
     _emit();
@@ -270,7 +513,7 @@ class MathPadRecordingService {
       }
     }
 
-    if (frameCount == 0) {
+    if (concatEntries.isEmpty) {
       await cleanup();
       _state = MathPadRecordingState.idle;
       _emit();
@@ -288,20 +531,64 @@ class MathPadRecordingService {
         );
       }
 
-      final Directory outDir = await _ensureRecordingsDir();
+      final Directory outDir = await getRecordingsDir();
       final String outPath =
           '${outDir.path}\\MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
+      // A concat-demuxer manifest instead of a plain numbered-frame glob:
+      // each entry says how long (in seconds) to hold one physical PNG,
+      // so a long static stretch (nothing drawn -- see `_captureFrame`'s
+      // dedup above) costs ffmpeg one small `duration` line instead of
+      // thousands of identical files to open, decode and re-encode. The
+      // concat demuxer only applies a `duration` line to the file that
+      // immediately precedes it, and ignores one trailing a final file
+      // with nothing after it -- so the last file is deliberately
+      // repeated once more with no duration line to make its hold time
+      // stick (a documented quirk of the format, not a bug here).
+      final StringBuffer manifest = StringBuffer('ffconcat version 1.0\n');
+      for (final entry in concatEntries) {
+        manifest.writeln("file '${entry.fileName}'");
+        manifest.writeln('duration ${entry.durationSeconds.toStringAsFixed(6)}');
+      }
+      manifest.writeln("file '${concatEntries.last.fileName}'");
+      final File manifestFile = File('${sessionDir.path}\\frames.ffconcat');
+      await manifestFile.writeAsString(manifest.toString());
+
+      // Total captured timeline length -- the denominator for turning
+      // ffmpeg's `-progress` output (which reports elapsed *output* time,
+      // not a percentage) into the 0..1 fraction the UI's progress bar
+      // wants. Same value the concat entries' durations were built from,
+      // so it lines up with what ffmpeg will actually encode.
+      final double totalDurationSeconds = concatEntries.fold(
+        0.0,
+        (sum, e) => sum + e.durationSeconds,
+      );
+
+      // The board is mostly flat colour/line art with long static
+      // stretches (talking, thinking) rather than the high-motion,
+      // fine-grain-detail video `medium`/low-crf is tuned for -- `veryfast`
+      // plus a slightly relaxed crf trades a little bitrate efficiency for
+      // dramatically less CPU time per frame, which matters much more once
+      // a real lecture-length recording is feeding it thousands of frames.
       final List<String> args = [
         '-y',
-        '-framerate', '$fps',
-        // Frames are written starting at frame_000001.png (index 1), but
-        // ffmpeg's image2 demuxer defaults to looking for index 0 first --
-        // without this it never finds frame_000000.png and fails outright
-        // before encoding anything.
-        '-start_number', '1',
-        '-i', '${sessionDir.path}\\frame_%06d.png',
+        // Machine-readable `key=value` progress lines on stdout (ending
+        // each block with `progress=continue`/`end`) instead of guessing
+        // at completion from an indeterminate spinner -- paired with
+        // `-nostats` so ffmpeg's normal human-readable stats lines don't
+        // also clutter stderr redundantly.
+        '-progress', 'pipe:1',
+        '-nostats',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', manifestFile.path,
         if (audioPath != null) ...['-i', audioPath],
+        // Normalizes the concat demuxer's variable-duration input frames
+        // into a proper constant-frame-rate output stream -- cheap for
+        // ffmpeg to do internally (it's just frame duplication at encode
+        // time), unlike materializing those same duplicate frames as
+        // files up front the way this used to work.
+        '-r', '$fps',
         // yuv420p (4:2:0 chroma subsampling) requires both dimensions to
         // be even -- the captured canvas size is whatever the window
         // happens to be, which is very often NOT even in both directions,
@@ -312,8 +599,8 @@ class MathPadRecordingService {
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-c:v', 'libx264',
         '-pix_fmt', 'yuv420p',
-        '-preset', 'medium',
-        '-crf', '18',
+        '-preset', fastEncode ? 'ultrafast' : 'veryfast',
+        '-crf', fastEncode ? '28' : '20',
         if (audioPath != null) ...[
           // Raw mic input volume varies a lot by device/distance/OS input
           // gain -- loudnorm brings it up to a consistent, clearly audible
@@ -329,19 +616,58 @@ class MathPadRecordingService {
         outPath,
       ];
 
-      final ProcessResult result;
+      final Process process;
       try {
-        result = await Process.run(ffmpegPath, args);
+        process = await Process.start(ffmpegPath, args);
       } on ProcessException catch (e) {
         throw MathPadRecordingException('Could not run ffmpeg: ${e.message}');
       }
-      if (result.exitCode != 0) {
+
+      final StringBuffer stderrBuffer = StringBuffer();
+      DateTime lastProgressEmit = DateTime.fromMillisecondsSinceEpoch(0);
+
+      final StreamSubscription<String> stdoutSub = process.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            // Each `-progress` block repeats several `key=value` lines --
+            // `out_time_us` (microseconds of output encoded so far) is the
+            // only one this needs. Throttled to a few updates/sec so a
+            // fast encode can't flood `setState` calls on the UI side.
+            if (line.startsWith('out_time_us=') && totalDurationSeconds > 0) {
+              final int? outTimeUs = int.tryParse(
+                line.substring('out_time_us='.length),
+              );
+              if (outTimeUs != null) {
+                encodingProgress = ((outTimeUs / 1000000) / totalDurationSeconds)
+                    .clamp(0.0, 1.0);
+                final DateTime now = DateTime.now();
+                if (now.difference(lastProgressEmit) >
+                    const Duration(milliseconds: 150)) {
+                  lastProgressEmit = now;
+                  onEncodingProgress?.call(encodingProgress);
+                  notifyListeners();
+                }
+              }
+            } else if (line == 'progress=end') {
+              encodingProgress = 1.0;
+              onEncodingProgress?.call(1.0);
+              notifyListeners();
+            }
+          });
+      final StreamSubscription<List<int>> stderrSub = process.stderr.listen(
+        (chunk) => stderrBuffer.write(utf8.decode(chunk, allowMalformed: true)),
+      );
+
+      final int exitCode = await process.exitCode;
+      await stdoutSub.cancel();
+      await stderrSub.cancel();
+
+      if (exitCode != 0) {
         // Surface ffmpeg's own stderr (its actual reason) instead of just
         // the exit code, so a failure like this is diagnosable from the
         // error message alone next time instead of needing to reproduce it.
-        final String stderrText = result.stderr is String
-            ? result.stderr as String
-            : result.stderr.toString();
+        final String stderrText = stderrBuffer.toString();
         final String tail = stderrText.trim().isEmpty
             ? '(no stderr output)'
             : stderrText
@@ -353,15 +679,161 @@ class MathPadRecordingService {
                   .reversed
                   .join('\n');
         throw MathPadRecordingException(
-          'Encoding failed (ffmpeg exit ${result.exitCode}):\n$tail',
+          'Encoding failed (ffmpeg exit $exitCode):\n$tail',
         );
       }
-      return outPath;
+
+      // The canvas-only video above is already complete and saved at
+      // `outPath` regardless of what happens from here -- everything
+      // below is a strictly additive second pass that can only ever
+      // improve on that, never take it away.
+      if (!cameraWasEnabled) return outPath;
+
+      final File cameraFile = File('${sessionDir.path}\\camera.mp4');
+      if (!await cameraFile.exists()) {
+        onCameraWarning?.call(
+          'Camera capture produced no video -- saved without it.',
+        );
+        return outPath;
+      }
+      try {
+        onEncodingPhaseChanged?.call('Adding camera…');
+        encodingProgress = 0.0;
+        onEncodingProgress?.call(0.0);
+        notifyListeners();
+        return await _overlayCamera(
+          ffmpegPath: ffmpegPath,
+          canvasVideoPath: outPath,
+          cameraVideoPath: cameraFile.path,
+          outDir: outDir,
+          totalDurationSeconds: totalDurationSeconds,
+          fastEncode: fastEncode,
+        );
+      } catch (e) {
+        onCameraWarning?.call(
+          'Camera couldn\'t be added to the video -- saved without it.',
+        );
+        return outPath;
+      }
     } finally {
+      encodingProgress = 0.0;
       await cleanup();
       _state = MathPadRecordingState.idle;
       _emit();
     }
+  }
+
+  /// Second, independent ffmpeg pass: overlays `cameraVideoPath` (scaled
+  /// small, top-right corner, thin white border) onto the already-fully-
+  /// encoded `canvasVideoPath`, re-using the same `-progress`-parsing
+  /// technique as the main encode above so the UI's progress bar keeps
+  /// reporting real numbers through this phase too. On success, the
+  /// superseded plain video is deleted so the tutor isn't left with two
+  /// near-duplicate files per recording; on failure, the caller falls
+  /// back to keeping the plain video (see `stop()`).
+  Future<String> _overlayCamera({
+    required String ffmpegPath,
+    required String canvasVideoPath,
+    required String cameraVideoPath,
+    required Directory outDir,
+    required double totalDurationSeconds,
+    required bool fastEncode,
+  }) async {
+    final String finalPath =
+        '${outDir.path}\\MathPad_${DateTime.now().millisecondsSinceEpoch}_cam.mp4';
+    final List<String> args = [
+      '-y',
+      '-progress', 'pipe:1',
+      '-nostats',
+      '-i', canvasVideoPath,
+      '-i', cameraVideoPath,
+      // Camera box: cropped to a square and scaled to 240x240 for a significantly
+      // larger PIP presence. Placed in the top-right corner with a small
+      // margin and a thin white border so it stays legible over any
+      // background colour. `overlay`'s default `eof_action` (repeat)
+      // freezes the box on its last frame if the camera feed happens to
+      // be a touch shorter than the canvas video, rather than cutting
+      // the output short -- so this deliberately does NOT pass
+      // `-shortest`, which would risk truncating the real recording to
+      // match a slightly-shorter camera capture instead.
+      '-filter_complex',
+      '[1:v]crop=ih:ih,scale=w=240:h=240,'
+          'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
+          '[0:v][cam]overlay=x=main_w-overlay_w-24:y=24[outv]',
+      '-map', '[outv]',
+      '-map', '0:a?',
+      '-c:v', 'libx264',
+      '-preset', fastEncode ? 'ultrafast' : 'veryfast',
+      '-crf', fastEncode ? '28' : '20',
+      '-c:a', 'copy',
+      finalPath,
+    ];
+
+    final Process process;
+    try {
+      process = await Process.start(ffmpegPath, args);
+    } on ProcessException catch (e) {
+      throw MathPadRecordingException('Could not run ffmpeg: ${e.message}');
+    }
+
+    final StringBuffer stderrBuffer = StringBuffer();
+    DateTime lastProgressEmit = DateTime.fromMillisecondsSinceEpoch(0);
+    final StreamSubscription<String> stdoutSub = process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) {
+          if (line.startsWith('out_time_us=') && totalDurationSeconds > 0) {
+            final int? outTimeUs = int.tryParse(
+              line.substring('out_time_us='.length),
+            );
+            if (outTimeUs != null) {
+              encodingProgress = ((outTimeUs / 1000000) / totalDurationSeconds)
+                  .clamp(0.0, 1.0);
+              final DateTime now = DateTime.now();
+              if (now.difference(lastProgressEmit) >
+                  const Duration(milliseconds: 150)) {
+                lastProgressEmit = now;
+                onEncodingProgress?.call(encodingProgress);
+                notifyListeners();
+              }
+            }
+          } else if (line == 'progress=end') {
+            encodingProgress = 1.0;
+            onEncodingProgress?.call(1.0);
+            notifyListeners();
+          }
+        });
+    final StreamSubscription<List<int>> stderrSub = process.stderr.listen(
+      (chunk) => stderrBuffer.write(utf8.decode(chunk, allowMalformed: true)),
+    );
+
+    final int exitCode = await process.exitCode;
+    await stdoutSub.cancel();
+    await stderrSub.cancel();
+
+    if (exitCode != 0) {
+      final String stderrText = stderrBuffer.toString();
+      final String tail = stderrText.trim().isEmpty
+          ? '(no stderr output)'
+          : stderrText
+                .trim()
+                .split('\n')
+                .reversed
+                .take(5)
+                .toList()
+                .reversed
+                .join('\n');
+      throw MathPadRecordingException(
+        'Camera overlay failed (ffmpeg exit $exitCode):\n$tail',
+      );
+    }
+
+    // Superseded by `finalPath` -- delete so the tutor doesn't end up
+    // with two near-duplicate files for one recording.
+    try {
+      await File(canvasVideoPath).delete();
+    } catch (_) {}
+    return finalPath;
   }
 
   /// Discards an in-progress recording without encoding anything.
@@ -370,9 +842,13 @@ class MathPadRecordingService {
     _frameTimer?.cancel();
     _frameTimer = null;
     await _audioRecorder.stop();
+    await _stopCameraCapture();
+    _cameraEnabled = false;
     final Directory? sessionDir = _sessionDir;
     _sessionDir = null;
     _canvasKey = null;
+    _lastFrameBytes = null;
+    _concatEntries.clear();
     if (sessionDir != null && await sessionDir.exists()) {
       await sessionDir.delete(recursive: true);
     }
@@ -385,7 +861,7 @@ class MathPadRecordingService {
     return '$exeDir\\ffmpeg.exe';
   }
 
-  Future<Directory> _ensureRecordingsDir() async {
+  Future<Directory> getRecordingsDir() async {
     final Directory docs = await getApplicationDocumentsDirectory();
     final Directory recordings = Directory('${docs.path}\\Jyamiti Recordings');
     if (!await recordings.exists()) {
@@ -394,10 +870,48 @@ class MathPadRecordingService {
     return recordings;
   }
 
-  void _emit() => onUpdate?.call(_state, elapsed);
+  Future<List<File>> getRecordings() async {
+    final Directory dir = await getRecordingsDir();
+    final List<FileSystemEntity> entities = await dir.list().toList();
+    final List<File> mp4Files = entities
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.mp4'))
+        .toList();
+    // Sort by modified date descending (newest first)
+    mp4Files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+    return mp4Files;
+  }
+
+  void _emit() {
+    onUpdate?.call(_state, elapsed);
+    notifyListeners();
+  }
 
   Future<void> dispose() async {
     _frameTimer?.cancel();
     await _audioRecorder.dispose();
+    _cameraProcess?.kill(ProcessSignal.sigkill);
   }
+}
+
+/// One physical frame file in the `stop()` concat manifest, plus how many
+/// seconds it should be held for (accumulated across every duplicate 1/fps
+/// slot it stood in for -- see the dedup check in `_captureFrame`).
+class _ConcatEntry {
+  final String fileName;
+  double durationSeconds;
+  _ConcatEntry(this.fileName, this.durationSeconds);
+}
+
+/// Manual length-then-contents comparison (early-exits on the first
+/// mismatch) -- cheap relative to the PNG encode that produced `a`/`b` in
+/// the first place, and avoids pulling in `package:collection` just for
+/// this one check.
+bool _bytesEqual(Uint8List a, Uint8List b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (int i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }

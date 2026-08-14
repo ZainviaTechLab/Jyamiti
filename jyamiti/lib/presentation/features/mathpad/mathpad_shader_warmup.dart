@@ -187,7 +187,10 @@ class MathPadShaderWarmUp extends ShaderWarmUp {
     // text-tool labels) -- `drawParagraph`'s own distinct text-rendering
     // pipeline, never exercised by any of the path/shape draws above.
     final TextPainter textPainter = TextPainter(
-      text: const TextSpan(text: '45°', style: TextStyle(color: Color(0xFF1E293B), fontSize: 14)),
+      text: const TextSpan(
+        text: '45°',
+        style: TextStyle(color: Color(0xFF1E293B), fontSize: 14),
+      ),
       textDirection: TextDirection.ltr,
     )..layout();
     textPainter.paint(canvas, const Offset(10, 10));
@@ -195,7 +198,10 @@ class MathPadShaderWarmUp extends ShaderWarmUp {
     // Rounded-rect fill + stroke -- the instrument bodies (ruler/set-square/
     // protractor) and most toolbar/UI chrome use `RRect`, not the plain
     // `Rect`/circular shapes drawn above.
-    final RRect rrect = RRect.fromRectAndRadius(const Rect.fromLTWH(20, 140, 100, 40), const Radius.circular(10));
+    final RRect rrect = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(20, 140, 100, 40),
+      const Radius.circular(10),
+    );
     canvas.drawRRect(rrect, Paint()..color = const Color(0xFF1E293B));
     canvas.drawRRect(
       rrect,
@@ -211,9 +217,12 @@ class MathPadShaderWarmUp extends ShaderWarmUp {
       const Offset(150, 40),
       15,
       Paint()
-        ..shader = const RadialGradient(
-          colors: [Color(0xFFE2E8F0), Color(0xFF94A3B8)],
-        ).createShader(Rect.fromCircle(center: const Offset(150, 40), radius: 15)),
+        ..shader =
+            const RadialGradient(
+              colors: [Color(0xFFE2E8F0), Color(0xFF94A3B8)],
+            ).createShader(
+              Rect.fromCircle(center: const Offset(150, 40), radius: 15),
+            ),
     );
 
     // Every geometry instrument (ruler/protractor/set-square) stamps a
@@ -222,7 +231,12 @@ class MathPadShaderWarmUp extends ShaderWarmUp {
     final ui.Image tinyImage = await _tinyImage();
     canvas.drawImageRect(
       tinyImage,
-      Rect.fromLTWH(0, 0, tinyImage.width.toDouble(), tinyImage.height.toDouble()),
+      Rect.fromLTWH(
+        0,
+        0,
+        tinyImage.width.toDouble(),
+        tinyImage.height.toDouble(),
+      ),
       const Rect.fromLTWH(60, 140, 40, 40),
       Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.55),
     );
@@ -235,7 +249,10 @@ class MathPadShaderWarmUp extends ShaderWarmUp {
       const Rect.fromLTWH(0, 0, 200, 200),
       Paint()..imageFilter = ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
     );
-    canvas.drawRect(const Rect.fromLTWH(0, 0, 200, 200), Paint()..color = const Color(0x1F000000));
+    canvas.drawRect(
+      const Rect.fromLTWH(0, 0, 200, 200),
+      Paint()..color = const Color(0x1F000000),
+    );
     canvas.restore();
 
     debugPrint('>>> MathPadShaderWarmUp.warmUpOnCanvas: DONE');
@@ -244,7 +261,13 @@ class MathPadShaderWarmUp extends ShaderWarmUp {
   Future<ui.Image> _tinyImage() {
     final completer = Completer<ui.Image>();
     final pixels = Uint8List.fromList(List.filled(4 * 4 * 4, 200));
-    ui.decodeImageFromPixels(pixels, 4, 4, ui.PixelFormat.rgba8888, completer.complete);
+    ui.decodeImageFromPixels(
+      pixels,
+      4,
+      4,
+      ui.PixelFormat.rgba8888,
+      completer.complete,
+    );
     return completer.future;
   }
 }

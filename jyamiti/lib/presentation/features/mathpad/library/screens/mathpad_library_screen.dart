@@ -252,13 +252,16 @@ class _MathPadLibraryScreenState extends State<MathPadLibraryScreen> {
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: _selectedBatchId,
-                hint: const Text('Select a batch'),
+                hint: Text('Select a batch', style: TextStyle(color: context.textColor)),
                 dropdownColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
                 icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6366F1)),
                 items: _batches.map<DropdownMenuItem<String>>((b) {
                   final id = (b['id'] ?? b['_id']).toString();
                   final name = (b['name'] ?? 'Batch').toString();
-                  return DropdownMenuItem(value: id, child: Text(name));
+                  return DropdownMenuItem(
+                    value: id,
+                    child: Text(name, style: TextStyle(color: context.textColor)),
+                  );
                 }).toList(),
                 onChanged: (val) {
                   if (val != null) _selectBatch(val);
