@@ -19,8 +19,8 @@ class GoogleAuthClient extends http.BaseClient {
 }
 
 class UploadService {
-  // Placeholder URL for your Digital Ocean backend endpoint that returns a short-lived access token
-  static const String _tokenEndpoint = 'http://localhost:5000/api/oauth/google-token';
+  // URL for your Digital Ocean backend endpoint that returns a short-lived access token
+  static const String _tokenEndpoint = 'https://api.jyamitimath.com/api/oauth/google-token';
 
   Future<String> _getAccessToken(String scope) async {
     try {
