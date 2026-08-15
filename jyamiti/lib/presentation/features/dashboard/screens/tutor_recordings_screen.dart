@@ -3,6 +3,7 @@ import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../mathpad/recording/mathpad_recording_service.dart';
 
@@ -40,6 +41,375 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
       i++;
     }
     return '${size.toStringAsFixed(1)} ${suffixes[i]}';
+  }
+
+  Future<void> _shareViaWhatsApp(File file) async {
+    try {
+      final result = await Share.shareXFiles([XFile(file.path)], text: 'Check out my MathPad recording!');
+      if (result.status == ShareResultStatus.success) {
+        // Shared successfully
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to share: $e')));
+      }
+    }
+  }
+
+  void _showDriveUploadDialog(File file, bool isDark) {
+    final baseName = p.basenameWithoutExtension(file.path);
+    final nameController = TextEditingController(text: baseName);
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          child: Container(
+            width: 500,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Image.asset('assets/image/drive_icon.png', width: 24, height: 24, errorBuilder: (c, e, s) => const Icon(Icons.add_to_drive, color: Colors.blue)),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Save to Google Drive',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check, color: Colors.white, size: 16),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(Icons.close, color: isDark ? Colors.white54 : Colors.black54),
+                      onPressed: () => Navigator.pop(context),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.account_circle, size: 20, color: Colors.green.shade600),
+                        const SizedBox(width: 8),
+                        Text('learn@jyamitimath.com', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                        const SizedBox(width: 16),
+                        TextButton(
+                          onPressed: () {},
+                          style: TextButton.styleFrom(
+                            foregroundColor: isDark ? Colors.white70 : Colors.black87,
+                            backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                          ),
+                          child: const Text('Disconnect'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text('File Name', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: nameController,
+                  style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                  decoration: InputDecoration(
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text('Destination', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isDark ? Colors.white.withOpacity(0.02) : Colors.grey.shade50,
+                    border: Border.all(color: isDark ? Colors.white24 : Colors.black12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      Text('All files', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: () {},
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF1E293B),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                        child: const Text('Select folder'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check, color: Colors.white, size: 12),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Video will be saved after export',
+                      style: TextStyle(color: Colors.green),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showYouTubeUploadDialog(File file, bool isDark) {
+    final baseName = p.basenameWithoutExtension(file.path);
+    final titleController = TextEditingController(text: baseName);
+    final descController = TextEditingController(text: 'This video was made with Jyamiti MathPad');
+    final keywordsController = TextEditingController(text: 'Jyamiti, Math, Education');
+    String privacy = 'Unlisted';
+    String category = 'Education';
+    bool isForKids = false;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+              child: Container(
+                width: 650,
+                padding: const EdgeInsets.all(32),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.account_circle, size: 20, color: Colors.green.shade600),
+                              const SizedBox(width: 8),
+                              Text('learn@jyamitimath.com', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                              const SizedBox(width: 16),
+                              TextButton(
+                                onPressed: () {},
+                                style: TextButton.styleFrom(
+                                  foregroundColor: isDark ? Colors.white70 : Colors.black87,
+                                  backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                ),
+                                child: const Text('Disconnect'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text('Title', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: titleController,
+                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                        decoration: InputDecoration(
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF6366F1))),
+                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF6366F1))),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text('Description', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: descController,
+                        maxLines: 4,
+                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                        decoration: InputDecoration(
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Video Privacy', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                                const SizedBox(height: 8),
+                                DropdownButtonFormField<String>(
+                                  value: privacy,
+                                  dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                  style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                                  decoration: InputDecoration(
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  ),
+                                  items: ['Public', 'Unlisted', 'Private'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                                  onChanged: (v) => setState(() => privacy = v!),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Category', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                                const SizedBox(height: 8),
+                                DropdownButtonFormField<String>(
+                                  value: category,
+                                  dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                  style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                                  decoration: InputDecoration(
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  ),
+                                  items: ['Education', 'Entertainment', 'People & Blogs'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                                  onChanged: (v) => setState(() => category = v!),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text('Keywords', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: keywordsController,
+                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                        decoration: InputDecoration(
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Text('Is this video made for kids?', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 8),
+                      Text(
+                        'In accordance with the Children\'s Online Privacy Protection Act (COPPA) and other laws, we require you to tell us whether your video is made for kids.',
+                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black54, fontSize: 12),
+                      ),
+                      const SizedBox(height: 16),
+                      Theme(
+                        data: Theme.of(context).copyWith(
+                          unselectedWidgetColor: isDark ? Colors.white54 : Colors.black54,
+                        ),
+                        child: Column(
+                          children: [
+                            RadioListTile<bool>(
+                              title: Text('Yes, it\'s made for kids', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 14)),
+                              value: true,
+                              groupValue: isForKids,
+                              onChanged: (v) => setState(() => isForKids = v!),
+                              contentPadding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                              activeColor: const Color(0xFF6366F1),
+                            ),
+                            RadioListTile<bool>(
+                              title: Text('No, it\'s not made for kids', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 14)),
+                              value: false,
+                              groupValue: isForKids,
+                              onChanged: (v) => setState(() => isForKids = v!),
+                              contentPadding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                              activeColor: const Color(0xFF6366F1),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Text.rich(
+                        TextSpan(
+                          text: 'By clicking "Upload", you certify that the content you are uploading complies with the YouTube Terms of Service (including the YouTube Community Guidelines) at ',
+                          children: [
+                            TextSpan(text: 'https://www.youtube.com/t/terms', style: TextStyle(color: const Color(0xFF6366F1), decoration: TextDecoration.underline)),
+                            TextSpan(text: '. Please be sure not to violate the copyright or privacy rights of others.'),
+                          ],
+                        ),
+                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black54, fontSize: 12),
+                      ),
+                      const SizedBox(height: 12),
+                      Text.rich(
+                        TextSpan(
+                          text: 'For more information on how YouTube in Jyamiti functions, please refer to the following ',
+                          children: [
+                            TextSpan(text: 'article', style: TextStyle(color: const Color(0xFF6366F1), decoration: TextDecoration.underline)),
+                            TextSpan(text: '.'),
+                          ],
+                        ),
+                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black54, fontSize: 12),
+                      ),
+                      const SizedBox(height: 24),
+                      FilledButton(
+                        onPressed: () {
+                          // TODO: Implement actual YouTube upload with OAuth
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Video queued for YouTube upload (OAuth pending)')));
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF38B2AC), // Teal color from screenshot
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                        child: const Text('Upload', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Widget _buildActiveEncodingCard(BuildContext context, MathPadRecordingService service) {
@@ -366,6 +736,59 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                         );
                       },
                     ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        PopupMenuButton<String>(
+                          icon: Icon(Icons.more_vert_rounded, size: 20, color: isDark ? Colors.white70 : Colors.black54),
+                          tooltip: 'Options',
+                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          onSelected: (value) {
+                            if (value == 'drive') {
+                              _showDriveUploadDialog(file, isDark);
+                            } else if (value == 'youtube') {
+                              _showYouTubeUploadDialog(file, isDark);
+                            } else if (value == 'whatsapp') {
+                              _shareViaWhatsApp(file);
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: 'drive',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.add_to_drive_rounded, color: Colors.blue, size: 20),
+                                  const SizedBox(width: 12),
+                                  Text('Save to Drive', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'youtube',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.play_circle_filled_rounded, color: Colors.red, size: 20),
+                                  const SizedBox(width: 12),
+                                  Text('Upload to YouTube', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'whatsapp',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.share_rounded, color: Colors.green, size: 20),
+                                  const SizedBox(width: 12),
+                                  Text('Share via WhatsApp', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -410,21 +833,74 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
             },
           ),
         ),
-        trailing: FilledButton.icon(
-          onPressed: () async {
-            final uri = Uri.file(file.path);
-            if (await canLaunchUrl(uri)) {
-              await launchUrl(uri);
-            }
-          },
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF6366F1),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PopupMenuButton<String>(
+              icon: Icon(Icons.more_vert_rounded, size: 20, color: isDark ? Colors.white70 : Colors.black54),
+              tooltip: 'Options',
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              onSelected: (value) {
+                if (value == 'drive') {
+                  _showDriveUploadDialog(file, isDark);
+                } else if (value == 'youtube') {
+                  _showYouTubeUploadDialog(file, isDark);
+                } else if (value == 'whatsapp') {
+                  _shareViaWhatsApp(file);
+                }
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'drive',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.add_to_drive_rounded, color: Colors.blue, size: 20),
+                      const SizedBox(width: 12),
+                      Text('Save to Drive', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'youtube',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.play_circle_filled_rounded, color: Colors.red, size: 20),
+                      const SizedBox(width: 12),
+                      Text('Upload to YouTube', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'whatsapp',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.share_rounded, color: Colors.green, size: 20),
+                      const SizedBox(width: 12),
+                      Text('Share via WhatsApp', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ),
-          icon: const Icon(Icons.play_arrow_rounded, size: 18),
-          label: const Text('Play'),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: () async {
+                final uri = Uri.file(file.path);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri);
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF6366F1),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.play_arrow_rounded, size: 18),
+              label: const Text('Play'),
+            ),
+          ],
         ),
       ),
     );
