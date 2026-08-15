@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../../providers/theme_provider.dart';
+import '../../../../services/upload_service.dart';
 import '../../mathpad/recording/mathpad_recording_service.dart';
 
 class TutorRecordingsScreen extends StatefulWidget {
@@ -171,19 +172,48 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                 ),
                 const SizedBox(height: 24),
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.green,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.check, color: Colors.white, size: 12),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.green,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.check, color: Colors.white, size: 12),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Video will be saved after export',
+                          style: TextStyle(color: Colors.green),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Video will be saved after export',
-                      style: TextStyle(color: Colors.green),
+                    FilledButton(
+                      onPressed: () async {
+                        showDialog(
+                          context: context, 
+                          barrierDismissible: false,
+                          builder: (c) => const Center(child: CircularProgressIndicator()),
+                        );
+                        
+                        try {
+                          await UploadService().uploadToDrive(file, nameController.text);
+                          if (context.mounted) {
+                            Navigator.pop(context); // pop loading
+                            Navigator.pop(context); // pop dialog
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully uploaded to Google Drive!')));
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            Navigator.pop(context); // pop loading
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+                          }
+                        }
+                      },
+                      child: const Text('Save to Drive'),
                     ),
                   ],
                 ),
@@ -388,10 +418,34 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                       ),
                       const SizedBox(height: 24),
                       FilledButton(
-                        onPressed: () {
-                          // TODO: Implement actual YouTube upload with OAuth
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Video queued for YouTube upload (OAuth pending)')));
+                        onPressed: () async {
+                          showDialog(
+                            context: context, 
+                            barrierDismissible: false,
+                            builder: (c) => const Center(child: CircularProgressIndicator()),
+                          );
+                          
+                          try {
+                            await UploadService().uploadToYouTube(
+                              video: file,
+                              title: titleController.text,
+                              description: descController.text,
+                              privacyStatus: privacy,
+                              categoryId: '27', // Education category ID for YouTube
+                              tags: keywordsController.text.split(',').map((e) => e.trim()).toList(),
+                              madeForKids: isForKids,
+                            );
+                            if (context.mounted) {
+                              Navigator.pop(context); // pop loading
+                              Navigator.pop(context); // pop dialog
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully uploaded to YouTube!')));
+                            }
+                          } catch (e) {
+                            if (context.mounted) {
+                              Navigator.pop(context); // pop loading
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+                            }
+                          }
                         },
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF38B2AC), // Teal color from screenshot
