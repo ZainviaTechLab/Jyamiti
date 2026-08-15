@@ -908,7 +908,16 @@ class MathPadRecordingService extends ChangeNotifier {
 
   Future<void> _generateThumbnail(String videoPath) async {
     final String ffmpegPath = _resolveFfmpegPath();
-    final String thumbnailPath = videoPath.replaceAll('.mp4', '.png');
+    final String baseName = p.basenameWithoutExtension(videoPath);
+    final String parentDir = File(videoPath).parent.path;
+    
+    final Directory thumbnailDir = Directory(p.join(parentDir, '.thumbnails'));
+    if (!await thumbnailDir.exists()) {
+      await thumbnailDir.create();
+    }
+    
+    final String thumbnailPath = p.join(thumbnailDir.path, '$baseName.png');
+    
     try {
       await Process.run(ffmpegPath, [
         '-y',

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -220,7 +221,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                         itemBuilder: (context, index) {
                           final file = files[index];
                           final fileName = file.path.split(Platform.pathSeparator).last;
-                          final thumbnailFile = File(file.path.replaceAll('.mp4', '.png'));
+                          final baseName = p.basenameWithoutExtension(file.path);
+                          final parentDir = file.parent.path;
+                          final thumbnailFile = File(p.join(parentDir, '.thumbnails', '$baseName.png'));
                           
                           int fileSize = 0;
                           DateTime? date;
