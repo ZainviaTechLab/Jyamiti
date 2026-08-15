@@ -950,6 +950,32 @@ class MathPadRecordingService extends ChangeNotifier {
     return mp4Files;
   }
 
+  final Map<String, String> _durationCache = {};
+
+  Future<String> getVideoDuration(String path) async {
+    if (_durationCache.containsKey(path)) return _durationCache[path]!;
+    
+    final String ffmpegPath = _resolveFfmpegPath();
+    if (!await File(ffmpegPath).exists()) return '';
+    
+    try {
+      final result = await Process.run(ffmpegPath, ['-i', path]);
+      final String output = result.stderr.toString();
+      final match = RegExp(r'Duration: (\d{2}:\d{2}:\d{2})').firstMatch(output);
+      if (match != null) {
+        final durationStr = match.group(1)!;
+        String display = durationStr;
+        if (display.startsWith('00:')) {
+          display = display.substring(3);
+        }
+        _durationCache[path] = display;
+        return display;
+      }
+    } catch (_) {}
+    
+    return '';
+  }
+
   void _emit() {
     onUpdate?.call(_state, elapsed);
     notifyListeners();

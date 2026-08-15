@@ -278,12 +278,19 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                               ),
                               subtitle: Padding(
                                 padding: const EdgeInsets.only(top: 6.0),
-                                child: Text(
-                                  'Status: Saved • $dateStr • $sizeStr',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: isDark ? Colors.white60 : Colors.black54,
-                                  ),
+                                child: FutureBuilder<String>(
+                                  future: context.read<MathPadRecordingService>().getVideoDuration(file.path),
+                                  builder: (context, durationSnapshot) {
+                                    final durationStr = durationSnapshot.data ?? '';
+                                    final durationPart = durationStr.isNotEmpty ? ' • $durationStr' : '';
+                                    return Text(
+                                      'Status: Saved$durationPart • $dateStr • $sizeStr',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: isDark ? Colors.white60 : Colors.black54,
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
                               trailing: FilledButton.icon(
