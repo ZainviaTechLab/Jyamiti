@@ -60,11 +60,15 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
   void _showDriveUploadDialog(File file, bool isDark) {
     final baseName = p.basenameWithoutExtension(file.path);
     final nameController = TextEditingController(text: baseName);
+    String? selectedFolderId;
+    String selectedFolderName = 'Tutor Uploads (Root Directory)';
     
     showDialog(
       context: context,
       builder: (context) {
-        return Dialog(
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Dialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
           child: Container(
@@ -138,7 +142,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                 Text('Destination', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: isDark ? Colors.white.withOpacity(0.02) : Colors.grey.shade50,
                     border: Border.all(color: isDark ? Colors.white24 : Colors.black12),
@@ -148,7 +152,32 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                     children: [
                       Icon(Icons.folder, color: isDark ? Colors.white54 : Colors.black54, size: 18),
                       const SizedBox(width: 8),
-                      Text('Tutor Uploads (Root Directory)', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                      Expanded(
+                        child: Text(selectedFolderName, style: TextStyle(color: isDark ? Colors.white : Colors.black87), overflow: TextOverflow.ellipsis),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (c) => _FolderSelectionDialog(
+                              isDark: isDark,
+                              onSelected: (id, name) {
+                                setState(() {
+                                  selectedFolderId = id == 'root' ? null : id;
+                                  selectedFolderName = name;
+                                });
+                              },
+                            ),
+                          );
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF1E293B),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                        child: const Text('Select folder'),
+                      ),
                     ],
                   ),
                 ),
@@ -182,7 +211,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                         );
                         
                         try {
-                          await UploadService().uploadToDrive(file, nameController.text);
+                          await UploadService().uploadToDrive(file, nameController.text, folderId: selectedFolderId);
                           if (context.mounted) {
                             Navigator.pop(context); // pop loading
                             Navigator.pop(context); // pop dialog
@@ -202,6 +231,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
               ],
             ),
           ),
+          },
         );
       },
     );
@@ -925,6 +955,148 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
               ),
               icon: const Icon(Icons.play_arrow_rounded, size: 18),
               label: const Text('Play'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FolderSelectionDialog extends StatefulWidget {
+  final bool isDark;
+  final void Function(String id, String name) onSelected;
+
+  const _FolderSelectionDialog({required this.isDark, required this.onSelected});
+
+  @override
+  State<_FolderSelectionDialog> createState() => _FolderSelectionDialogState();
+}
+
+class _FolderSelectionDialogState extends State<_FolderSelectionDialog> {
+  bool _isLoading = true;
+  List<Map<String, String>> _folders = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFolders();
+  }
+
+  Future<void> _loadFolders() async {
+    setState(() => _isLoading = true);
+    try {
+      final folders = await UploadService().listDriveFolders();
+      if (mounted) {
+        setState(() {
+          _folders = folders;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load folders: $e')));
+      }
+    }
+  }
+
+  Future<void> _createFolder() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: widget.isDark ? const Color(0xFF1E293B) : Colors.white,
+        title: Text('New Folder', style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87)),
+        content: TextField(
+          controller: controller,
+          style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87),
+          decoration: const InputDecoration(hintText: 'Folder Name'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, controller.text), child: const Text('Create')),
+        ],
+      ),
+    );
+
+    if (name != null && name.trim().isNotEmpty) {
+      setState(() => _isLoading = true);
+      try {
+        final id = await UploadService().createDriveFolder(name.trim());
+        if (mounted) {
+          widget.onSelected(id, name.trim());
+          Navigator.pop(context);
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to create folder: $e')));
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: widget.isDark ? const Color(0xFF1E293B) : Colors.white,
+      child: Container(
+        width: 400,
+        height: 500,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Select Folder', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: widget.isDark ? Colors.white : Colors.black87)),
+                IconButton(icon: Icon(Icons.close, color: widget.isDark ? Colors.white54 : Colors.black54), onPressed: () => Navigator.pop(context)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: _isLoading 
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    itemCount: _folders.length + 1,
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return ListTile(
+                          leading: Icon(Icons.folder_shared, color: widget.isDark ? Colors.white54 : Colors.black54),
+                          title: Text('Root Directory', style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87)),
+                          onTap: () {
+                            widget.onSelected('root', 'Tutor Uploads (Root Directory)');
+                            Navigator.pop(context);
+                          },
+                        );
+                      }
+                      final folder = _folders[index - 1];
+                      return ListTile(
+                        leading: Icon(Icons.folder, color: widget.isDark ? Colors.white54 : Colors.black54),
+                        title: Text(folder['name']!, style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87)),
+                        onTap: () {
+                          widget.onSelected(folder['id']!, folder['name']!);
+                          Navigator.pop(context);
+                        },
+                      );
+                    },
+                  ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.create_new_folder),
+                label: const Text('Create New Folder'),
+                onPressed: _createFolder,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF6366F1),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
             ),
           ],
         ),

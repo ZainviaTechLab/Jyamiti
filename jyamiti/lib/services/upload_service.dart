@@ -40,8 +40,47 @@ class UploadService {
     }
   }
 
+  Future<List<Map<String, String>>> listDriveFolders() async {
+    final token = await _getAccessToken('drive');
+    if (token == 'dummy_access_token_from_backend') return [];
+    
+    final client = GoogleAuthClient(token);
+    try {
+      final driveApi = drive.DriveApi(client);
+      final fileList = await driveApi.files.list(
+        q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
+        $fields: "files(id, name)",
+      );
+      
+      return (fileList.files ?? []).map((file) => {
+        'id': file.id ?? '',
+        'name': file.name ?? '',
+      }).toList();
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<String> createDriveFolder(String folderName) async {
+    final token = await _getAccessToken('drive');
+    if (token == 'dummy_access_token_from_backend') return 'dummy_folder_id';
+    
+    final client = GoogleAuthClient(token);
+    try {
+      final driveApi = drive.DriveApi(client);
+      final fileMetadata = drive.File()
+        ..name = folderName
+        ..mimeType = 'application/vnd.google-apps.folder';
+        
+      final folder = await driveApi.files.create(fileMetadata);
+      return folder.id ?? '';
+    } finally {
+      client.close();
+    }
+  }
+
   /// Uploads a video file to Google Drive.
-  Future<void> uploadToDrive(File video, String fileName) async {
+  Future<void> uploadToDrive(File video, String fileName, {String? folderId}) async {
     final token = await _getAccessToken('drive');
     final client = GoogleAuthClient(token);
     
@@ -50,7 +89,7 @@ class UploadService {
       
       final fileMetadata = drive.File()
         ..name = fileName
-        ..parents = ['root']; // Or a specific shared folder ID
+        ..parents = [folderId ?? 'root'];
         
       final media = drive.Media(video.openRead(), video.lengthSync());
       
