@@ -6908,7 +6908,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           : const Color(0xFFFCFDFE))));
 
     return PopScope(
-      canPop: _recordingState != MathPadRecordingState.recording && _recordingState != MathPadRecordingState.paused,
+      canPop: _recordingState != MathPadRecordingState.recording,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
         final shouldPop = await _onWillPop();
@@ -9913,7 +9913,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Future<bool> _onWillPop() async {
-    if (_recordingState == MathPadRecordingState.recording || _recordingState == MathPadRecordingState.paused) {
+    if (_recordingState == MathPadRecordingState.recording) {
       final bool? confirmClose = await showDialog<bool>(
         context: context,
         builder: (ctx) {
