@@ -6907,7 +6907,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           ? const Color(0xFF0F172A)
                           : const Color(0xFFFCFDFE))));
 
-    return Focus(
+    return PopScope(
+      canPop: _recordingState != MathPadRecordingState.recording && _recordingState != MathPadRecordingState.paused,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldPop = await _onWillPop();
+        if (shouldPop && context.mounted) {
+          Navigator.pop(context, result);
+        }
+      },
+      child: Focus(
       focusNode: _canvasFocusNode,
       autofocus: true,
       onKeyEvent: (node, event) {
@@ -9903,6 +9912,54 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
   }
 
+  Future<bool> _onWillPop() async {
+    if (_recordingState == MathPadRecordingState.recording || _recordingState == MathPadRecordingState.paused) {
+      final bool? confirmClose = await showDialog<bool>(
+        context: context,
+        builder: (ctx) {
+          final isDark = _isDarkTheme;
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+            title: Text(
+              'Recording in Progress',
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            content: Text(
+              'You have an active recording. If you exit now, the recording will be discarded. Are you sure you want to exit?',
+              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text('Cancel', style: TextStyle(color: context.textColor60)),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Exit Anyway'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (confirmClose == true) {
+        final recordingService = context.read<MathPadRecordingService>();
+        await recordingService.cancel();
+        return true;
+      }
+      return false;
+    }
+    return true;
+  }
+
   /// The ✕ button's handler. When this pad was opened with a save hook
   /// (i.e. from the Math Pad Library), everything is already being
   /// autosaved continuously -- so closing just does one last silent save
@@ -9911,6 +9968,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// `widget.onClose` unchanged, so every other/older caller's behavior is
   /// exactly as before.
   Future<void> _handleCloseTap() async {
+    if (!await _onWillPop()) return;
+
     if (widget.onSaveRequested != null) {
       await widget.onSaveRequested!(
         lines: _lines,
