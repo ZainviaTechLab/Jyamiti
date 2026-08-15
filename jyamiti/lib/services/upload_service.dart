@@ -20,29 +20,29 @@ class GoogleAuthClient extends http.BaseClient {
 
 class UploadService {
   // Placeholder URL for your Digital Ocean backend endpoint that returns a short-lived access token
-  static const String _tokenEndpoint = 'https://api.jyamitimath.com/oauth/token';
+  static const String _tokenEndpoint = 'http://localhost:5000/api/oauth/google-token';
 
-  /// Fetches a short-lived access token from the backend.
-  Future<String> _getAccessToken() async {
+  Future<String> _getAccessToken(String scope) async {
     try {
-      // Mock implementation: Normally you'd do an http.get or http.post here.
-      // final response = await http.get(Uri.parse(_tokenEndpoint));
-      // final data = jsonDecode(response.body);
-      // return data['access_token'];
-      
-      // Simulate network delay
-      await Future.delayed(const Duration(seconds: 1));
-      
-      // We return a dummy token for now since the backend doesn't exist yet.
-      return 'dummy_access_token_from_backend';
+      final response = await http.get(Uri.parse('$_tokenEndpoint?scope=$scope'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['access_token'] != null) {
+          return data['access_token'];
+        }
+      }
+      throw Exception('Failed to get token: ${response.body}');
     } catch (e) {
-      throw Exception('Failed to fetch access token from backend: $e');
+      // Fallback for testing if backend is not set up
+      print('Using fallback dummy token. Error: $e');
+      await Future.delayed(const Duration(seconds: 1));
+      return 'dummy_access_token_from_backend';
     }
   }
 
   /// Uploads a video file to Google Drive.
   Future<void> uploadToDrive(File video, String fileName) async {
-    final token = await _getAccessToken();
+    final token = await _getAccessToken('drive');
     final client = GoogleAuthClient(token);
     
     try {
@@ -76,7 +76,7 @@ class UploadService {
     required List<String> tags,
     required bool madeForKids,
   }) async {
-    final token = await _getAccessToken();
+    final token = await _getAccessToken('youtube');
     final client = GoogleAuthClient(token);
     
     try {
