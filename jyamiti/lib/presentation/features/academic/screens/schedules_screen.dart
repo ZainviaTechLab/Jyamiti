@@ -919,12 +919,12 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                                 icon: Icon(
                                   Icons.video_camera_front,
                                   size: 20,
-                                  color: context.textColor,
+                                  color: Colors.white,
                                 ),
                                 label: Text(
                                   'Join Live Session',
                                   style: TextStyle(
-                                    color: context.textColor,
+                                    color: Colors.white,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -1105,11 +1105,11 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                               icon: Icon(
                                 Icons.event_busy,
                                 size: 16,
-                                color: context.textColor,
+                                color: Colors.white,
                               ),
                               label: Text(
                                 'Apply for Leave',
-                                style: TextStyle(color: context.textColor),
+                                style: TextStyle(color: Colors.white),
                               ),
                               onPressed: () => _applyForLeave(schedule['_id']),
                             ),

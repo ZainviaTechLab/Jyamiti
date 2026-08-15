@@ -41,7 +41,7 @@ extension ThemeContextExtension on BuildContext {
   static const Color jyamitiCosmosColor = Color(0xFF0F2B52);
   Color get jyamitiCosmos => const Color(0xFF0F2B52);
   Color get jyamitiBg => jyamitiCosmos;
-  Color get glassBg => isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03);
-  Color get glassBorder => isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05);
+  Color get glassBg => isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.75);
+  Color get glassBorder => isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.9);
 }
 
