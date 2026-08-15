@@ -610,8 +610,7 @@ class MathsPadAction {
   });
 
   void undo(_MathsPadWidgetState state) {
-    if (addedLines.isNotEmpty)
-      state._lines.removeWhere((l) => addedLines.contains(l));
+    if (addedLines.isNotEmpty) state._lines.removeWhere((l) => addedLines.contains(l));
     if (removedLines.isNotEmpty) {
       state._lines.addAll(removedLines);
       for (final l in removedLines) {
@@ -619,15 +618,12 @@ class MathsPadAction {
       }
     }
 
-    if (addedLabels.isNotEmpty)
-      state._textLabels.removeWhere((l) => addedLabels.contains(l));
+    if (addedLabels.isNotEmpty) state._textLabels.removeWhere((l) => addedLabels.contains(l));
     if (removedLabels.isNotEmpty) state._textLabels.addAll(removedLabels);
 
-    if (addedInstruments.isNotEmpty)
-      state._instruments.removeWhere((i) => addedInstruments.contains(i));
-    if (removedInstruments.isNotEmpty)
-      state._instruments.addAll(removedInstruments);
-
+    if (addedInstruments.isNotEmpty) state._instruments.removeWhere((i) => addedInstruments.contains(i));
+    if (removedInstruments.isNotEmpty) state._instruments.addAll(removedInstruments);
+    
     state._selectedLines.removeWhere((l) => addedLines.contains(l));
     if (addedLines.isNotEmpty) {
       state._removeOrphanedAngleLabels(addedLines);
@@ -650,15 +646,12 @@ class MathsPadAction {
       }
     }
 
-    if (removedLabels.isNotEmpty)
-      state._textLabels.removeWhere((l) => removedLabels.contains(l));
+    if (removedLabels.isNotEmpty) state._textLabels.removeWhere((l) => removedLabels.contains(l));
     if (addedLabels.isNotEmpty) state._textLabels.addAll(addedLabels);
 
-    if (removedInstruments.isNotEmpty)
-      state._instruments.removeWhere((i) => removedInstruments.contains(i));
-    if (addedInstruments.isNotEmpty)
-      state._instruments.addAll(addedInstruments);
-
+    if (removedInstruments.isNotEmpty) state._instruments.removeWhere((i) => removedInstruments.contains(i));
+    if (addedInstruments.isNotEmpty) state._instruments.addAll(addedInstruments);
+    
     state._resetBaking();
     state._finishedStrokesNotifier.value++;
     state._activeDrawingNotifier.value++;
@@ -1606,8 +1599,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (widget.initialThemeMode != null) {
       _themeMode = widget.initialThemeMode!;
     } else {
-      _themeMode =
-          MathPadTheme.light; // The user requested light theme as default
+      _themeMode = MathPadTheme.light; // The user requested light theme as default
     }
 
     SharedPreferences.getInstance().then((prefs) {
@@ -1679,17 +1671,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _selectionGlowPhase += 0.9;
       _activeDrawingNotifier.value++;
     });
-
-    _recordingService = Provider.of<MathPadRecordingService>(
-      context,
-      listen: false,
-    );
-
+    
+    _recordingService = Provider.of<MathPadRecordingService>(context, listen: false);
+    
     _recordingState = _recordingService.state;
     if (_recordingState == MathPadRecordingState.recording) {
       _recordingService.updateCanvasKey(_canvasCaptureKey);
     }
-
+    
     _recordingService.onUpdate = (state, elapsed) {
       if (!mounted) return;
       setState(() {
@@ -1759,12 +1748,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_recordingState == MathPadRecordingState.recording) {
       try {
         await _recordingService.stopCapture();
-
+        
         _fastEncodeCompleter = Completer<bool>();
         // Wait up to 3 seconds for the user to make a choice
         Timer(const Duration(seconds: 3), () {
-          if (_fastEncodeCompleter != null &&
-              !_fastEncodeCompleter!.isCompleted) {
+          if (_fastEncodeCompleter != null && !_fastEncodeCompleter!.isCompleted) {
             _fastEncodeCompleter!.complete(false); // Default to standard encode
           }
         });
@@ -1772,9 +1760,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         final bool fastEncode = await _fastEncodeCompleter!.future;
         _fastEncodeCompleter = null;
 
-        final String path = await _recordingService.encode(
-          fastEncode: fastEncode,
-        );
+        final String path = await _recordingService.encode(fastEncode: fastEncode);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -3040,9 +3026,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     setState(() {
       _lines.addAll(newLines);
       _textLabels.addAll(newLabels);
-      _recordAction(
-        MathsPadAction(addedLines: newLines, addedLabels: newLabels),
-      );
+      _recordAction(MathsPadAction(addedLines: newLines, addedLabels: newLabels));
     });
     for (final line in newLines) {
       _buildAndCachePath(line);
@@ -4078,7 +4062,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           final sinR = sin(-inst.rotation);
           final localX = delta.dx * cosR - delta.dy * sinR;
           final localY = delta.dx * sinR + delta.dy * cosR;
-
+          
           // Constrain to the upper semicircle (y <= 0), which is angle from 0 to -pi
           double angle = atan2(localY, localX);
           if (angle > 0) {
@@ -4090,13 +4074,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           if (movedDist > 6) {
             _pencilDragMoved = true;
             if (_isPencilArmed(inst)) {
-              final edgeWorldPos =
-                  inst.pivot +
-                  Offset(
-                    inst.radius * cos(angle + inst.rotation),
-                    inst.radius * sin(angle + inst.rotation),
-                  );
-
+              final edgeWorldPos = inst.pivot + Offset(
+                inst.radius * cos(angle + inst.rotation),
+                inst.radius * sin(angle + inst.rotation),
+              );
+              
               if (_currentLine == null) {
                 _currentLine = MathsPadLine(
                   points: [MathsPadStrokePoint(edgeWorldPos)],
@@ -4181,12 +4163,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       if (!_pencilDragMoved) {
         _togglePencilArmed(inst);
         if (inst is ProtractorState) {
-          final edgeWorldPos =
-              inst.pivot +
-              Offset(
-                inst.radius * cos(inst.pencilAngle + inst.rotation),
-                inst.radius * sin(inst.pencilAngle + inst.rotation),
-              );
+          final edgeWorldPos = inst.pivot + Offset(
+            inst.radius * cos(inst.pencilAngle + inst.rotation),
+            inst.radius * sin(inst.pencilAngle + inst.rotation),
+          );
           final dot = MathsPadLine(
             points: [
               MathsPadStrokePoint(edgeWorldPos),
@@ -4421,8 +4401,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   void _updateStylusBarrelState(PointerEvent event) {
-    final bool isPrimaryBarrel =
-        event.kind == PointerDeviceKind.invertedStylus ||
+    final bool isPrimaryBarrel = event.kind == PointerDeviceKind.invertedStylus ||
         (event.buttons & kSecondaryButton != 0);
     final bool isSecondaryBarrel = (event.buttons & kTertiaryButton != 0);
     final bool isBarrelOrInverted = isPrimaryBarrel || isSecondaryBarrel;
@@ -4446,7 +4425,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               _selectedLines.clear();
             });
           }
-          _lastPrimaryBarrelPressTime = null;
+          _lastPrimaryBarrelPressTime = null; 
         } else {
           _lastPrimaryBarrelPressTime = now;
         }
@@ -4458,15 +4437,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       if (isSecondaryBarrel) {
         final now = DateTime.now();
         if (_lastSecondaryBarrelPressTime != null &&
-            now.difference(_lastSecondaryBarrelPressTime!) <=
-                _kDoubleTapMaxGap) {
+            now.difference(_lastSecondaryBarrelPressTime!) <= _kDoubleTapMaxGap) {
           if (_toolMode != CanvasToolMode.lasso) {
             setState(() {
               _toolMode = CanvasToolMode.lasso;
               _activeShapeTool = null;
             });
           }
-          _lastSecondaryBarrelPressTime = null;
+          _lastSecondaryBarrelPressTime = null; 
         } else {
           _lastSecondaryBarrelPressTime = now;
         }
@@ -5549,19 +5527,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
     if (_currentLine != null) {
       final bool wasEraser = _currentLine!.isEraser;
-
+      
       if (wasEraser && _eraserMode == EraserMode.area) {
         final eraserLine = _currentLine!;
         final double eraserRadius = (eraserLine.strokeWidth * 3.5) / 2.0;
-        final Rect eraserBounds = _computeLineBounds(
-          eraserLine,
-        ).inflate(eraserRadius);
+        final Rect eraserBounds = _computeLineBounds(eraserLine).inflate(eraserRadius);
 
         List<MathsPadLine> newLines = [];
         List<MathsPadLine> removedLines = [];
         List<MathsPadLine> addedFragments = [];
         bool anyCut = false;
-
+        
         for (final line in _lines) {
           if (line.isEraser || line.fillImage != null) {
             newLines.add(line);
@@ -5581,31 +5557,23 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             double dist = (p2 - p1).distance;
             int steps = (dist / 2.0).ceil().clamp(1, 9999);
             for (int step = 0; step < steps; step++) {
-              resampledPoints.add(
-                MathsPadStrokePoint(Offset.lerp(p1, p2, step / steps)!),
-              );
+              resampledPoints.add(MathsPadStrokePoint(Offset.lerp(p1, p2, step / steps)!));
             }
           }
           resampledPoints.add(line.points.last);
 
           List<List<MathsPadStrokePoint>> keptSegments = [[]];
           bool lineCut = false;
-
+          
           for (final rp in resampledPoints) {
             bool isErased = false;
             if (eraserLine.points.length == 1) {
-              if ((rp.offset - eraserLine.points.first.offset).distance <=
-                  eraserRadius) {
+              if ((rp.offset - eraserLine.points.first.offset).distance <= eraserRadius) {
                 isErased = true;
               }
             } else {
               for (int j = 0; j < eraserLine.points.length - 1; j++) {
-                if (_distToSegment(
-                      rp.offset,
-                      eraserLine.points[j].offset,
-                      eraserLine.points[j + 1].offset,
-                    ) <=
-                    eraserRadius) {
+                if (_distToSegment(rp.offset, eraserLine.points[j].offset, eraserLine.points[j+1].offset) <= eraserRadius) {
                   isErased = true;
                   break;
                 }
@@ -5649,20 +5617,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         if (anyCut) {
           _lines.clear();
           _lines.addAll(newLines);
-          _recordAction(
-            MathsPadAction(
-              addedLines: addedFragments,
-              removedLines: removedLines,
-            ),
-          );
+          _recordAction(MathsPadAction(addedLines: addedFragments, removedLines: removedLines));
           _resetBaking();
         }
-
+        
         _currentLine = null;
         _eraserCursorPos = null;
         _resetPenAutoShape();
         _finishedStrokesNotifier.value++;
         _activeDrawingNotifier.value++;
+        
       } else {
         _currentLine!.invalidateCache();
         _buildAndCachePath(_currentLine!);
@@ -5673,7 +5637,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _resetPenAutoShape();
         _finishedStrokesNotifier.value++;
         _activeDrawingNotifier.value++;
-
+        
         if (wasEraser) {
           _resetBaking();
         } else {
@@ -6091,7 +6055,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void _deleteSelectedLines() {
     if (_selectedLines.isNotEmpty) {
       setState(() {
-        _recordAction(MathsPadAction(removedLines: _selectedLines.toList()));
+        _recordAction(MathsPadAction(
+          removedLines: _selectedLines.toList(),
+        ));
         _lines.removeWhere((line) => _selectedLines.contains(line));
         _removeOrphanedAngleLabels(_selectedLines);
         _selectedLines.clear();
@@ -6883,9 +6849,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Clear Canvas?'),
-        content: const Text(
-          'Are you sure you want to clear the entire canvas? This cannot be undone.',
-        ),
+        content: const Text('Are you sure you want to clear the entire canvas? This cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -6944,9 +6908,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           : const Color(0xFFFCFDFE))));
 
     return PopScope(
-      canPop:
-          _recordingState != MathPadRecordingState.recording &&
-          _recordingState != MathPadRecordingState.paused,
+      canPop: _recordingState != MathPadRecordingState.recording && _recordingState != MathPadRecordingState.paused,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
         final shouldPop = await _onWillPop();
@@ -6955,116 +6917,115 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         }
       },
       child: Focus(
-        focusNode: _canvasFocusNode,
-        autofocus: true,
-        onKeyEvent: (node, event) {
-          // `IgnorePointer` around the canvas/toolbar below only blocks
-          // pointer input -- keyboard shortcuts reach this `Focus` node
-          // regardless, so they need their own explicit guard to stay
-          // inert while a heavy page's content is still hydrating (see
-          // `_isHydratingInitialContent`).
-          if (_isHydratingInitialContent) return KeyEventResult.ignored;
-          if (event is KeyDownEvent) {
-            final hw = HardwareKeyboard.instance;
-            final ctrl = hw.isControlPressed;
-            final shift = hw.isShiftPressed;
+      focusNode: _canvasFocusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        // `IgnorePointer` around the canvas/toolbar below only blocks
+        // pointer input -- keyboard shortcuts reach this `Focus` node
+        // regardless, so they need their own explicit guard to stay
+        // inert while a heavy page's content is still hydrating (see
+        // `_isHydratingInitialContent`).
+        if (_isHydratingInitialContent) return KeyEventResult.ignored;
+        if (event is KeyDownEvent) {
+          final hw = HardwareKeyboard.instance;
+          final ctrl = hw.isControlPressed;
+          final shift = hw.isShiftPressed;
 
-            if (ctrl && event.logicalKey == LogicalKeyboardKey.keyZ) {
-              _undo();
-              return KeyEventResult.handled;
-            }
-            if (ctrl && event.logicalKey == LogicalKeyboardKey.keyD) {
-              _duplicateSelectedLines();
-              return KeyEventResult.handled;
-            }
-            if (ctrl && event.logicalKey == LogicalKeyboardKey.keyA) {
-              _selectAllLines();
-              return KeyEventResult.handled;
-            }
-            if (ctrl && event.logicalKey == LogicalKeyboardKey.keyC) {
-              _copySelectedLines();
-              return KeyEventResult.handled;
-            }
-            if (ctrl && event.logicalKey == LogicalKeyboardKey.keyV) {
-              _pasteFromSystemClipboard();
-              return KeyEventResult.handled;
-            }
-            if (event.logicalKey == LogicalKeyboardKey.escape) {
-              if (shift) {
-                widget.onToggleFullScreen?.call();
-              } else if (widget.isFullScreen) {
-                widget.onToggleFullScreen?.call();
-              }
-              return KeyEventResult.handled;
-            }
-            if (event.logicalKey == LogicalKeyboardKey.delete) {
-              _deleteSelectedLines();
-              return KeyEventResult.handled;
-            }
-            if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-              _moveSelectedLines(const Offset(0, -10));
-              return KeyEventResult.handled;
-            }
-            if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-              _moveSelectedLines(const Offset(0, 10));
-              return KeyEventResult.handled;
-            }
-            if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-              _moveSelectedLines(const Offset(-10, 0));
-              return KeyEventResult.handled;
-            }
-            if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-              _moveSelectedLines(const Offset(10, 0));
-              return KeyEventResult.handled;
-            }
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyZ) {
+            _undo();
+            return KeyEventResult.handled;
           }
-          return KeyEventResult.ignored;
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: widget.isTransparentBg
-                ? BorderRadius.zero
-                : BorderRadius.circular(20),
-            border: widget.isTransparentBg
-                ? null
-                : Border.all(
-                    color: const Color(0xFF6366F1).withOpacity(0.3),
-                    width: 1.5,
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyD) {
+            _duplicateSelectedLines();
+            return KeyEventResult.handled;
+          }
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyA) {
+            _selectAllLines();
+            return KeyEventResult.handled;
+          }
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyC) {
+            _copySelectedLines();
+            return KeyEventResult.handled;
+          }
+          if (ctrl && event.logicalKey == LogicalKeyboardKey.keyV) {
+            _pasteFromSystemClipboard();
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.escape) {
+            if (shift) {
+              widget.onToggleFullScreen?.call();
+            } else if (widget.isFullScreen) {
+              widget.onToggleFullScreen?.call();
+            }
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.delete) {
+            _deleteSelectedLines();
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+            _moveSelectedLines(const Offset(0, -10));
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+            _moveSelectedLines(const Offset(0, 10));
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+            _moveSelectedLines(const Offset(-10, 0));
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+            _moveSelectedLines(const Offset(10, 0));
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: widget.isTransparentBg
+              ? BorderRadius.zero
+              : BorderRadius.circular(20),
+          border: widget.isTransparentBg
+              ? null
+              : Border.all(
+                  color: const Color(0xFF6366F1).withOpacity(0.3),
+                  width: 1.5,
+                ),
+          boxShadow: widget.isTransparentBg
+              ? null
+              : [
+                  BoxShadow(
+                    color: const Color(0xFF6366F1).withOpacity(0.12),
+                    blurRadius: 20,
+                    spreadRadius: 2,
                   ),
-            boxShadow: widget.isTransparentBg
-                ? null
-                : [
-                    BoxShadow(
-                      color: const Color(0xFF6366F1).withOpacity(0.12),
-                      blurRadius: 20,
-                      spreadRadius: 2,
-                    ),
-                  ],
-          ),
-          child: Stack(
-            children: [
-              // Pointer input only (see the keyboard guard in `onKeyEvent`
-              // above for the other half) -- inert while a heavy page's
-              // `initialLines` are still being frame-batched into
-              // `_bakedChunks` (`_hydrateNextInitialBatch`), since drawing/
-              // undo/paste/tool-switching mid-hydration would race
-              // `_bakedLineCount`'s bookkeeping, which assumes hydration
-              // owns the front of `_lines` until it finishes.
-              IgnorePointer(
-                ignoring: _isHydratingInitialContent,
-                child: _buildToolbarAndCanvas(context, isDark, bgColor),
-              ),
-              if (_isHydratingInitialContent) _buildHydrationOverlay(isDark),
-              // Lives in THIS outer `Stack`, not inside the toolbar/canvas
-              // subtree that `_isFullScreenMode` swaps layouts within -- so
-              // it keeps showing at the very top edge (the bottom of the
-              // docked top bar in the normal layout) even when Full Screen
-              // hides the rest of the toolbar chrome.
-              if (_recordingState == MathPadRecordingState.encoding)
-                _buildEncodingProgressBar(),
-            ],
-          ),
+                ],
+        ),
+        child: Stack(
+          children: [
+            // Pointer input only (see the keyboard guard in `onKeyEvent`
+            // above for the other half) -- inert while a heavy page's
+            // `initialLines` are still being frame-batched into
+            // `_bakedChunks` (`_hydrateNextInitialBatch`), since drawing/
+            // undo/paste/tool-switching mid-hydration would race
+            // `_bakedLineCount`'s bookkeeping, which assumes hydration
+            // owns the front of `_lines` until it finishes.
+            IgnorePointer(
+              ignoring: _isHydratingInitialContent,
+              child: _buildToolbarAndCanvas(context, isDark, bgColor),
+            ),
+            if (_isHydratingInitialContent) _buildHydrationOverlay(isDark),
+            // Lives in THIS outer `Stack`, not inside the toolbar/canvas
+            // subtree that `_isFullScreenMode` swaps layouts within -- so
+            // it keeps showing at the very top edge (the bottom of the
+            // docked top bar in the normal layout) even when Full Screen
+            // hides the rest of the toolbar chrome.
+            if (_recordingState == MathPadRecordingState.encoding)
+              _buildEncodingProgressBar(),
+          ],
         ),
       ),
     );
@@ -7108,9 +7069,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: const Color(
-                              0xFF6366F1,
-                            ).withValues(alpha: 0.9),
+                            color: const Color(0xFF6366F1).withValues(alpha: 0.9),
                             blurRadius: 10,
                             spreadRadius: 1,
                           ),
@@ -7698,15 +7657,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   Widget _buildRecordingBadge(BuildContext context) {
     final bool encoding = _recordingState == MathPadRecordingState.encoding;
-    final bool waitingChoice =
-        _recordingState == MathPadRecordingState.waitingForEncodeChoice;
+    final bool waitingChoice = _recordingState == MathPadRecordingState.waitingForEncodeChoice;
 
     Widget badgeContent;
     if (waitingChoice) {
       badgeContent = GestureDetector(
         onTap: () {
-          if (_fastEncodeCompleter != null &&
-              !_fastEncodeCompleter!.isCompleted) {
+          if (_fastEncodeCompleter != null && !_fastEncodeCompleter!.isCompleted) {
             _fastEncodeCompleter!.complete(true);
           }
         },
@@ -8634,11 +8591,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       ),
                       const SizedBox(width: 4),
                       IconButton(
-                        icon: Icon(
-                          Icons.close_rounded,
-                          size: 18,
-                          color: _textColor70,
-                        ),
+                        icon: Icon(Icons.close_rounded, size: 18, color: _textColor70),
                         onPressed: () => setState(() => _selectedLines.clear()),
                         tooltip: 'Deselect',
                       ),
@@ -8734,8 +8687,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                 : null;
                           });
                           SharedPreferences.getInstance().then(
-                            (prefs) =>
-                                prefs.setBool('mathpad_pan_locked', _panLocked),
+                            (prefs) => prefs.setBool('mathpad_pan_locked', _panLocked),
                           );
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -9203,8 +9155,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           }
                           if (_selectedTextLabelIndex != null) {
                             setState(() {
-                              _textLabels[_selectedTextLabelIndex!].color =
-                                  color;
+                              _textLabels[_selectedTextLabelIndex!].color = color;
                               _selectedColor = color;
                             });
                             return;
@@ -9277,38 +9228,23 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     itemBuilder: (ctx) => [
                       PopupMenuItem(
                         value: 2.0,
-                        child: Text(
-                          'Fine (2px)',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('Fine (2px)', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: 4.0,
-                        child: Text(
-                          'Medium (4px)',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('Medium (4px)', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: 6.0,
-                        child: Text(
-                          'Bold (6px)',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('Bold (6px)', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: 8.0,
-                        child: Text(
-                          'Thick (8px)',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('Thick (8px)', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: 14.0,
-                        child: Text(
-                          'Marker (14px)',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('Marker (14px)', style: TextStyle(color: _textColor)),
                       ),
                     ],
                   ),
@@ -9438,24 +9374,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     itemBuilder: (ctx) => [
                       PopupMenuItem(
                         value: CanvasBgMode.grid,
-                        child: Text(
-                          '📐 Math Grid',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('📐 Math Grid', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: CanvasBgMode.ruled,
-                        child: Text(
-                          '📝 Ruled Lines',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('📝 Ruled Lines', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: CanvasBgMode.blank,
-                        child: Text(
-                          '📄 Blank Canvas',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('📄 Blank Canvas', style: TextStyle(color: _textColor)),
                       ),
                     ],
                   ),
@@ -9494,31 +9421,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     itemBuilder: (ctx) => [
                       PopupMenuItem(
                         value: MathPadTheme.light,
-                        child: Text(
-                          '☀️ Light Mode',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('☀️ Light Mode', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: MathPadTheme.dark,
-                        child: Text(
-                          '🌙 Dark Mode',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('🌙 Dark Mode', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: MathPadTheme.cosmos,
-                        child: Text(
-                          '🌌 Jyamiti Cosmos (#0F2B52)',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('🌌 Jyamiti Cosmos (#0F2B52)', style: TextStyle(color: _textColor)),
                       ),
                       PopupMenuItem(
                         value: MathPadTheme.aswadLail,
-                        child: Text(
-                          '⚫ Aswad Lail (#000000)',
-                          style: TextStyle(color: _textColor),
-                        ),
+                        child: Text('⚫ Aswad Lail (#000000)', style: TextStyle(color: _textColor)),
                       ),
                     ],
                   ),
@@ -9775,11 +9690,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
                   const SizedBox(width: 8),
                   IconButton(
-                    icon: Icon(
-                      Icons.view_sidebar_rounded,
-                      size: 20,
-                      color: _textColor,
-                    ),
+                    icon: Icon(Icons.view_sidebar_rounded, size: 20, color: _textColor),
                     onPressed: () =>
                         setState(() => _toolbarOnLeft = !_toolbarOnLeft),
                     tooltip: _toolbarOnLeft
@@ -9810,8 +9721,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       onPressed: _recordingState == MathPadRecordingState.idle
                           ? () async {
                               if (!_recordWithCamera) {
-                                final hasCam = await _recordingService
-                                    .hasCamera();
+                                final hasCam = await _recordingService.hasCamera();
                                 if (!hasCam) {
                                   if (!mounted) return;
                                   ScaffoldMessenger.of(context).showSnackBar(
@@ -9882,11 +9792,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   if (widget.onClose != null) ...[
                     const SizedBox(width: 8),
                     IconButton(
-                      icon: Icon(
-                        Icons.close_rounded,
-                        size: 20,
-                        color: _textColor,
-                      ),
+                      icon: Icon(Icons.close_rounded, size: 20, color: _textColor),
                       onPressed: _handleCloseTap,
                       tooltip: 'Close Writing Screen',
                     ),
@@ -9969,43 +9875,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
-  /// A small hand-drawn protractor glyph (semicircle body + a few degree
-  /// ticks) for the "Add Protractor" toolbar button -- no stock Material
-  /// icon actually looks like a protractor, so this mirrors the real
-  /// `ProtractorWidget`'s shape/orientation at icon scale instead of using
-  /// an unrelated placeholder icon.
-  Widget _buildProtractorIcon(Color color) {
-    return SizedBox(
-      width: 18,
-      height: 18,
-      child: CustomPaint(painter: _ProtractorIconPainter(color: color)),
-    );
-  }
-
-  /// Hands the full current canvas content to `widget.onSaveRequested`
-  /// (the Math Pad Library's page editor, when opened from there).
-  Future<void> _savePage() async {
-    if (widget.onSaveRequested == null) return;
-    await widget.onSaveRequested!(
-      lines: _lines,
-      instruments: _instruments,
-      textLabels: _textLabels,
-      fixedAngleLabels: _fixedAngleLabels,
-      bgMode: _bgMode,
-      themeMode:
-          _themeMode ??
-          (context.isDark ? MathPadTheme.dark : MathPadTheme.light),
-    );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Page saved'),
-          backgroundColor: Color(0xFF10B981),
-        ),
-      );
-    }
-  }
-
   Future<bool> _onWillPop() async {
     if (_recordingState == MathPadRecordingState.recording ||
         _recordingState == MathPadRecordingState.paused) {
@@ -10058,6 +9927,43 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return false;
     }
     return true;
+  }
+
+  /// A small hand-drawn protractor glyph (semicircle body + a few degree
+  /// ticks) for the "Add Protractor" toolbar button -- no stock Material
+  /// icon actually looks like a protractor, so this mirrors the real
+  /// `ProtractorWidget`'s shape/orientation at icon scale instead of using
+  /// an unrelated placeholder icon.
+  Widget _buildProtractorIcon(Color color) {
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: CustomPaint(painter: _ProtractorIconPainter(color: color)),
+    );
+  }
+
+  /// Hands the full current canvas content to `widget.onSaveRequested`
+  /// (the Math Pad Library's page editor, when opened from there).
+  Future<void> _savePage() async {
+    if (widget.onSaveRequested == null) return;
+    await widget.onSaveRequested!(
+      lines: _lines,
+      instruments: _instruments,
+      textLabels: _textLabels,
+      fixedAngleLabels: _fixedAngleLabels,
+      bgMode: _bgMode,
+      themeMode:
+          _themeMode ??
+          (context.isDark ? MathPadTheme.dark : MathPadTheme.light),
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Page saved'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    }
   }
 
   /// The ✕ button's handler. When this pad was opened with a save hook
@@ -10922,9 +10828,7 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
         if (line.isEraser) {
           // Draw the eraser path as a translucent red "highlighter" trail so the
           // user can see exactly what they're erasing before they lift their finger.
-          paint.color = const Color(
-            0xFFF43F5E,
-          ).withValues(alpha: 0.35); // Rose-500
+          paint.color = const Color(0xFFF43F5E).withValues(alpha: 0.35); // Rose-500
           paint.strokeWidth = line.strokeWidth * 3.5;
         } else if (line.isMagic && line.points.isNotEmpty) {
           paint.shader = const LinearGradient(
@@ -10943,7 +10847,7 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
           paint.shader = null;
           paint.color = line.color;
         }
-
+        
         if (!line.isEraser) {
           paint.strokeWidth = line.strokeWidth;
         }
@@ -10989,23 +10893,21 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
         // the recorded video can clearly see the exact drawing position.
         if (!line.isEraser) {
           final Offset tipPos = line.points.last.offset;
-
+          
           // Draw a small contrasting halo/shadow to make the tip pop against any line color
           final haloPaint = Paint()
             ..isAntiAlias = true
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2.0 / scale
-            ..color = (isDark ? Colors.white : Colors.black).withValues(
-              alpha: 0.3,
-            );
-
+            ..color = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.3);
+            
           final tipPaint = Paint()
             ..isAntiAlias = true
             ..style = PaintingStyle.fill
             ..color = isDark ? Colors.white : Colors.black87;
 
           final double radius = (line.strokeWidth / 2) + (1.5 / scale);
-
+          
           canvas.drawCircle(tipPos, radius, tipPaint);
           canvas.drawCircle(tipPos, radius, haloPaint);
         }
@@ -11656,9 +11558,7 @@ class _RecordingNeonBorderState extends State<_RecordingNeonBorder>
                       ),
                     ),
                   CustomPaint(
-                    painter: _NeonBorderPainter(
-                      angle: _controller.value * 2 * pi,
-                    ),
+                    painter: _NeonBorderPainter(angle: _controller.value * 2 * pi),
                   ),
                 ],
               ),
@@ -11731,8 +11631,8 @@ class _NeonBorderPainter extends CustomPainter {
 }
 
 /// A custom Stack that bypasses Flutter's default bounds-checking during hit tests.
-/// This allows interactive children (like text editors or instruments) to receive taps
-/// even when panned far outside the Stack's original screen-sized layout bounds on the
+/// This allows interactive children (like text editors or instruments) to receive taps 
+/// even when panned far outside the Stack's original screen-sized layout bounds on the 
 /// infinite canvas.
 class _UnconstrainedHitTestStack extends Stack {
   _UnconstrainedHitTestStack({
@@ -11743,13 +11643,13 @@ class _UnconstrainedHitTestStack extends Stack {
     Clip clipBehavior = Clip.hardEdge,
     List<Widget> children = const <Widget>[],
   }) : super(
-         key: key,
-         alignment: alignment,
-         textDirection: textDirection,
-         fit: fit,
-         clipBehavior: clipBehavior,
-         children: children,
-       );
+          key: key,
+          alignment: alignment,
+          textDirection: textDirection,
+          fit: fit,
+          clipBehavior: clipBehavior,
+          children: children,
+        );
 
   @override
   RenderStack createRenderObject(BuildContext context) {
@@ -11769,11 +11669,11 @@ class _RenderUnconstrainedHitTestStack extends RenderStack {
     StackFit fit = StackFit.loose,
     Clip clipBehavior = Clip.hardEdge,
   }) : super(
-         alignment: alignment,
-         textDirection: textDirection,
-         fit: fit,
-         clipBehavior: clipBehavior,
-       );
+          alignment: alignment,
+          textDirection: textDirection,
+          fit: fit,
+          clipBehavior: clipBehavior,
+        );
 
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
