@@ -104,7 +104,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 Align(
                   alignment: Alignment.centerRight,
                   child: Container(
@@ -116,19 +116,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.account_circle, size: 20, color: Colors.green.shade600),
+                        Icon(Icons.cloud_done, size: 20, color: Colors.blue.shade600),
                         const SizedBox(width: 8),
-                        Text('learn@jyamitimath.com', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-                        const SizedBox(width: 16),
-                        TextButton(
-                          onPressed: () {},
-                          style: TextButton.styleFrom(
-                            foregroundColor: isDark ? Colors.white70 : Colors.black87,
-                            backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                          ),
-                          child: const Text('Disconnect'),
-                        ),
+                        Text('Jyamiti Central Drive', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ),
@@ -148,7 +138,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                 Text('Destination', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                   decoration: BoxDecoration(
                     color: isDark ? Colors.white.withOpacity(0.02) : Colors.grey.shade50,
                     border: Border.all(color: isDark ? Colors.white24 : Colors.black12),
@@ -156,17 +146,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                   ),
                   child: Row(
                     children: [
-                      Text('All files', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-                      const Spacer(),
-                      FilledButton(
-                        onPressed: () {},
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1E293B),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        ),
-                        child: const Text('Select folder'),
-                      ),
+                      Icon(Icons.folder, color: isDark ? Colors.white54 : Colors.black54, size: 18),
+                      const SizedBox(width: 8),
+                      Text('Tutor Uploads (Root Directory)', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
                     ],
                   ),
                 ),
@@ -261,19 +243,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.account_circle, size: 20, color: Colors.green.shade600),
+                              Icon(Icons.video_camera_front, size: 20, color: Colors.red.shade600),
                               const SizedBox(width: 8),
-                              Text('learn@jyamitimath.com', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
-                              const SizedBox(width: 16),
-                              TextButton(
-                                onPressed: () {},
-                                style: TextButton.styleFrom(
-                                  foregroundColor: isDark ? Colors.white70 : Colors.black87,
-                                  backgroundColor: isDark ? Colors.white10 : Colors.grey.shade200,
-                                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                                ),
-                                child: const Text('Disconnect'),
-                              ),
+                              Text('Jyamiti Official Channel', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.bold)),
                             ],
                           ),
                         ),
