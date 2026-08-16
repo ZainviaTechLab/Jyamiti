@@ -7,6 +7,8 @@ class RoboCanvas extends StatelessWidget {
   final List<RoboCommand> commands;
   final int activeCommandIndex;
   final double animationProgress;
+  final bool showGrid;
+  final bool isDarkMode;
 
   const RoboCanvas({
     Key? key,
@@ -14,6 +16,8 @@ class RoboCanvas extends StatelessWidget {
     required this.commands,
     required this.activeCommandIndex,
     required this.animationProgress,
+    this.showGrid = true,
+    this.isDarkMode = false,
   }) : super(key: key);
 
   @override
@@ -27,6 +31,8 @@ class RoboCanvas extends StatelessWidget {
             commands: commands,
             activeCommandIndex: activeCommandIndex,
             animationProgress: animationProgress,
+            showGrid: showGrid,
+            isDarkMode: isDarkMode,
           ),
         );
       },
@@ -39,18 +45,26 @@ class _RoboPainter extends CustomPainter {
   final List<RoboCommand> commands;
   final int activeCommandIndex;
   final double animationProgress;
+  final bool showGrid;
+  final bool isDarkMode;
 
   _RoboPainter({
     required this.ctx,
     required this.commands,
     required this.activeCommandIndex,
     required this.animationProgress,
+    required this.showGrid,
+    required this.isDarkMode,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    ctx.isDarkMode = isDarkMode;
     _updateGridToPixel(size);
-    _drawGrid(canvas, size);
+    
+    if (showGrid) {
+      _drawGrid(canvas, size);
+    }
 
     // 1. Draw all completed commands
     for (int i = 0; i < activeCommandIndex && i < commands.length; i++) {
@@ -64,23 +78,22 @@ class _RoboPainter extends CustomPainter {
   }
 
   void _updateGridToPixel(Size size) {
-    // Maintain a 1:1 aspect ratio. Keep the smaller dimension covering 40 units.
-    double baseRange = 40.0;
+    double br = ctx.baseRange;
     
     if (size.width > size.height) {
-      double scale = size.height / baseRange;
+      double scale = size.height / br;
       double xRange = size.width / scale;
-      ctx.minY = -baseRange / 2;
-      ctx.maxY = baseRange / 2;
-      ctx.minX = -xRange / 2;
-      ctx.maxX = xRange / 2;
+      ctx.minY = ctx.cy - br / 2;
+      ctx.maxY = ctx.cy + br / 2;
+      ctx.minX = ctx.cx - xRange / 2;
+      ctx.maxX = ctx.cx + xRange / 2;
     } else {
-      double scale = size.width / baseRange;
+      double scale = size.width / br;
       double yRange = size.height / scale;
-      ctx.minX = -baseRange / 2;
-      ctx.maxX = baseRange / 2;
-      ctx.minY = -yRange / 2;
-      ctx.maxY = yRange / 2;
+      ctx.minX = ctx.cx - br / 2;
+      ctx.maxX = ctx.cx + br / 2;
+      ctx.minY = ctx.cy - yRange / 2;
+      ctx.maxY = ctx.cy + yRange / 2;
     }
 
     ctx.gridToPixel = (x, y) {
@@ -95,8 +108,12 @@ class _RoboPainter extends CustomPainter {
   }
 
   void _drawGrid(Canvas canvas, Size size) {
-    final gridPaint = Paint()..color = Colors.grey.shade300..strokeWidth = 1;
-    final axesPaint = Paint()..color = Colors.black87..strokeWidth = 2;
+    final gridColor = isDarkMode ? Colors.grey.shade800 : Colors.grey.shade300;
+    final axesColor = isDarkMode ? Colors.white54 : Colors.black87;
+    final textColor = isDarkMode ? Colors.white54 : Colors.black54;
+
+    final gridPaint = Paint()..color = gridColor..strokeWidth = 1;
+    final axesPaint = Paint()..color = axesColor..strokeWidth = 2;
 
     int startX = ctx.minX.floor();
     int endX = ctx.maxX.ceil();
@@ -104,7 +121,7 @@ class _RoboPainter extends CustomPainter {
       double px = ctx.gridToPixel(i.toDouble(), 0).dx;
       canvas.drawLine(Offset(px, 0), Offset(px, size.height), i == 0 ? axesPaint : gridPaint);
       if (i != 0 && i % 2 == 0) {
-        _drawText(canvas, i.toString(), Offset(px, ctx.gridToPixel(0, 0).dy + 5));
+        _drawText(canvas, i.toString(), Offset(px, ctx.gridToPixel(0, 0).dy + 5), textColor);
       }
     }
 
@@ -114,15 +131,15 @@ class _RoboPainter extends CustomPainter {
       double py = ctx.gridToPixel(0, i.toDouble()).dy;
       canvas.drawLine(Offset(0, py), Offset(size.width, py), i == 0 ? axesPaint : gridPaint);
       if (i != 0 && i % 2 == 0) {
-        _drawText(canvas, i.toString(), Offset(ctx.gridToPixel(0, 0).dx - 20, py - 8));
+        _drawText(canvas, i.toString(), Offset(ctx.gridToPixel(0, 0).dx - 20, py - 8), textColor);
       }
     }
 
-    _drawText(canvas, "0", Offset(ctx.gridToPixel(0, 0).dx - 15, ctx.gridToPixel(0, 0).dy + 5));
+    _drawText(canvas, "0", Offset(ctx.gridToPixel(0, 0).dx - 15, ctx.gridToPixel(0, 0).dy + 5), textColor);
   }
 
-  void _drawText(Canvas canvas, String text, Offset position) {
-    TextSpan span = TextSpan(style: const TextStyle(color: Colors.black54, fontSize: 12), text: text);
+  void _drawText(Canvas canvas, String text, Offset position, Color textColor) {
+    TextSpan span = TextSpan(style: TextStyle(color: textColor, fontSize: 12), text: text);
     TextPainter tp = TextPainter(text: span, textAlign: TextAlign.center, textDirection: TextDirection.ltr);
     tp.layout();
     tp.paint(canvas, position);
@@ -132,6 +149,8 @@ class _RoboPainter extends CustomPainter {
   bool shouldRepaint(covariant _RoboPainter oldDelegate) {
     return oldDelegate.animationProgress != animationProgress ||
            oldDelegate.activeCommandIndex != activeCommandIndex ||
-           oldDelegate.commands != commands;
+           oldDelegate.commands != commands ||
+           oldDelegate.showGrid != showGrid ||
+           oldDelegate.isDarkMode != isDarkMode;
   }
 }

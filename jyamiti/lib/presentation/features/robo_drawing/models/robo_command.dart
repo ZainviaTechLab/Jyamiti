@@ -354,9 +354,12 @@ void paintRealisticCompass(Canvas canvas, Offset center, Offset pencilTip) {
   }
 
   double h3d = sqrt(L * L - (d / 2) * (d / 2));
-  
-  Offset m = Offset((center.dx + pencilTip.dx) / 2, (center.dy + pencilTip.dy) / 2);
-  
+
+  Offset m = Offset(
+    (center.dx + pencilTip.dx) / 2,
+    (center.dy + pencilTip.dy) / 2,
+  );
+
   // 3D projection: the hinge is 'h3d' above the paper in Z.
   // In our 2D canvas, we map +Z to -Y to create an isometric-like view.
   Offset hinge = Offset(m.dx, m.dy - h3d);
@@ -377,9 +380,9 @@ void paintRealisticCompass(Canvas canvas, Offset center, Offset pencilTip) {
     canvas.translate(hinge.dx, hinge.dy);
     double angleNeedle = atan2(center.dy - hinge.dy, center.dx - hinge.dx);
     canvas.rotate(angleNeedle);
-    
+
     double dNeedle = (center - hinge).distance;
-    
+
     Path needleArm = Path()
       ..moveTo(0, -5)
       ..lineTo(dNeedle - 20, -3)
@@ -388,25 +391,28 @@ void paintRealisticCompass(Canvas canvas, Offset center, Offset pencilTip) {
       ..close();
     canvas.drawPath(needleArm, metalPaint);
     canvas.drawPath(needleArm, outlinePaint);
-    
+
     Path needleTip = Path()
       ..moveTo(dNeedle - 20, -1)
       ..lineTo(dNeedle, 0)
       ..lineTo(dNeedle - 20, 1)
       ..close();
     canvas.drawPath(needleTip, darkMetal);
-    
+
     canvas.restore();
   }
 
   void drawPencilArm() {
     canvas.save();
     canvas.translate(hinge.dx, hinge.dy);
-    double anglePencil = atan2(pencilTip.dy - hinge.dy, pencilTip.dx - hinge.dx);
+    double anglePencil = atan2(
+      pencilTip.dy - hinge.dy,
+      pencilTip.dx - hinge.dx,
+    );
     canvas.rotate(anglePencil);
-    
+
     double dPencil = (pencilTip - hinge).distance;
-    
+
     Path pencilArm = Path()
       ..moveTo(0, -5)
       ..lineTo(dPencil - 30, -4)
@@ -415,19 +421,30 @@ void paintRealisticCompass(Canvas canvas, Offset center, Offset pencilTip) {
       ..close();
     canvas.drawPath(pencilArm, metalPaint);
     canvas.drawPath(pencilArm, outlinePaint);
-    
+
     canvas.drawRect(Rect.fromLTWH(dPencil - 35, -7, 20, 14), darkMetal);
-    
+
     Path lead = Path()
       ..moveTo(dPencil - 15, -2)
       ..lineTo(dPencil, 0)
       ..lineTo(dPencil - 15, 2)
       ..close();
-    canvas.drawPath(lead, Paint()..color = Colors.black87..style = PaintingStyle.fill);
-    
+    canvas.drawPath(
+      lead,
+      Paint()
+        ..color = Colors.black87
+        ..style = PaintingStyle.fill,
+    );
+
     canvas.drawCircle(Offset(dPencil - 25, 0), 3, metalPaint);
-    canvas.drawLine(Offset(dPencil - 27, -1), Offset(dPencil - 23, 1), Paint()..color = Colors.black..strokeWidth = 1);
-  
+    canvas.drawLine(
+      Offset(dPencil - 27, -1),
+      Offset(dPencil - 23, 1),
+      Paint()
+        ..color = Colors.black
+        ..strokeWidth = 1,
+    );
+
     canvas.restore();
   }
 
@@ -446,13 +463,19 @@ void paintRealisticCompass(Canvas canvas, Offset center, Offset pencilTip) {
   canvas.translate(hinge.dx, hinge.dy);
   // Handle points perfectly "UP" in Z, which maps to -Y in 2D.
   canvas.rotate(-pi / 2);
-  
+
   canvas.drawRect(Rect.fromLTWH(0, -4, 20, 8), metalPaint);
   canvas.drawRect(Rect.fromLTWH(0, -4, 20, 8), outlinePaint);
-  
+
   canvas.drawRect(Rect.fromLTWH(20, -6, 15, 12), darkMetal);
-  for (int i = 22; i < 34; i+=3) {
-      canvas.drawLine(Offset(i.toDouble(), -6), Offset(i.toDouble(), 6), Paint()..color = Colors.black45..strokeWidth = 1);
+  for (int i = 22; i < 34; i += 3) {
+    canvas.drawLine(
+      Offset(i.toDouble(), -6),
+      Offset(i.toDouble(), 6),
+      Paint()
+        ..color = Colors.black45
+        ..strokeWidth = 1,
+    );
   }
   canvas.restore();
 
@@ -1579,7 +1602,7 @@ class RoboTransformCommand extends RoboCommand {
                 text: TextSpan(
                   text: label,
                   style: TextStyle(
-                    color: Colors.black.withValues(alpha: progress),
+                    color: (ctx.isDarkMode ? Colors.white : Colors.black).withValues(alpha: progress),
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                   ),
@@ -2063,10 +2086,10 @@ class RoboMathCommand extends RoboCommand {
       text: TextSpan(
         text: "${currentDeg.toStringAsFixed(1)}°",
         style: const TextStyle(
-          color: Colors.white,
+          color: Colors.pink,
           fontSize: 14,
           fontWeight: FontWeight.bold,
-          shadows: [Shadow(color: Colors.black54, blurRadius: 2)],
+          shadows: [Shadow(color: Colors.white54, blurRadius: 2)],
         ),
       ),
       textDirection: TextDirection.ltr,

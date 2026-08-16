@@ -38,6 +38,68 @@ class RoboContext {
   double maxY = 20;
 
   String currentPointType = 'sphere'; // or 'cross'
+  bool isDarkMode = false;
+
+  double cx = 0;
+  double cy = 0;
+  double baseRange = 40.0;
+
+  void updateBoundingBox() {
+    double minXVal = double.infinity;
+    double maxXVal = -double.infinity;
+    double minYVal = double.infinity;
+    double maxYVal = -double.infinity;
+
+    void addPoint(Offset p) {
+      if (p.dx < minXVal) minXVal = p.dx;
+      if (p.dx > maxXVal) maxXVal = p.dx;
+      if (p.dy < minYVal) minYVal = p.dy;
+      if (p.dy > maxYVal) maxYVal = p.dy;
+    }
+
+    for (var obj in variables.values) {
+      if (obj.isHidden) continue;
+      var data = obj.data;
+      if (data is Offset) {
+        addPoint(data);
+      } else if (data is Map) {
+        if (data['type'] == 'line' || data['type'] == 'dash') {
+          var p1 = evaluateExpression(data['p1']);
+          var p2 = evaluateExpression(data['p2']);
+          if (p1 is Offset) addPoint(p1);
+          if (p2 is Offset) addPoint(p2);
+        } else if (data['type'] == 'circle' || data['type'] == 'arc') {
+          var center = evaluateExpression(data['center']);
+          var radius = evaluateExpression(data['radius']);
+          if (center is Offset && radius is double) {
+            addPoint(Offset(center.dx - radius, center.dy - radius));
+            addPoint(Offset(center.dx + radius, center.dy + radius));
+          }
+        } else if (data['type'] == 'polygon' || data['type'] == 'path') {
+          var pts = data['points'];
+          if (pts is List) {
+            for (var ptRef in pts) {
+              var p = evaluateExpression(ptRef);
+              if (p is Offset) addPoint(p);
+            }
+          }
+        }
+      }
+    }
+
+    if (minXVal == double.infinity) {
+      cx = 0;
+      cy = 0;
+      baseRange = 40.0;
+    } else {
+      cx = (minXVal + maxXVal) / 2;
+      cy = (minYVal + maxYVal) / 2;
+      double w = maxXVal - minXVal;
+      double h = maxYVal - minYVal;
+      baseRange = (w > h ? w : h) * 1.5; // 50% padding
+      if (baseRange < 10) baseRange = 10;
+    }
+  }
 
   void clear() {
     variables.clear();

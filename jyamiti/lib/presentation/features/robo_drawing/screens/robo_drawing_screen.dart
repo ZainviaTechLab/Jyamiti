@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import '../models/robo_command.dart';
 import '../models/robo_context.dart';
+import '../models/robo_drawing_data.dart';
+import '../models/robo_presets.dart';
 import '../parser/robo_parser.dart';
 import '../widgets/robo_canvas.dart';
-
 class RoboDrawingScreen extends StatefulWidget {
   final bool isInline;
   const RoboDrawingScreen({Key? key, this.isInline = false}) : super(key: key);
@@ -16,6 +17,13 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
   final RoboContext _ctx = RoboContext();
   final List<TextEditingController> _controllers = [];
   final List<RoboCommand> _commands = [];
+
+  final List<RoboDrawingData> _library = RoboPresets.loadPresets();
+  int _activeDrawingIndex = 0;
+
+  bool _isDarkMode = false;
+  bool _showGrid = true;
+  bool _isFullScreen = false;
 
   late AnimationController _animController;
   int _activeCommandIndex = -1;
@@ -34,27 +42,7 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
       }
     });
 
-    // Bisection of an angle example
-    _addCommandRow("text('Construct a line which bisects an angle')");
-    _addCommandRow("A=point(3,3)");
-    _addCommandRow("B=point(14,3)");
-    _addCommandRow("a=line(A,B)");
-    _addCommandRow("b=line(A,9.5,14)");
-    _addCommandRow("text('Draw an arc with center A of any radius')");
-    _addCommandRow("c=arc(A,5,330,120)");
-    _addCommandRow("C=point(intersect(a,c))");
-    _addCommandRow("D=point(intersect(b,c))");
-    _addCommandRow("text('Draw an arc with center C of any radius greather that half of CD')");
-    _addCommandRow("d=arc(C,4,20,60)");
-    _addCommandRow("text('Repeat this with center D using the same radius')");
-    _addCommandRow("e=arc(D,4,330,60)");
-    _addCommandRow("E=point(intersect(d,e))");
-    _addCommandRow("text('Join A to the point where arcs cross.')");
-    _addCommandRow("c=line(A,E)");
-    _addCommandRow("findangle(b,c)");
-    _addCommandRow("findangle(a,c)");
-    
-    _parseAllCommands();
+    _loadDrawing(_activeDrawingIndex);
   }
 
   @override
@@ -66,8 +54,75 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
     super.dispose();
   }
 
+  void _loadDrawing(int index) {
+    if (index < 0 || index >= _library.length) return;
+    _pause();
+    _activeCommandIndex = -1;
+    for (var c in _controllers) {
+      c.dispose();
+    }
+    _controllers.clear();
+    
+    for (var cmd in _library[index].commands) {
+      _controllers.add(TextEditingController(text: cmd));
+    }
+    if (_controllers.isEmpty) {
+      _controllers.add(TextEditingController(text: ""));
+      _library[index].commands.add("");
+    }
+    
+    _parseAllCommands();
+    setState(() {
+      _activeDrawingIndex = index;
+    });
+  }
+
+  void _createNewDrawing() {
+    setState(() {
+      _library.add(RoboDrawingData(
+        name: "Untitled Drawing ${_library.length + 1}",
+        commands: [],
+      ));
+      _loadDrawing(_library.length - 1);
+    });
+  }
+
+  void _renameDrawing(int index) {
+    TextEditingController nameController = TextEditingController(text: _library[index].name);
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Rename Drawing'),
+          content: TextField(
+            controller: nameController,
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _library[index].name = nameController.text;
+                });
+                Navigator.pop(context);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   void _addCommandRow([String text = ""]) {
     _controllers.add(TextEditingController(text: text));
+    if (_library[_activeDrawingIndex].commands.length < _controllers.length) {
+      _library[_activeDrawingIndex].commands.add(text);
+    }
     setState(() {});
   }
 
@@ -81,6 +136,21 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
         _commands.add(cmd);
       }
     }
+
+    // Evaluate all commands temporarily to compute the bounding box for the entire drawing
+    RoboContext tempCtx = RoboContext();
+    for (var cmd in _commands) {
+      try {
+        cmd.evaluate(tempCtx);
+      } catch (e) {
+        // Ignore errors during speculative evaluation
+      }
+    }
+    tempCtx.updateBoundingBox();
+    
+    _ctx.cx = tempCtx.cx;
+    _ctx.cy = tempCtx.cy;
+    _ctx.baseRange = tempCtx.baseRange;
   }
 
   void _evaluateUpTo(int index) {
@@ -332,14 +402,63 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: widget.isInline ? null : AppBar(
+      appBar: (widget.isInline || _isFullScreen) ? null : AppBar(
         title: const Text('Robo Drawing'),
         backgroundColor: Colors.blueGrey.shade900,
         foregroundColor: Colors.white,
       ),
       body: Row(
         children: [
-          // Sidebar
+          if (!_isFullScreen) ...[
+            // 1. Library Sidebar
+            Container(
+            width: 250,
+            color: Colors.grey.shade200,
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  color: Colors.blueGrey.shade800,
+                  width: double.infinity,
+                  child: const Text(
+                    "Library",
+                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _library.length,
+                    itemBuilder: (context, index) {
+                      bool isSelected = index == _activeDrawingIndex;
+                      return ListTile(
+                        title: Text(_library[index].name, style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+                        selected: isSelected,
+                        selectedTileColor: Colors.blue.withValues(alpha: 0.1),
+                        onTap: () {
+                          _loadDrawing(index);
+                        },
+                        trailing: IconButton(
+                          icon: const Icon(Icons.edit, size: 16),
+                          onPressed: () => _renameDrawing(index),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text("New Drawing"),
+                    onPressed: _createNewDrawing,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const VerticalDivider(width: 1, thickness: 1, color: Colors.grey),
+          
+          // 2. Command List Sidebar
           Container(
             width: 300,
             color: Colors.grey.shade100,
@@ -356,7 +475,9 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
                         icon: const Icon(Icons.delete_outline, color: Colors.grey),
                         onPressed: () {
                           setState(() {
+                            for (var c in _controllers) c.dispose();
                             _controllers.clear();
+                            _library[_activeDrawingIndex].commands.clear();
                             _commands.clear();
                             _ctx.clear();
                             _activeCommandIndex = -1;
@@ -424,6 +545,7 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
                                 style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
                                 onChanged: (val) {
                                   _pause();
+                                  _library[_activeDrawingIndex].commands[index] = val;
                                   _parseAllCommands();
                                 },
                               ),
@@ -455,15 +577,59 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
               ],
             ),
           ),
-          // Canvas
+          ],
+          
+          // 3. Canvas
           Expanded(
             child: Container(
-              color: Colors.white,
-              child: RoboCanvas(
-                ctx: _ctx,
-                commands: _commands,
-                activeCommandIndex: _activeCommandIndex,
-                animationProgress: _animController.value,
+              color: _isDarkMode ? Colors.black : Colors.white,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: RoboCanvas(
+                      ctx: _ctx,
+                      commands: _commands,
+                      activeCommandIndex: _activeCommandIndex,
+                      animationProgress: _animController.value,
+                      showGrid: _showGrid,
+                      isDarkMode: _isDarkMode,
+                    ),
+                  ),
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _isDarkMode ? Colors.grey.shade800 : Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: Icon(_showGrid ? Icons.grid_on : Icons.grid_off),
+                            color: _isDarkMode ? Colors.white : Colors.black,
+                            onPressed: () => setState(() => _showGrid = !_showGrid),
+                            tooltip: 'Toggle Grid',
+                          ),
+                          IconButton(
+                            icon: Icon(_isDarkMode ? Icons.light_mode : Icons.dark_mode),
+                            color: _isDarkMode ? Colors.white : Colors.black,
+                            onPressed: () => setState(() => _isDarkMode = !_isDarkMode),
+                            tooltip: 'Toggle Theme',
+                          ),
+                          IconButton(
+                            icon: Icon(_isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen),
+                            color: _isDarkMode ? Colors.white : Colors.black,
+                            onPressed: () => setState(() => _isFullScreen = !_isFullScreen),
+                            tooltip: 'Toggle Full Screen',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
