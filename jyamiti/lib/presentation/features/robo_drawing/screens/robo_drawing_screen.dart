@@ -398,6 +398,60 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
       }
     );
   }
+  void _showBulkEntryDialog() {
+    String existingText = _controllers.map((c) => c.text).where((t) => t.trim().isNotEmpty).join('\n');
+    final TextEditingController bulkController = TextEditingController(text: existingText);
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Bulk Entry / Edit Code'),
+          content: TextField(
+            controller: bulkController,
+            maxLines: 15,
+            decoration: const InputDecoration(
+              hintText: 'Enter commands separated by semicolons or newlines.\nExample:\nA=point(1,1);\nB=point(2,2);',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                String input = bulkController.text;
+                List<String> commands = input.split(RegExp(r'[;\n]'));
+                
+                setState(() {
+                  for (var c in _controllers) c.dispose();
+                  _controllers.clear();
+                  _library[_activeDrawingIndex].commands.clear();
+                  
+                  for (String cmd in commands) {
+                    String trimmed = cmd.trim();
+                    if (trimmed.isNotEmpty) {
+                      _addCommandRow(trimmed);
+                    }
+                  }
+                  
+                  if (_controllers.isEmpty) {
+                    _addCommandRow();
+                  }
+                });
+                
+                _parseAllCommands();
+                Navigator.of(context).pop();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -569,9 +623,19 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
                 ),
                 Padding(
                   padding: const EdgeInsets.all(8.0),
-                  child: ElevatedButton(
-                    onPressed: () => _addCommandRow(),
-                    child: const Text('Add Command'),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ElevatedButton(
+                        onPressed: () => _addCommandRow(),
+                        child: const Text('Add Command'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () => _showBulkEntryDialog(),
+                        child: const Text('Bulk Entry'),
+                      ),
+                    ],
                   ),
                 ),
               ],

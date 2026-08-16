@@ -145,7 +145,7 @@ class RoboContext {
     // Check if it's a known variable
     if (variables.containsKey(expr)) {
       var data = variables[expr]?.data;
-      if (data is Map && data['type'] == 'measured_angle') {
+      if (data is Map && (data['type'] == 'measured_angle' || data['type'] == 'measured_distance')) {
         return data['value'];
       }
       return data;
@@ -170,7 +170,7 @@ class RoboContext {
       variables.forEach((key, value) {
         if (value.data is num) {
           cm.bindVariable(Variable(key), Number((value.data as num).toDouble()));
-        } else if (value.data is Map && value.data['type'] == 'measured_angle') {
+        } else if (value.data is Map && (value.data['type'] == 'measured_angle' || value.data['type'] == 'measured_distance')) {
           cm.bindVariable(Variable(key), Number((value.data['value'] as num).toDouble()));
         }
       });
@@ -194,5 +194,23 @@ class RoboContext {
     }
 
     return null;
+  }
+
+  dynamic evaluateDetailed(dynamic expr) {
+    if (expr is String && variables.containsKey(expr)) {
+      return variables[expr]?.data;
+    }
+    
+    int preCount = _anonCounter;
+    dynamic val = evaluateExpression(expr);
+    
+    if (expr is String && _anonCounter > preCount) {
+       String anonVar = '_anon$_anonCounter';
+       var data = variables[anonVar]?.data;
+       if (data is Map && (data['type'] == 'measured_distance' || data['type'] == 'measured_angle')) {
+         return data;
+       }
+    }
+    return val;
   }
 }

@@ -835,10 +835,23 @@ class RoboCircleCommand extends RoboCommand {
   @override
   void evaluate(RoboContext ctx) {
     if (assignedVar != null) {
+      Offset? center;
+      double r = 0.0;
+
+      dynamic arg0Eval = ctx.evaluateDetailed(centerVar);
+      center = arg0Eval is Offset ? arg0Eval : ctx.evaluateExpression(centerVar);
+      
+      dynamic arg1Eval = ctx.evaluateDetailed(radiusRef);
+      if (arg1Eval is Map && arg1Eval['type'] == 'measured_distance') {
+         r = arg1Eval['value'];
+      } else {
+         r = arg1Eval is double ? arg1Eval : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
+      }
+
       ctx.setVar(assignedVar!, {
         'type': 'circle',
-        'center': centerVar,
-        'radius': radiusRef,
+        'center': center ?? centerVar,
+        'radius': r > 0 ? r : radiusRef,
       });
     }
   }
@@ -848,13 +861,20 @@ class RoboCircleCommand extends RoboCommand {
     RoboObject? obj = assignedVar != null ? ctx.getObject(assignedVar!) : null;
     if (obj != null && obj.isHidden) return;
 
-    Offset? center = ctx.evaluateExpression(centerVar);
-    if (center == null) return;
+    Offset? center;
+    double r = 0.0;
 
-    double r = radiusRef is double
-        ? radiusRef
-        : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
-    if (r <= 0) return;
+    dynamic arg0Eval = ctx.evaluateDetailed(centerVar);
+    center = arg0Eval is Offset ? arg0Eval : ctx.evaluateExpression(centerVar);
+    
+    dynamic arg1Eval = ctx.evaluateDetailed(radiusRef);
+    if (arg1Eval is Map && arg1Eval['type'] == 'measured_distance') {
+       r = arg1Eval['value'];
+    } else {
+       r = arg1Eval is double ? arg1Eval : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
+    }
+
+    if (center == null || r <= 0) return;
 
     Offset pxCenter = ctx.gridToPixel(center.dx, center.dy);
     Offset pxEdge = ctx.gridToPixel(center.dx + r, center.dy);
@@ -880,52 +900,117 @@ class RoboCircleCommand extends RoboCommand {
     RoboObject? obj = assignedVar != null ? ctx.getObject(assignedVar!) : null;
     if (obj != null && obj.isHidden) return;
 
-    Offset? center = ctx.evaluateExpression(centerVar);
-    if (center == null) return;
+    Offset? center;
+    Offset? p1;
+    Offset? p2;
+    double r = 0.0;
 
-    double r = radiusRef is double
-        ? radiusRef
-        : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
-    if (r <= 0) return;
+    dynamic arg0Eval = ctx.evaluateDetailed(centerVar);
+    center = arg0Eval is Offset ? arg0Eval : ctx.evaluateExpression(centerVar);
+    
+    dynamic arg1Eval = ctx.evaluateDetailed(radiusRef);
+    if (arg1Eval is Map && arg1Eval['type'] == 'measured_distance') {
+       p1 = arg1Eval['p1'];
+       p2 = arg1Eval['p2'];
+       r = arg1Eval['value'];
+    } else {
+       r = arg1Eval is double ? arg1Eval : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
+    }
+
+    if (center == null || r <= 0) return;
 
     Offset pxCenter = ctx.gridToPixel(center.dx, center.dy);
     Offset pxEdge = ctx.gridToPixel(center.dx + r, center.dy);
     double pxRadius = (pxEdge.dx - pxCenter.dx).abs();
 
-    // Draw partial circle
     final paint = Paint()
       ..color = Colors.green.withValues(alpha: obj?.opacity ?? 1.0)
       ..strokeWidth = obj?.strokeWidth ?? 2.0
-      ..style = (obj?.isFilled ?? false)
-          ? PaintingStyle.fill
-          : PaintingStyle.stroke;
+      ..style = (obj?.isFilled ?? false) ? PaintingStyle.fill : PaintingStyle.stroke;
 
-    // A circle starts at angle 0 and goes to 2*pi
-    double sweepAngle = 2 * pi * progress;
-    canvas.drawArc(
-      Rect.fromCircle(center: pxCenter, radius: pxRadius),
-      0,
-      sweepAngle,
-      (obj?.isFilled ?? false) ? true : false,
-      paint,
-    );
+    Offset compassNeedle;
+    Offset compassPencil;
+    double currentSweep = 0.0;
+    bool shouldDrawArc = false;
 
-    // Draw the virtual compass
-    // Point of compass is at pxCenter.
-    // Pencil of compass is at current angle.
-    double currentAngle = sweepAngle;
-    Offset pencilOffset = Offset(
-      pxCenter.dx + pxRadius * cos(currentAngle),
-      pxCenter.dy + pxRadius * sin(currentAngle),
-    );
+    if (p1 != null && p2 != null) {
+      Offset pxP1 = ctx.gridToPixel(p1.dx, p1.dy);
+      Offset pxP2 = ctx.gridToPixel(p2.dx, p2.dy);
+      Offset startNeedle = Offset(pxP1.dx, size.height + 100);
+      Offset startPencil = Offset(pxP1.dx + 10, size.height + 100);
 
-    paintRealisticCompass(canvas, pxCenter, pencilOffset);
+      if (progress < 0.25) {
+        double p = progress / 0.25;
+        p = sin(p * pi / 2);
+        compassNeedle = pxP1 * p + startNeedle * (1 - p);
+        compassPencil = (pxP1 + const Offset(10, 10)) * p + startPencil * (1 - p);
+      } else if (progress < 0.50) {
+        double p = (progress - 0.25) / 0.25;
+        p = 0.5 - cos(p * pi) / 2;
+        compassNeedle = pxP1;
+        compassPencil = pxP2 * p + (pxP1 + const Offset(10, 10)) * (1 - p);
+      } else if (progress < 0.75) {
+        double p = (progress - 0.50) / 0.25;
+        p = sin(p * pi / 2);
+        compassNeedle = pxCenter * p + pxP1 * (1 - p);
+        
+        double angle = atan2(pxP2.dy - pxP1.dy, pxP2.dx - pxP1.dx);
+        double currentRot = 0 * p + angle * (1 - p);
+        
+        compassPencil = Offset(
+          compassNeedle.dx + pxRadius * cos(currentRot),
+          compassNeedle.dy + pxRadius * sin(currentRot)
+        );
+      } else {
+        double p = (progress - 0.75) / 0.25;
+        currentSweep = 2 * pi * p;
+        compassNeedle = pxCenter;
+        compassPencil = Offset(
+          pxCenter.dx + pxRadius * cos(currentSweep),
+          pxCenter.dy + pxRadius * sin(currentSweep)
+        );
+        shouldDrawArc = true;
+      }
+    } else {
+      if (progress < 0.3) {
+        double p = progress / 0.3;
+        p = sin(p * pi / 2);
+        Offset startNeedle = Offset(pxCenter.dx, size.height + 100);
+        compassNeedle = pxCenter * p + startNeedle * (1 - p);
+        compassPencil = Offset(
+          compassNeedle.dx + (pxRadius * p) * cos(0),
+          compassNeedle.dy + (pxRadius * p) * sin(0)
+        );
+      } else {
+        double p = (progress - 0.3) / 0.7;
+        currentSweep = 2 * pi * p;
+        compassNeedle = pxCenter;
+        compassPencil = Offset(
+          pxCenter.dx + pxRadius * cos(currentSweep),
+          pxCenter.dy + pxRadius * sin(currentSweep)
+        );
+        shouldDrawArc = true;
+      }
+    }
+
+    if (shouldDrawArc) {
+      canvas.drawArc(
+        Rect.fromCircle(center: pxCenter, radius: pxRadius),
+        0,
+        currentSweep,
+        (obj?.isFilled ?? false) ? true : false,
+        paint,
+      );
+    }
+
+    paintRealisticCompass(canvas, compassNeedle, compassPencil);
   }
 }
 
 class RoboArcCommand extends RoboCommand {
-  final String centerVar;
+  final dynamic centerVar;
   final dynamic radiusRef;
+  final dynamic radiusPt2Ref;
   final dynamic startAngleDegRef;
   final dynamic sweepAngleDegRef;
 
@@ -936,15 +1021,51 @@ class RoboArcCommand extends RoboCommand {
     this.radiusRef,
     this.startAngleDegRef,
     this.sweepAngleDegRef,
+  ) : radiusPt2Ref = null, super(rawCommand, assignedVar);
+
+  RoboArcCommand.fromPoints(
+    String rawCommand,
+    String? assignedVar,
+    this.radiusRef,
+    this.radiusPt2Ref,
+    this.centerVar,
+    this.startAngleDegRef,
+    this.sweepAngleDegRef,
   ) : super(rawCommand, assignedVar);
 
   @override
   void evaluate(RoboContext ctx) {
     if (assignedVar != null) {
+      Offset? center;
+      double r = 0.0;
+
+      if (radiusPt2Ref != null) {
+        center = ctx.evaluateExpression(centerVar);
+        Offset? p1 = ctx.evaluateExpression(radiusRef);
+        Offset? p2 = ctx.evaluateExpression(radiusPt2Ref);
+        if (p1 != null && p2 != null) r = (p1 - p2).distance;
+      } else {
+        dynamic arg0Eval = ctx.evaluateDetailed(centerVar);
+        if (arg0Eval is Map && arg0Eval['type'] == 'line') {
+          center = ctx.evaluateExpression(radiusRef);
+          Offset? p1 = ctx.evaluateExpression(arg0Eval['p1']);
+          Offset? p2 = ctx.evaluateExpression(arg0Eval['p2']);
+          if (p1 != null && p2 != null) r = (p1 - p2).distance;
+        } else {
+          center = arg0Eval is Offset ? arg0Eval : ctx.evaluateExpression(centerVar);
+          dynamic arg1Eval = ctx.evaluateDetailed(radiusRef);
+          if (arg1Eval is Map && arg1Eval['type'] == 'measured_distance') {
+             r = arg1Eval['value'];
+          } else {
+             r = arg1Eval is double ? arg1Eval : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
+          }
+        }
+      }
+
       ctx.setVar(assignedVar!, {
         'type': 'arc',
-        'center': centerVar,
-        'radius': radiusRef,
+        'center': center ?? centerVar,
+        'radius': r > 0 ? r : radiusRef,
       });
     }
   }
@@ -954,13 +1075,33 @@ class RoboArcCommand extends RoboCommand {
     RoboObject? obj = assignedVar != null ? ctx.getObject(assignedVar!) : null;
     if (obj != null && obj.isHidden) return;
 
-    Offset? center = ctx.evaluateExpression(centerVar);
-    if (center == null) return;
+    Offset? center;
+    double r = 0.0;
 
-    double r = radiusRef is double
-        ? radiusRef
-        : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
-    if (r <= 0) return;
+    if (radiusPt2Ref != null) {
+      center = ctx.evaluateExpression(centerVar);
+      Offset? p1 = ctx.evaluateExpression(radiusRef);
+      Offset? p2 = ctx.evaluateExpression(radiusPt2Ref);
+      if (p1 != null && p2 != null) r = (p1 - p2).distance;
+    } else {
+      dynamic arg0Eval = ctx.evaluateDetailed(centerVar);
+      if (arg0Eval is Map && arg0Eval['type'] == 'line') {
+        center = ctx.evaluateExpression(radiusRef);
+        Offset? p1 = ctx.evaluateExpression(arg0Eval['p1']);
+        Offset? p2 = ctx.evaluateExpression(arg0Eval['p2']);
+        if (p1 != null && p2 != null) r = (p1 - p2).distance;
+      } else {
+        center = arg0Eval is Offset ? arg0Eval : ctx.evaluateExpression(centerVar);
+        dynamic arg1Eval = ctx.evaluateDetailed(radiusRef);
+        if (arg1Eval is Map && arg1Eval['type'] == 'measured_distance') {
+           r = arg1Eval['value'];
+        } else {
+           r = arg1Eval is double ? arg1Eval : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
+        }
+      }
+    }
+
+    if (center == null || r <= 0) return;
 
     double startDeg = startAngleDegRef is double
         ? startAngleDegRef
@@ -1005,13 +1146,40 @@ class RoboArcCommand extends RoboCommand {
     RoboObject? obj = assignedVar != null ? ctx.getObject(assignedVar!) : null;
     if (obj != null && obj.isHidden) return;
 
-    Offset? center = ctx.evaluateExpression(centerVar);
-    if (center == null) return;
+    Offset? center;
+    Offset? p1;
+    Offset? p2;
+    double r = 0.0;
 
-    double r = radiusRef is double
-        ? radiusRef
-        : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
-    if (r <= 0) return;
+    if (radiusPt2Ref != null) {
+      // 5-arg syntax: arc(p1, p2, center, start, sweep)
+      center = ctx.evaluateExpression(centerVar);
+      p1 = ctx.evaluateExpression(radiusRef);
+      p2 = ctx.evaluateExpression(radiusPt2Ref);
+      if (p1 != null && p2 != null) r = (p1 - p2).distance;
+    } else {
+      dynamic arg0Eval = ctx.evaluateDetailed(centerVar);
+      if (arg0Eval is Map && arg0Eval['type'] == 'line') {
+        // arc(line, center, start, sweep)
+        center = ctx.evaluateExpression(radiusRef);
+        p1 = ctx.evaluateExpression(arg0Eval['p1']);
+        p2 = ctx.evaluateExpression(arg0Eval['p2']);
+        if (p1 != null && p2 != null) r = (p1 - p2).distance;
+      } else {
+        // Standard arc(center, radius, start, sweep)
+        center = arg0Eval is Offset ? arg0Eval : ctx.evaluateExpression(centerVar);
+        dynamic arg1Eval = ctx.evaluateDetailed(radiusRef);
+        if (arg1Eval is Map && arg1Eval['type'] == 'measured_distance') {
+           p1 = arg1Eval['p1'];
+           p2 = arg1Eval['p2'];
+           r = arg1Eval['value'];
+        } else {
+           r = arg1Eval is double ? arg1Eval : (ctx.evaluateExpression(radiusRef) as double? ?? 0.0);
+        }
+      }
+    }
+
+    if (center == null || r <= 0) return;
 
     double startDeg = startAngleDegRef is double
         ? startAngleDegRef
@@ -1021,35 +1189,99 @@ class RoboArcCommand extends RoboCommand {
         : (ctx.evaluateExpression(sweepAngleDegRef) as double? ?? 0.0);
 
     Offset pxCenter = ctx.gridToPixel(center.dx, center.dy);
+    double pxRadius = r * ctx.baseRange / 40.0 * (size.shortestSide / 2) / (ctx.baseRange / 2); // Approximation of scaling, but better to use gridToPixel
     Offset pxEdge = ctx.gridToPixel(center.dx + r, center.dy);
-    double pxRadius = (pxEdge.dx - pxCenter.dx).abs();
+    pxRadius = (pxEdge.dx - pxCenter.dx).abs();
 
     final paint = Paint()
       ..color = Colors.orange.withValues(alpha: obj?.opacity ?? 1.0)
       ..strokeWidth = obj?.strokeWidth ?? 2.0
-      ..style = (obj?.isFilled ?? false)
-          ? PaintingStyle.fill
-          : PaintingStyle.stroke;
+      ..style = (obj?.isFilled ?? false) ? PaintingStyle.fill : PaintingStyle.stroke;
 
-    double startRad = -startDeg * pi / 180.0;
-    double fullSweepRad = -sweepDeg * pi / 180.0;
-    double currentSweep = fullSweepRad * progress;
+    Offset compassNeedle;
+    Offset compassPencil;
+    double currentSweep = 0.0;
+    bool shouldDrawArc = false;
 
-    canvas.drawArc(
-      Rect.fromCircle(center: pxCenter, radius: pxRadius),
-      startRad,
-      currentSweep,
-      (obj?.isFilled ?? false) ? true : false,
-      paint,
-    );
+    if (p1 != null && p2 != null) {
+      Offset pxP1 = ctx.gridToPixel(p1.dx, p1.dy);
+      Offset pxP2 = ctx.gridToPixel(p2.dx, p2.dy);
+      Offset startNeedle = Offset(pxP1.dx, size.height + 100);
+      Offset startPencil = Offset(pxP1.dx + 10, size.height + 100);
 
-    double currentAngle = startRad + currentSweep;
-    Offset pencilOffset = Offset(
-      pxCenter.dx + pxRadius * cos(currentAngle),
-      pxCenter.dy + pxRadius * sin(currentAngle),
-    );
+      if (progress < 0.25) {
+        double p = progress / 0.25;
+        p = sin(p * pi / 2);
+        compassNeedle = pxP1 * p + startNeedle * (1 - p);
+        compassPencil = (pxP1 + const Offset(10, 10)) * p + startPencil * (1 - p);
+      } else if (progress < 0.50) {
+        double p = (progress - 0.25) / 0.25;
+        p = 0.5 - cos(p * pi) / 2;
+        compassNeedle = pxP1;
+        compassPencil = pxP2 * p + (pxP1 + const Offset(10, 10)) * (1 - p);
+      } else if (progress < 0.75) {
+        double p = (progress - 0.50) / 0.25;
+        p = sin(p * pi / 2);
+        compassNeedle = pxCenter * p + pxP1 * (1 - p);
+        
+        double angle = atan2(pxP2.dy - pxP1.dy, pxP2.dx - pxP1.dx);
+        double startRad = -startDeg * pi / 180.0;
+        double currentRot = startRad * p + angle * (1 - p);
+        
+        compassPencil = Offset(
+          compassNeedle.dx + pxRadius * cos(currentRot),
+          compassNeedle.dy + pxRadius * sin(currentRot)
+        );
+      } else {
+        double p = (progress - 0.75) / 0.25;
+        double startRad = -startDeg * pi / 180.0;
+        double fullSweepRad = -sweepDeg * pi / 180.0;
+        currentSweep = fullSweepRad * p;
+        compassNeedle = pxCenter;
+        double currentAngle = startRad + currentSweep;
+        compassPencil = Offset(
+          pxCenter.dx + pxRadius * cos(currentAngle),
+          pxCenter.dy + pxRadius * sin(currentAngle)
+        );
+        shouldDrawArc = true;
+      }
+    } else {
+      if (progress < 0.3) {
+        double p = progress / 0.3;
+        p = sin(p * pi / 2);
+        Offset startNeedle = Offset(pxCenter.dx, size.height + 100);
+        double startRad = -startDeg * pi / 180.0;
+        compassNeedle = pxCenter * p + startNeedle * (1 - p);
+        compassPencil = Offset(
+          compassNeedle.dx + (pxRadius * p) * cos(startRad),
+          compassNeedle.dy + (pxRadius * p) * sin(startRad)
+        );
+      } else {
+        double p = (progress - 0.3) / 0.7;
+        double startRad = -startDeg * pi / 180.0;
+        double fullSweepRad = -sweepDeg * pi / 180.0;
+        currentSweep = fullSweepRad * p;
+        compassNeedle = pxCenter;
+        double currentAngle = startRad + currentSweep;
+        compassPencil = Offset(
+          pxCenter.dx + pxRadius * cos(currentAngle),
+          pxCenter.dy + pxRadius * sin(currentAngle)
+        );
+        shouldDrawArc = true;
+      }
+    }
 
-    paintRealisticCompass(canvas, pxCenter, pencilOffset);
+    if (shouldDrawArc) {
+      canvas.drawArc(
+        Rect.fromCircle(center: pxCenter, radius: pxRadius),
+        -startDeg * pi / 180.0,
+        currentSweep,
+        (obj?.isFilled ?? false) ? true : false,
+        paint,
+      );
+    }
+
+    paintRealisticCompass(canvas, compassNeedle, compassPencil);
   }
 }
 
@@ -1697,13 +1929,17 @@ class RoboMathCommand extends RoboCommand {
         if (args.length == 2) {
           Offset? p1 = ctx.evaluateExpression(args[0]);
           Offset? p2 = ctx.evaluateExpression(args[1]);
-          if (p1 != null && p2 != null) result = (p1 - p2).distance;
+          if (p1 != null && p2 != null) {
+            result = {'type': 'measured_distance', 'p1': p1, 'p2': p2, 'value': (p1 - p2).distance};
+          }
         } else if (args.length == 1) {
           dynamic lineData = ctx.evaluateExpression(args[0]);
           if (lineData is Map && lineData['type'] == 'line') {
             Offset? p1 = ctx.evaluateExpression(lineData['p1']);
             Offset? p2 = ctx.evaluateExpression(lineData['p2']);
-            if (p1 != null && p2 != null) result = (p1 - p2).distance;
+            if (p1 != null && p2 != null) {
+              result = {'type': 'measured_distance', 'p1': p1, 'p2': p2, 'value': (p1 - p2).distance};
+            }
           }
         }
       } else if (func == 'pos') {

@@ -15,10 +15,10 @@ class RoboParser {
     String? assignedVar;
     String cmdString = line;
 
-    if (line.contains('=')) {
-      final parts = line.split('=');
-      assignedVar = parts[0].trim();
-      cmdString = parts.sublist(1).join('=').trim();
+    final assignMatch = RegExp(r'^([a-zA-Z0-9_]+)\s*=\s*(.*)$').firstMatch(line);
+    if (assignMatch != null) {
+      assignedVar = assignMatch.group(1)!;
+      cmdString = assignMatch.group(2)!;
     }
 
     // Extract command name and arguments: `command(arg1, arg2)`
@@ -61,6 +61,10 @@ class RoboParser {
             double? start = double.tryParse(args[2]);
             double? sweep = double.tryParse(args[3]);
             return RoboArcCommand(line, assignedVar, args[0], r ?? args[1], start ?? args[2], sweep ?? args[3]);
+          } else if (args.length == 5) {
+            double? start = double.tryParse(args[3]);
+            double? sweep = double.tryParse(args[4]);
+            return RoboArcCommand.fromPoints(line, assignedVar, args[0], args[1], args[2], start ?? args[3], sweep ?? args[4]);
           }
           break;
         case 'stroke':
