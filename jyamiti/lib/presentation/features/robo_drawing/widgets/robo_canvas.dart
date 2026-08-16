@@ -64,6 +64,25 @@ class _RoboPainter extends CustomPainter {
   }
 
   void _updateGridToPixel(Size size) {
+    // Maintain a 1:1 aspect ratio. Keep the smaller dimension covering 40 units.
+    double baseRange = 40.0;
+    
+    if (size.width > size.height) {
+      double scale = size.height / baseRange;
+      double xRange = size.width / scale;
+      ctx.minY = -baseRange / 2;
+      ctx.maxY = baseRange / 2;
+      ctx.minX = -xRange / 2;
+      ctx.maxX = xRange / 2;
+    } else {
+      double scale = size.width / baseRange;
+      double yRange = size.height / scale;
+      ctx.minX = -baseRange / 2;
+      ctx.maxX = baseRange / 2;
+      ctx.minY = -yRange / 2;
+      ctx.maxY = yRange / 2;
+    }
+
     ctx.gridToPixel = (x, y) {
       double xRange = ctx.maxX - ctx.minX;
       double yRange = ctx.maxY - ctx.minY;
