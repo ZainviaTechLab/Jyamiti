@@ -36,11 +36,17 @@ class RoboParser {
             double? y = double.tryParse(args[1]);
             // Allow arguments to be numeric or string references
             return RoboPointCommand(line, assignedVar, x ?? args[0], y ?? args[1]);
+          } else if (args.length == 1) {
+            return RoboPointCommand(line, assignedVar, args[0], null);
           }
           break;
         case 'line':
           if (args.length == 2) {
             return RoboLineCommand(line, assignedVar, args[0], args[1]);
+          } else if (args.length == 3) {
+            double? x = double.tryParse(args[1]);
+            double? y = double.tryParse(args[2]);
+            return RoboLineCommand(line, assignedVar, args[0], {'type': 'point', 'x': x ?? args[1], 'y': y ?? args[2]});
           }
           break;
         case 'circle':
@@ -146,6 +152,10 @@ class RoboParser {
         case 'parallel':
         case 'angle':
         case 'intersect':
+          if (args.isNotEmpty) {
+            return RoboMathCommand(line, assignedVar, cmdName, args);
+          }
+          break;
         case 'plot':
           if (args.isNotEmpty) {
             return RoboPlotCommand(line, assignedVar, args[0], args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);

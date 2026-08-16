@@ -1,4 +1,4 @@
-import 'dart:ui';
+import 'package:flutter/material.dart';
 import 'package:math_expressions/math_expressions.dart';
 import '../parser/robo_parser.dart';
 import '../models/robo_command.dart';
@@ -9,6 +9,14 @@ class RoboObject {
   double opacity = 1.0;
   double strokeWidth = 2.0;
   bool isFilled = false; // New property for boolean operations and fill
+  
+  // UI Settings properties
+  Color color = Colors.blue;
+  bool showLabel = true;
+  double labelOffsetX = 5.0;
+  double labelOffsetY = 5.0;
+  double? speedOverride;
+  String? comment;
 
   RoboObject(this.data);
 }
@@ -42,7 +50,14 @@ class RoboContext {
       variables[name] = RoboObject(data)
         ..isHidden = variables[name]!.isHidden
         ..opacity = variables[name]!.opacity
-        ..strokeWidth = variables[name]!.strokeWidth;
+        ..strokeWidth = variables[name]!.strokeWidth
+        ..isFilled = variables[name]!.isFilled
+        ..color = variables[name]!.color
+        ..showLabel = variables[name]!.showLabel
+        ..labelOffsetX = variables[name]!.labelOffsetX
+        ..labelOffsetY = variables[name]!.labelOffsetY
+        ..speedOverride = variables[name]!.speedOverride
+        ..comment = variables[name]!.comment;
     } else {
       variables[name] = RoboObject(data);
     }
@@ -58,11 +73,20 @@ class RoboContext {
 
   dynamic evaluateExpression(dynamic expr) {
     if (expr is double) return expr;
+    if (expr is Map && expr['type'] == 'point') {
+      double px = expr['x'] is double ? expr['x'] : (evaluateExpression(expr['x']) as double? ?? 0.0);
+      double py = expr['y'] is double ? expr['y'] : (evaluateExpression(expr['y']) as double? ?? 0.0);
+      return Offset(px, py);
+    }
     if (expr is! String) return expr;
 
     // Check if it's a known variable
     if (variables.containsKey(expr)) {
-      return variables[expr]?.data;
+      var data = variables[expr]?.data;
+      if (data is Map && data['type'] == 'measured_angle') {
+        return data['value'];
+      }
+      return data;
     }
 
     // Check if it's a raw number
@@ -84,6 +108,8 @@ class RoboContext {
       variables.forEach((key, value) {
         if (value.data is num) {
           cm.bindVariable(Variable(key), Number((value.data as num).toDouble()));
+        } else if (value.data is Map && value.data['type'] == 'measured_angle') {
+          cm.bindVariable(Variable(key), Number((value.data['value'] as num).toDouble()));
         }
       });
       double res = exp.evaluate(EvaluationType.REAL, cm);

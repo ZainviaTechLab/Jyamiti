@@ -34,64 +34,25 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
       }
     });
 
-    // Add some default examples
-    _addCommandRow("A=point(5, 5)");
-    _addCommandRow("B=point(-5, -5)");
-    _addCommandRow("a=line(A, B)");
-    _addCommandRow("C=point(5, -5)");
-    _addCommandRow("D=point(-5, 5)");
-    _addCommandRow("b=polygon(A, B, C, D)");
-    _addCommandRow("stroke(b, 4.0)");
-    
-    // Transform examples
-    _addCommandRow("c=rotate(b, 45)");
-    _addCommandRow("stroke(c, 2.0)");
-    _addCommandRow("fade(c, 0.5)");
-    
-    _addCommandRow("d=dilate(c, 0.5, point(0,0))");
-    _addCommandRow("stroke(d, 1.0)");
-    
-    // Math and Helper examples
-    _addCommandRow("E=point(X(A), Y(D))");
-    _addCommandRow("distAD=dist(A, D)");
-    _addCommandRow("midpoint=interpolate(A, B, 0.5)");
-    _addCommandRow("proj=project(C, a)");
-    _addCommandRow("stroke(proj, 4.0)");
-    
-    // Advanced Geometry examples
-    _addCommandRow("p1=perp(a, C, 15)");
-    _addCommandRow("stroke(p1, 2.0)");
-    _addCommandRow("pointtype('sphere')");
-    _addCommandRow("F=intersect(a, p1)");
-    _addCommandRow("ang=angle(A, F, 90, 1)");
-    _addCommandRow("stroke(ang, 3.0)");
-    
-    // Algebraic & Plotting examples
-    _addCommandRow("G=point(10, 2*sin(90))");
-    _addCommandRow("wave=plot('sin(x)', -10, 10)");
-    _addCommandRow("stroke(wave, 1.0)");
-    _addCommandRow("fade(wave, 0.5)");
-    _addCommandRow("circ=para('3*cos(t)', '3*sin(t)', 0, 360, 5)");
-    _addCommandRow("stroke(circ, 2.0)");
-    
-    // Boolean Region Operations & Fill
-    _addCommandRow("poly1=polygon(-5, -5, -1, -5, -1, -1, -5, -1)");
-    _addCommandRow("poly2=polygon(-3, -3, 1, -3, 1, 1, -3, 1)");
-    _addCommandRow("region_and=and(poly1, poly2)");
-    _addCommandRow("stroke(region_and, 3.0)");
-    _addCommandRow("fill(region_and)");
-    _addCommandRow("fill(poly1, poly2)");
-    _addCommandRow("fade(poly1, 0.2)");
-    _addCommandRow("fade(poly2, 0.2)");
-    
-    // Complex Intersections
-    _addCommandRow("c1=circle(point(4, 5), 2)");
-    _addCommandRow("c2=circle(point(6, 5), 2)");
-    _addCommandRow("i1=intersect(c1, c2, 1)");
-    _addCommandRow("i2=intersect(c1, c2, 2)");
-    _addCommandRow("pointtype('cross')");
-    _addCommandRow("stroke(i1, 3.0)");
-    _addCommandRow("stroke(i2, 3.0)");
+    // Bisection of an angle example
+    _addCommandRow("text('Construct a line which bisects an angle')");
+    _addCommandRow("A=point(3,3)");
+    _addCommandRow("B=point(14,3)");
+    _addCommandRow("a=line(A,B)");
+    _addCommandRow("b=line(A,9.5,14)");
+    _addCommandRow("text('Draw an arc with center A of any radius')");
+    _addCommandRow("c=arc(A,5,330,120)");
+    _addCommandRow("C=point(intersect(a,c))");
+    _addCommandRow("D=point(intersect(b,c))");
+    _addCommandRow("text('Draw an arc with center C of any radius greather that half of CD')");
+    _addCommandRow("d=arc(C,4,20,60)");
+    _addCommandRow("text('Repeat this with center D using the same radius')");
+    _addCommandRow("e=arc(D,4,330,60)");
+    _addCommandRow("E=point(intersect(d,e))");
+    _addCommandRow("text('Join A to the point where arcs cross.')");
+    _addCommandRow("c=line(A,E)");
+    _addCommandRow("findangle(b,c)");
+    _addCommandRow("findangle(a,c)");
     
     _parseAllCommands();
   }
@@ -157,6 +118,19 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
       setState(() {
         _activeCommandIndex++;
         _evaluateUpTo(_activeCommandIndex);
+        
+        // Adjust speed if overriden
+        final cmd = _commands[_activeCommandIndex];
+        if (cmd.assignedVar != null) {
+          final obj = _ctx.variables[cmd.assignedVar!];
+          if (obj?.speedOverride != null) {
+            _animController.duration = Duration(milliseconds: (2000 / obj!.speedOverride!).round());
+          } else {
+            _animController.duration = const Duration(seconds: 2);
+          }
+        } else {
+          _animController.duration = const Duration(seconds: 2);
+        }
       });
       _animController.forward(from: 0.0);
     } else {
@@ -205,8 +179,154 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
       _isPlaying = false; // Do not auto-advance to the next command
       _activeCommandIndex = index;
       _evaluateUpTo(_activeCommandIndex);
+      
+      // Adjust speed if overriden
+      final cmd = _commands[_activeCommandIndex];
+      if (cmd.assignedVar != null) {
+        final obj = _ctx.variables[cmd.assignedVar!];
+        if (obj?.speedOverride != null) {
+          _animController.duration = Duration(milliseconds: (2000 / obj!.speedOverride!).round());
+        } else {
+          _animController.duration = const Duration(seconds: 2);
+        }
+      } else {
+        _animController.duration = const Duration(seconds: 2);
+      }
     });
     _animController.forward(from: 0.0);
+  }
+
+  void _showCommandSettingsDialog(int index) {
+    if (_commands.isEmpty) _parseAllCommands();
+    if (index >= _commands.length) return;
+    final cmd = _commands[index];
+    if (cmd.assignedVar == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("This command does not produce a named object to style.")));
+      return;
+    }
+    final obj = _ctx.variables[cmd.assignedVar!];
+    if (obj == null) return;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        Color selectedColor = obj.color;
+        bool showLabel = obj.showLabel;
+        double offsetX = obj.labelOffsetX;
+        double offsetY = obj.labelOffsetY;
+        double? speed = obj.speedOverride;
+        String comment = obj.comment ?? "";
+        
+        TextEditingController offsetXController = TextEditingController(text: offsetX.toString());
+        TextEditingController offsetYController = TextEditingController(text: offsetY.toString());
+        TextEditingController commentController = TextEditingController(text: comment);
+
+        return StatefulBuilder(
+          builder: (context, setStateSB) {
+            return AlertDialog(
+              title: const Text('Settings'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("Colors:"),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [Colors.blue, Colors.red, Colors.green, Colors.orange, Colors.purple, Colors.black].map((c) {
+                        return InkWell(
+                          onTap: () {
+                            setStateSB(() => selectedColor = c);
+                            setState(() => obj.color = c);
+                          },
+                          child: Container(
+                            width: 24, height: 24,
+                            decoration: BoxDecoration(color: c, border: Border.all(color: selectedColor == c ? Colors.blueAccent : Colors.transparent, width: 2)),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        const Text("Show label: "),
+                        Checkbox(
+                          value: showLabel,
+                          onChanged: (v) {
+                            setStateSB(() => showLabel = v!);
+                            setState(() => obj.showLabel = v!);
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text("Label offset:"),
+                    Row(
+                      children: [
+                        const Text("X: "),
+                        SizedBox(width: 50, child: TextField(
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(isDense: true),
+                          controller: offsetXController,
+                          onSubmitted: (v) {
+                            final val = double.tryParse(v);
+                            if (val != null) {
+                              setStateSB(() => offsetX = val);
+                              setState(() => obj.labelOffsetX = val);
+                            }
+                          },
+                        )),
+                        const SizedBox(width: 16),
+                        const Text("Y: "),
+                        SizedBox(width: 50, child: TextField(
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(isDense: true),
+                          controller: offsetYController,
+                          onSubmitted: (v) {
+                            final val = double.tryParse(v);
+                            if (val != null) {
+                              setStateSB(() => offsetY = val);
+                              setState(() => obj.labelOffsetY = val);
+                            }
+                          },
+                        )),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text("Comment:"),
+                    TextField(
+                      onChanged: (v) {
+                        setStateSB(() => comment = v);
+                        setState(() => obj.comment = v);
+                      },
+                      controller: commentController,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text("Speed:"),
+                    Slider(
+                      value: speed ?? 1.0,
+                      min: 0.1,
+                      max: 5.0,
+                      onChanged: (v) {
+                        setStateSB(() => speed = v);
+                        setState(() => obj.speedOverride = v);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
+            );
+          },
+        );
+      }
+    );
   }
 
   @override
@@ -306,6 +426,17 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
                                   _pause();
                                   _parseAllCommands();
                                 },
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () => _showCommandSettingsDialog(index),
+                              child: const Padding(
+                                padding: EdgeInsets.all(4.0),
+                                child: Icon(
+                                  Icons.settings,
+                                  size: 18,
+                                  color: Colors.grey,
+                                ),
                               ),
                             ),
                           ],
