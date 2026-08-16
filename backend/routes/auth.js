@@ -57,6 +57,11 @@ router.get('/profile', authenticateToken, async (req, res) => {
       isActive: user.isActive !== false,
       status: user.status || 'ACTIVE',
       createdAt: user.createdAt,
+      isProfileComplete: user.isProfileComplete || false,
+      phone: user.phone || '',
+      bio: user.bio || '',
+      qualifications: user.qualifications || '',
+      experienceYears: user.experienceYears || 0,
     };
 
     if (user.role === 'STUDENT') {
@@ -82,6 +87,42 @@ router.get('/profile', authenticateToken, async (req, res) => {
     res.json(profileData);
   } catch (error) {
     console.error('Profile fetch error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// PUT /api/auth/profile
+router.put('/profile', authenticateToken, async (req, res) => {
+  try {
+    const { phone, bio, qualifications, experienceYears, newPassword } = req.body;
+    
+    let updates = {
+      isProfileComplete: true,
+    };
+
+    if (phone !== undefined) updates.phone = phone;
+    if (bio !== undefined) updates.bio = bio;
+    if (qualifications !== undefined) updates.qualifications = qualifications;
+    if (experienceYears !== undefined) updates.experienceYears = experienceYears;
+
+    if (newPassword && newPassword.trim().length >= 6) {
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      updates.password = hashedPassword;
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).select('-password');
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({ message: 'Profile updated successfully', user: updatedUser });
+  } catch (error) {
+    console.error('Profile update error:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });

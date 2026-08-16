@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const LOG_DIR = path.resolve('logs');
 const LOG_FILE = path.join(LOG_DIR, 'sent_emails.log');
@@ -24,50 +26,36 @@ ${body}
   console.log(`[EMAIL LOGGED] Sent to: ${to} | Subject: ${subject}`);
 }
 
-// Lazy-create transporter on first use so env vars are always loaded
-function getTransporter() {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    console.warn('[EMAIL] SMTP not configured — falling back to local log.');
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: process.env.SMTP_SECURE === 'true',
-    auth: { user, pass },
-    tls: { rejectUnauthorized: false }, // allow self-signed certs in dev
-  });
-}
-
 export async function sendEmail({ to, subject, text, html }) {
-  const transporter = getTransporter();
-
-  if (transporter) {
-    try {
-      // Verify connection first
-      await transporter.verify();
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || '"Jyamiti Math Learning" <no-reply@jyamitimath.com>',
-        to,
-        subject,
-        text,
-        html,
-      });
-      console.log(`[EMAIL SENT] to: ${to} | Subject: ${subject}`);
-      return;
-    } catch (err) {
-      console.error('[SMTP ERROR]', err.message);
-      console.error('[SMTP] Falling back to local log file.');
-    }
+  if (!process.env.RESEND_API_KEY) {
+    console.warn('[EMAIL] Resend not configured — falling back to local log.');
+    logEmail(to, subject, text || html);
+    return;
   }
 
-  // Fallback: log email to file
-  logEmail(to, subject, text || html);
+  try {
+    const fromAddress = process.env.RESEND_FROM || 'Jyamiti Math Learning <noreply@YOUR-VERIFIED-DOMAIN.com>';
+    
+    const { data, error } = await resend.emails.send({
+      from: fromAddress,
+      to,
+      subject,
+      text,
+      html,
+    });
+
+    if (error) {
+      console.error('[RESEND ERROR]', error);
+      console.error('[EMAIL] Falling back to local log file.');
+      logEmail(to, subject, text || html);
+      return;
+    }
+
+    console.log(`[EMAIL SENT] to: ${to} | Subject: ${subject} | ID: ${data?.id}`);
+  } catch (err) {
+    console.error('[RESEND CATCH ERROR]', err.message);
+    logEmail(to, subject, text || html);
+  }
 }
 
 export async function sendWelcomeEmail(email, name, password, role) {

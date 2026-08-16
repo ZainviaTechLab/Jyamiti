@@ -105,8 +105,8 @@ class RoboPointCommand extends RoboCommand {
 }
 
 class RoboLineCommand extends RoboCommand {
-  final String pt1Var;
-  final String pt2Var;
+  final dynamic pt1Var;
+  final dynamic pt2Var;
 
   RoboLineCommand(String rawCommand, String? assignedVar, this.pt1Var, this.pt2Var)
       : super(rawCommand, assignedVar);
