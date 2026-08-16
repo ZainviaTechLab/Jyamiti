@@ -289,3 +289,37 @@ class SetSquareState extends InstrumentState {
     };
   }
 }
+
+class GraphState extends InstrumentState {
+  double widthPx;
+  double heightPx;
+  String equation;
+  double xMin;
+  double xMax;
+  double yMin;
+  double yMax;
+
+  GraphState({
+    required super.pivot,
+    super.rotation = 0,
+    this.widthPx = 400,
+    this.heightPx = 400,
+    this.equation = 'x^2',
+    this.xMin = -10,
+    this.xMax = 10,
+    this.yMin = -10,
+    this.yMax = 10,
+  });
+
+  @override
+  Map<String, Offset> handleWorldPositions() {
+    final halfW = widthPx / 2;
+    final halfH = heightPx / 2;
+    
+    return {
+      'move': rotatedLocal(0, -halfH - 20),
+      'remove': rotatedLocal(-halfW, -halfH),
+      'resize': rotatedLocal(halfW, halfH),
+    };
+  }
+}

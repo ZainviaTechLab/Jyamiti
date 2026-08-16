@@ -12,6 +12,9 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:provider/provider.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../../providers/theme_provider.dart';
 import '../instruments/instrument_models.dart';
@@ -19,6 +22,7 @@ import '../instruments/ruler_widget.dart';
 import '../instruments/protractor_widget.dart';
 import '../instruments/compass_widget.dart';
 import '../instruments/set_square_widget.dart';
+import '../instruments/graph_widget.dart';
 import '../instruments/media_embed_models.dart';
 import '../instruments/media_embed_widget.dart';
 import '../recording/mathpad_recording_service.dart';
@@ -3106,25 +3110,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// injected via a `leadingToolbarAction`-style external param) since its
   /// behavior is intrinsically tied to this state's private methods.
   Widget _buildAssetLibraryToolbarButton() {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        decoration: BoxDecoration(
-          color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-          border: Border.all(color: context.glassBorder),
-        ),
-        child: IconButton(
-          icon: const Icon(Icons.perm_media_rounded, color: Color(0xFF6366F1)),
-          tooltip: 'Asset Library',
-          onPressed: () async {
+    return Tooltip(
+      message: 'Asset Library',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () async {
             await _ensureAssetLookupCacheLoaded();
             if (!mounted) return;
             showModalBottomSheet(
@@ -3168,31 +3160,36 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ),
             );
           },
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+              border: Border.all(color: context.glassBorder),
+            ),
+            child: const Icon(Icons.photo_library_outlined, color: Color(0xFF6366F1), size: 22),
+          ),
         ),
       ),
     );
   }
 
   Widget _buildSpinnerToolbarButton() {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        decoration: BoxDecoration(
-          color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-          border: Border.all(color: context.glassBorder),
-        ),
-        child: IconButton(
-          icon: const Icon(Icons.casino_rounded, color: Colors.orangeAccent),
-          tooltip: 'Student Spinner',
-          onPressed: () {
+    return Tooltip(
+      message: 'Student Spinner',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () {
             final auth = Provider.of<AuthProvider>(context, listen: false);
             final batches = auth.profile?['batches'] as List? ?? [];
             showDialog(
@@ -3200,6 +3197,86 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               builder: (_) => StudentSpinnerDialog(batches: batches),
             );
           },
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+              border: Border.all(color: context.glassBorder),
+            ),
+            child: const Icon(Icons.casino_rounded, color: Colors.orangeAccent, size: 22),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGraphingToolbarButton() {
+    return Tooltip(
+      message: 'Graphing Plane',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => _addInstrument(
+            (i) => i is GraphState,
+            (center) => GraphState(pivot: center),
+          ),
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+              border: Border.all(color: context.glassBorder),
+            ),
+            child: const Icon(Icons.show_chart_rounded, color: Colors.blueAccent, size: 22),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPdfExportToolbarButton() {
+    return Tooltip(
+      message: 'Export to PDF',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _exportToPdf,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+              border: Border.all(color: context.glassBorder),
+            ),
+            child: const Icon(Icons.picture_as_pdf_rounded, color: Colors.redAccent, size: 22),
+          ),
         ),
       ),
     );
@@ -3503,6 +3580,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         onNaturalSizeResolved: inst.isGif
             ? null
             : (w, h) => _updateMediaEmbedNaturalSize(inst, w, h),
+      );
+    } else if (inst is GraphState) {
+      return GraphWidget(
+        key: ValueKey(inst),
+        state: inst,
+        onStateChanged: () {
+          // Trigger a repaint when the graph equation changes
+          setState(() {});
+        },
       );
     }
     return const SizedBox.shrink();
@@ -6878,6 +6964,83 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _redoHistory.clear();
   }
 
+  Future<void> _exportToPdf() async {
+    final pdf = PdfDocument();
+    
+    // Calculate bounding box of all strokes
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = double.negativeInfinity;
+    double maxY = double.negativeInfinity;
+
+    for (final line in _lines) {
+      if (line.points.isEmpty) continue;
+      for (final p in line.points) {
+        if (p.offset.dx < minX) minX = p.offset.dx;
+        if (p.offset.dx > maxX) maxX = p.offset.dx;
+        if (p.offset.dy < minY) minY = p.offset.dy;
+        if (p.offset.dy > maxY) maxY = p.offset.dy;
+      }
+    }
+
+    if (minX == double.infinity) minX = 0;
+    if (minY == double.infinity) minY = 0;
+    if (maxX == double.negativeInfinity) maxX = 800;
+    if (maxY == double.negativeInfinity) maxY = 600;
+
+    // Add padding
+    minX -= 50; minY -= 50;
+    maxX += 50; maxY += 50;
+
+    double width = maxX - minX;
+    double height = maxY - minY;
+
+    pdf.pageSettings.size = Size(width, height);
+    final page = pdf.pages.add();
+    final graphics = page.graphics;
+
+    graphics.translateTransform(-minX, -minY);
+
+    for (final line in _lines) {
+      if (line.points.isEmpty || line.isEraser) continue;
+      
+      final pdfPen = PdfPen(
+        PdfColor(line.color.red, line.color.green, line.color.blue), 
+        width: line.strokeWidth
+      );
+      
+      if (line.points.length == 1) {
+         graphics.drawEllipse(
+           Rect.fromCircle(center: line.points[0].offset, radius: line.strokeWidth / 2), 
+           pen: pdfPen,
+           brush: PdfSolidBrush(PdfColor(line.color.red, line.color.green, line.color.blue))
+         );
+      } else {
+         final path = PdfPath();
+         path.addLine(
+           Offset(line.points[0].offset.dx, line.points[0].offset.dy), 
+           Offset(line.points[1].offset.dx, line.points[1].offset.dy)
+         );
+         for (int i = 1; i < line.points.length - 1; i++) {
+           path.addLine(
+             Offset(line.points[i].offset.dx, line.points[i].offset.dy), 
+             Offset(line.points[i+1].offset.dx, line.points[i+1].offset.dy)
+           );
+         }
+         graphics.drawPath(path, pen: pdfPen);
+      }
+    }
+
+    final bytes = await pdf.save();
+    pdf.dispose();
+
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/mathpad_export.pdf');
+    await file.writeAsBytes(bytes);
+
+    await Share.shareXFiles([XFile(file.path)], text: 'MathPad Export');
+  }
+
   void _clearCanvas() {
     showDialog(
       context: context,
@@ -8646,6 +8809,24 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ),
             ),
 
+          // Left Side Tools (Asset Library, Spinner, Graphing)
+          Positioned(
+            left: 16,
+            top: 100,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildAssetLibraryToolbarButton(),
+                const SizedBox(height: 8),
+                _buildSpinnerToolbarButton(),
+                const SizedBox(height: 8),
+                _buildGraphingToolbarButton(),
+                const SizedBox(height: 8),
+                _buildPdfExportToolbarButton(),
+              ],
+            ),
+          ),
+
           // Floating Tool Hint Pill
           if (_selectedLines.isEmpty && !_isStylusBarrelPressed)
             Positioned(
@@ -8690,21 +8871,100 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     ValueListenableBuilder<double>(
                       valueListenable: _scaleNotifier,
                       builder: (_, sc, _c) {
-                        return Text(
-                          _toolMode == CanvasToolMode.eraser
-                              ? (_eraserMode == EraserMode.stroke
-                                    ? 'Stroke Eraser • Tap any stroke to erase whole line'
-                                    : 'Area Eraser • Drag to erase points')
-                              : (_toolMode == CanvasToolMode.tapSelect
-                                    ? 'Tap any line to select & move/duplicate'
-                                    : (_toolMode == CanvasToolMode.lasso
-                                          ? 'Draw loop around items to select & move/duplicate'
-                                          : 'Infinite Canvas • ${(sc * 100).round()}%')),
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: _textColor70,
-                          ),
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _toolMode == CanvasToolMode.eraser
+                                  ? (_eraserMode == EraserMode.stroke
+                                        ? 'Stroke Eraser • Tap any stroke to erase whole line'
+                                        : 'Area Eraser • Drag to erase points')
+                                  : (_toolMode == CanvasToolMode.tapSelect
+                                        ? 'Tap any line to select & move/duplicate'
+                                        : (_toolMode == CanvasToolMode.lasso
+                                              ? 'Draw loop around items to select & move/duplicate'
+                                              : 'Infinite Canvas')),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: _textColor70,
+                              ),
+                            ),
+                            if (_toolMode != CanvasToolMode.eraser &&
+                                _toolMode != CanvasToolMode.tapSelect &&
+                                _toolMode != CanvasToolMode.lasso) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: _isDarkTheme ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    InkWell(
+                                      onTap: _zoomOut,
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(2.0),
+                                        child: Icon(Icons.zoom_out_rounded, size: 14, color: _textColor),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Tooltip(
+                                      message: _zoomLocked
+                                          ? 'Zoom Locked (Long press to unlock)'
+                                          : 'Reset Center & 100% Zoom (Long press to lock)',
+                                      child: InkWell(
+                                        onTap: _resetView,
+                                        onLongPress: () {
+                                          setState(() {
+                                            _zoomLocked = !_zoomLocked;
+                                          });
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                _zoomLocked ? 'Zoom Locked' : 'Zoom Unlocked',
+                                              ),
+                                              duration: const Duration(seconds: 2),
+                                            ),
+                                          );
+                                        },
+                                        borderRadius: BorderRadius.circular(4),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              '${(sc * 100).round()}%',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                                color: _zoomLocked ? Colors.redAccent : _textColor,
+                                              ),
+                                            ),
+                                            if (_zoomLocked) ...[
+                                              const SizedBox(width: 2),
+                                              const Icon(Icons.lock_rounded, size: 10, color: Colors.redAccent),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    InkWell(
+                                      onTap: _zoomIn,
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(2.0),
+                                        child: Icon(Icons.zoom_in_rounded, size: 14, color: _textColor),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
                         );
                       },
                     ),
@@ -9458,8 +9718,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     ],
                   ),
 
-                  const SizedBox(width: 6),
-
                   // Theme Mode Toggle
                   PopupMenuButton<MathPadTheme>(
                     tooltip: 'App Theme',
@@ -9523,80 +9781,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
                   const SizedBox(width: 10),
 
-                  // Zoom Controls
-                  animated(
-                    _buildIconButton(
-                      icon: Icons.zoom_out_rounded,
-                      tooltip: 'Zoom Out',
-                      onTap: _zoomOut,
-                    ),
-                  ),
-                  Tooltip(
-                    message: _zoomLocked
-                        ? 'Zoom Locked (Long press to unlock)'
-                        : 'Reset Center & 100% Zoom (Long press to lock)',
-                    child: InkWell(
-                      onTap: _resetView,
-                      onLongPress: () {
-                        setState(() {
-                          _zoomLocked = !_zoomLocked;
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              _zoomLocked ? 'Zoom Locked' : 'Zoom Unlocked',
-                            ),
-                            duration: const Duration(seconds: 2),
-                          ),
-                        );
-                      },
-                      borderRadius: BorderRadius.circular(8),
-                      child: RotatedBox(
-                        quarterTurns: _toolbarOnLeft ? -1 : 0,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 4,
-                          ),
-                          child: ValueListenableBuilder<double>(
-                            valueListenable: _scaleNotifier,
-                            builder: (_, sc, _c) => Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '${(sc * 100).round()}%',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: _zoomLocked
-                                        ? Colors.redAccent
-                                        : _textColor70,
-                                  ),
-                                ),
-                                if (_zoomLocked) ...[
-                                  const SizedBox(width: 2),
-                                  const Icon(
-                                    Icons.lock_rounded,
-                                    size: 10,
-                                    color: Colors.redAccent,
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  animated(
-                    _buildIconButton(
-                      icon: Icons.zoom_in_rounded,
-                      tooltip: 'Zoom In',
-                      onTap: _zoomIn,
-                    ),
-                  ),
-
-                  const SizedBox(width: 10),
+                  // Zoom Controls moved to bottom overlay
 
                   // Full Screen Toggle Button
                   if (widget.onToggleFullScreen != null) ...[
@@ -9906,26 +10091,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               child: widget.trailingToolbarAction!,
             ),
           ],
-          // Asset Library button -- unconditional (not gated behind a
-          // widget param the host page injects, unlike the two slots
-          // above) since opening the picker and inserting its selections
-          // is intrinsically internal to this state, not host-page chrome.
-          const SizedBox(width: 12),
-          Container(
-            width: 1,
-            height: 32,
-            color: isDark ? Colors.white24 : Colors.black12,
-          ),
-          const SizedBox(width: 12),
-          RotatedBox(
-            quarterTurns: _toolbarOnLeft ? -1 : 0,
-            child: _buildAssetLibraryToolbarButton(),
-          ),
-          const SizedBox(width: 12),
-          RotatedBox(
-            quarterTurns: _toolbarOnLeft ? -1 : 0,
-            child: _buildSpinnerToolbarButton(),
-          ),
         ],
       ),
     );
