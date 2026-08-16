@@ -48,6 +48,27 @@ class RoboPresets {
         ],
       ),
       RoboDrawingData(
+        name: "Copy a Line Segment",
+        commands: [
+          "text('Constructing a copy of a line segment')",
+          "A=point(4,5)",
+          "B=point(10,5)",
+          "text('Draw the original segment a = AB')",
+          "a=line(A,B)",
+          "text('Pick a new starting point C')",
+          "C=point(4,10)",
+          "text('Draw a long line l starting from C')",
+          "l=line(C,15,10)",
+          "text('Measure segment AB and draw an arc from C')",
+          "c=arc(a,C,-30,60)",
+          "text('Mark the intersection point E')",
+          "E=point(intersect(l,c))",
+          "text('Segment CE is an exact copy of AB')",
+          "hide(l,c)",
+          "line(C,E)",
+        ],
+      ),
+      RoboDrawingData(
         name: "Perpendicular Bisector",
         commands: [
           "text('Construct a perpendicular bisector')",
