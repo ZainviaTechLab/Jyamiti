@@ -344,6 +344,123 @@ void paintRealisticProtractor(
   canvas.restore();
 }
 
+void paintRealisticCompass(Canvas canvas, Offset center, Offset pencilTip) {
+  double d = (pencilTip - center).distance;
+  if (d == 0) d = 0.1;
+
+  double L = 160.0;
+  if (d / 2 > L - 20) {
+    L = d / 2 + 20;
+  }
+
+  double h3d = sqrt(L * L - (d / 2) * (d / 2));
+  
+  Offset m = Offset((center.dx + pencilTip.dx) / 2, (center.dy + pencilTip.dy) / 2);
+  
+  // 3D projection: the hinge is 'h3d' above the paper in Z.
+  // In our 2D canvas, we map +Z to -Y to create an isometric-like view.
+  Offset hinge = Offset(m.dx, m.dy - h3d);
+
+  Paint metalPaint = Paint()
+    ..color = Colors.blueGrey.shade300
+    ..style = PaintingStyle.fill;
+  Paint darkMetal = Paint()
+    ..color = Colors.blueGrey.shade700
+    ..style = PaintingStyle.fill;
+  Paint outlinePaint = Paint()
+    ..color = Colors.blueGrey.shade800
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1;
+
+  void drawNeedleArm() {
+    canvas.save();
+    canvas.translate(hinge.dx, hinge.dy);
+    double angleNeedle = atan2(center.dy - hinge.dy, center.dx - hinge.dx);
+    canvas.rotate(angleNeedle);
+    
+    double dNeedle = (center - hinge).distance;
+    
+    Path needleArm = Path()
+      ..moveTo(0, -5)
+      ..lineTo(dNeedle - 20, -3)
+      ..lineTo(dNeedle - 20, 3)
+      ..lineTo(0, 5)
+      ..close();
+    canvas.drawPath(needleArm, metalPaint);
+    canvas.drawPath(needleArm, outlinePaint);
+    
+    Path needleTip = Path()
+      ..moveTo(dNeedle - 20, -1)
+      ..lineTo(dNeedle, 0)
+      ..lineTo(dNeedle - 20, 1)
+      ..close();
+    canvas.drawPath(needleTip, darkMetal);
+    
+    canvas.restore();
+  }
+
+  void drawPencilArm() {
+    canvas.save();
+    canvas.translate(hinge.dx, hinge.dy);
+    double anglePencil = atan2(pencilTip.dy - hinge.dy, pencilTip.dx - hinge.dx);
+    canvas.rotate(anglePencil);
+    
+    double dPencil = (pencilTip - hinge).distance;
+    
+    Path pencilArm = Path()
+      ..moveTo(0, -5)
+      ..lineTo(dPencil - 30, -4)
+      ..lineTo(dPencil - 30, 4)
+      ..lineTo(0, 5)
+      ..close();
+    canvas.drawPath(pencilArm, metalPaint);
+    canvas.drawPath(pencilArm, outlinePaint);
+    
+    canvas.drawRect(Rect.fromLTWH(dPencil - 35, -7, 20, 14), darkMetal);
+    
+    Path lead = Path()
+      ..moveTo(dPencil - 15, -2)
+      ..lineTo(dPencil, 0)
+      ..lineTo(dPencil - 15, 2)
+      ..close();
+    canvas.drawPath(lead, Paint()..color = Colors.black87..style = PaintingStyle.fill);
+    
+    canvas.drawCircle(Offset(dPencil - 25, 0), 3, metalPaint);
+    canvas.drawLine(Offset(dPencil - 27, -1), Offset(dPencil - 23, 1), Paint()..color = Colors.black..strokeWidth = 1);
+  
+    canvas.restore();
+  }
+
+  // Draw arms based on Z-index (Y-coordinate in isometric view)
+  // Larger Y means closer to the viewer
+  if (pencilTip.dy >= center.dy) {
+    drawNeedleArm();
+    drawPencilArm();
+  } else {
+    drawPencilArm();
+    drawNeedleArm();
+  }
+
+  // 3. Draw Handle (Knob)
+  canvas.save();
+  canvas.translate(hinge.dx, hinge.dy);
+  // Handle points perfectly "UP" in Z, which maps to -Y in 2D.
+  canvas.rotate(-pi / 2);
+  
+  canvas.drawRect(Rect.fromLTWH(0, -4, 20, 8), metalPaint);
+  canvas.drawRect(Rect.fromLTWH(0, -4, 20, 8), outlinePaint);
+  
+  canvas.drawRect(Rect.fromLTWH(20, -6, 15, 12), darkMetal);
+  for (int i = 22; i < 34; i+=3) {
+      canvas.drawLine(Offset(i.toDouble(), -6), Offset(i.toDouble(), 6), Paint()..color = Colors.black45..strokeWidth = 1);
+  }
+  canvas.restore();
+
+  // 4. Draw Hinge joint
+  canvas.drawCircle(hinge, 7, darkMetal);
+  canvas.drawCircle(hinge, 3, metalPaint);
+}
+
 /// Base class for all executable drawing commands.
 abstract class RoboCommand {
   /// The raw string typed by the user (e.g., 'a=line(A,B)')
@@ -779,26 +896,7 @@ class RoboCircleCommand extends RoboCommand {
       pxCenter.dy + pxRadius * sin(currentAngle),
     );
 
-    final compassPaint = Paint()
-      ..color = Colors.grey.shade700
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke;
-
-    // Draw compass arms
-    Offset hinge = Offset(
-      pxCenter.dx + (pencilOffset.dx - pxCenter.dx) / 2,
-      pxCenter.dy - 100,
-    );
-    canvas.drawLine(hinge, pxCenter, compassPaint); // Needle arm
-    canvas.drawLine(hinge, pencilOffset, compassPaint); // Pencil arm
-    canvas.drawCircle(hinge, 4, Paint()..color = Colors.black); // Hinge
-
-    // Realistic pencil pointing towards hinge
-    double angle = atan2(
-      hinge.dy - pencilOffset.dy,
-      hinge.dx - pencilOffset.dx,
-    );
-    paintRealisticPencil(canvas, pencilOffset, angle);
+    paintRealisticCompass(canvas, pxCenter, pencilOffset);
   }
 }
 
@@ -928,24 +1026,7 @@ class RoboArcCommand extends RoboCommand {
       pxCenter.dy + pxRadius * sin(currentAngle),
     );
 
-    final compassPaint = Paint()
-      ..color = Colors.grey.shade700
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke;
-
-    Offset hinge = Offset(
-      pxCenter.dx + (pencilOffset.dx - pxCenter.dx) / 2,
-      pxCenter.dy - 100,
-    );
-    canvas.drawLine(hinge, pxCenter, compassPaint);
-    canvas.drawLine(hinge, pencilOffset, compassPaint);
-
-    // Realistic pencil pointing towards hinge
-    double angle = atan2(
-      hinge.dy - pencilOffset.dy,
-      hinge.dx - pencilOffset.dx,
-    );
-    paintRealisticPencil(canvas, pencilOffset, angle);
+    paintRealisticCompass(canvas, pxCenter, pencilOffset);
   }
 }
 
