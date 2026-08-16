@@ -1067,10 +1067,14 @@ class RoboTransformCommand extends RoboCommand {
 }
 
 class RoboMathCommand extends RoboCommand {
-  final String func; // 'X', 'Y', 'dist', 'pos', 'findangle', 'interpolate', 'project'
+  final String func;
   final List<dynamic> args;
+  
+  String? _anonVar;
 
   RoboMathCommand(String rawCommand, String? assignedVar, this.func, this.args) : super(rawCommand, assignedVar);
+
+  String? get _effectiveVar => assignedVar ?? _anonVar;
 
   @override
   void evaluate(RoboContext ctx) {
@@ -1335,10 +1339,19 @@ class RoboMathCommand extends RoboCommand {
         }
       }
       
-      if (assignedVar != null && result != null) {
-        ctx.setVar(assignedVar!, result);
+      if (result != null) {
+        if (assignedVar == null && _anonVar == null) {
+           _anonVar = RoboTransformations.generateAnonVar(ctx, result);
+        }
+        String targetVar = _effectiveVar!;
+        
+        ctx.setVar(targetVar, result);
+        if (assignedVar == null) {
+            ctx.variables[targetVar]?.isHidden = false;
+        }
+        
         if (result is Map && result['type'] == 'measured_angle') {
-          ctx.variables[assignedVar!]?.speedOverride = 0.5;
+          ctx.variables[targetVar]?.speedOverride = 0.5;
         }
       }
     } catch (e) {
@@ -1386,8 +1399,8 @@ class RoboMathCommand extends RoboCommand {
 
   @override
   void paintStatic(Canvas canvas, Size size, RoboContext ctx) {
-    if (assignedVar != null) {
-       dynamic data = ctx.getVar(assignedVar!);
+    if (_effectiveVar != null) {
+       dynamic data = ctx.getVar(_effectiveVar!);
        if (data is Map && data['type'] == 'measured_angle') {
           Offset? vertex = ctx.evaluateExpression(data['vertex']);
           if (vertex != null) {
@@ -1399,8 +1412,8 @@ class RoboMathCommand extends RoboCommand {
 
   @override
   void paintAnimated(Canvas canvas, Size size, RoboContext ctx, double progress) {
-    if (assignedVar != null) {
-       dynamic data = ctx.getVar(assignedVar!);
+    if (_effectiveVar != null) {
+       dynamic data = ctx.getVar(_effectiveVar!);
        if (data is Map && data['type'] == 'measured_angle') {
           Offset? vertex = ctx.evaluateExpression(data['vertex']);
           if (vertex != null) {
