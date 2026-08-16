@@ -15,6 +15,8 @@ import 'package:provider/provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
+import 'package:math_keyboard/math_keyboard.dart';
 
 import '../../../../providers/theme_provider.dart';
 import '../instruments/instrument_models.dart';
@@ -174,15 +176,27 @@ class MathsPadTextLabel {
   String text;
   Color color;
   double fontSize;
+  bool isEquation;
+  final GlobalKey renderKey = GlobalKey();
 
   MathsPadTextLabel({
     required this.position,
     required this.text,
     required this.color,
     this.fontSize = 20,
+    this.isEquation = false,
   });
 
   Size get measuredSize {
+    if (renderKey.currentContext != null) {
+      final box = renderKey.currentContext!.findRenderObject() as RenderBox?;
+      if (box != null && box.hasSize) {
+        // The Stack's exact painted size
+        return box.size;
+      }
+    }
+    
+    // Fallback if not rendered yet
     final TextPainter tp = TextPainter(
       text: TextSpan(
         text: text,
@@ -205,6 +219,7 @@ enum CanvasToolMode {
   square,
   fill,
   text,
+  equation,
   spacer,
   eraser,
   tapSelect,
@@ -848,6 +863,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   int? _textEditingIndex;
   Offset? _textEditorWorldPos;
   TextEditingController? _textEditorController;
+  MathFieldEditingController? _mathEditorController;
+  String _currentLatexString = '';
 
   // Question Banner Collapsed/Expanded State
   bool _isQuestionBannerExpanded = true;
@@ -3219,6 +3236,47 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
+  Widget _buildEquationToolbarButton() {
+    final bool isSelected = _toolMode == CanvasToolMode.equation;
+    return Tooltip(
+      message: 'Equation Editor: tap empty space to add a LaTeX equation; tap an existing one to edit it, or drag it to move it',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() {
+            _toolMode = CanvasToolMode.equation;
+            _activeShapeTool = null;
+            _selectedLines.clear();
+          }),
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: isSelected 
+                  ? const Color(0xFF6366F1) 
+                  : (_isDarkTheme ? const Color(0xFF1E293B) : Colors.white),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+              border: Border.all(color: context.glassBorder),
+            ),
+            child: Icon(
+              Icons.functions_rounded,
+              size: 24,
+              color: isSelected ? Colors.white : _textColor,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildGraphingToolbarButton() {
     return Tooltip(
       message: 'Graphing Plane',
@@ -3320,14 +3378,24 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           Padding(
             padding: const EdgeInsets.only(top: overhang, left: overhang),
             child: IgnorePointer(
-              child: Text(
-                label.text,
-                style: TextStyle(
-                  color: label.color,
-                  fontSize: label.fontSize,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              key: label.renderKey,
+              child: label.isEquation
+                  ? Math.tex(
+                      label.text,
+                      textStyle: TextStyle(
+                        color: label.color,
+                        fontSize: label.fontSize,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  : Text(
+                      label.text,
+                      style: TextStyle(
+                        color: label.color,
+                        fontSize: label.fontSize,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
             ),
           ),
           // Close button and resize handle only show once this label has
@@ -3406,7 +3474,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Widget _buildTextEditorOverlay(bool isDark) {
     if (!_textEditorOpen ||
         _textEditorWorldPos == null ||
-        _textEditorController == null) {
+        (_textEditorController == null && _mathEditorController == null)) {
       return const SizedBox.shrink();
     }
     return Positioned(
@@ -3447,27 +3515,55 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   ],
                 ),
                 child: SizedBox(
-                  width: 140,
-                  child: TextField(
-                    controller: _textEditorController,
-                    autofocus: true,
-                    cursorColor: isDark ? Colors.white : Colors.black87,
-                    style: TextStyle(
-                      color: isDark ? Colors.white : const Color(0xFF1E293B),
-                      fontSize: 16,
-                      letterSpacing: -0.3,
-                    ),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: InputBorder.none,
-                      hintText: 'Label text…',
-                      hintStyle: TextStyle(
-                        color: isDark ? Colors.white54 : Colors.black45,
-                      ),
-                    ),
-                    onSubmitted: (_) => _commitTextEditor(),
-                    textInputAction: TextInputAction.done,
-                  ),
+                  width: _isEquationEditorActive ? 300 : 140, // Wider for equations
+                  child: _isEquationEditorActive
+                      ? DefaultTextStyle(
+                          style: TextStyle(
+                            color: isDark ? Colors.white : const Color(0xFF1E293B),
+                            fontSize: 18,
+                          ),
+                          child: MathField(
+                            controller: _mathEditorController!,
+                            keyboardType: MathKeyboardType.expression,
+                            variables: const ['x', 'y', 'z', 'a', 'b', 'c', 'n', 'k', 'i', 't', 'A', 'B', 'C', 'f'],
+                            decoration: InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            hintText: 'Equation…',
+                            hintStyle: TextStyle(
+                              color: isDark ? Colors.white54 : Colors.black45,
+                            ),
+                          ),
+                          onChanged: (String value) {
+                            _currentLatexString = value;
+                          },
+                          onSubmitted: (String value) {
+                            _currentLatexString = value;
+                            _commitTextEditor();
+                          },
+                          autofocus: true,
+                        ),
+                      )
+                      : TextField(
+                          controller: _textEditorController,
+                          autofocus: true,
+                          cursorColor: isDark ? Colors.white : Colors.black87,
+                          style: TextStyle(
+                            color: isDark ? Colors.white : const Color(0xFF1E293B),
+                            fontSize: 16,
+                            letterSpacing: -0.3,
+                          ),
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            hintText: 'Label text…',
+                            hintStyle: TextStyle(
+                              color: isDark ? Colors.white54 : Colors.black45,
+                            ),
+                          ),
+                          onSubmitted: (_) => _commitTextEditor(),
+                          textInputAction: TextInputAction.done,
+                        ),
                 ),
               ),
             ),
@@ -3930,22 +4026,43 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
   }
 
-  void _openTextEditor({int? editingIndex, Offset? newPosition}) {
+  bool _isEquationEditorActive = false;
+
+  void _openTextEditor({int? editingIndex, Offset? newPosition, bool isEquation = false}) {
     setState(() {
       _textEditingIndex = editingIndex;
       _textEditorWorldPos = editingIndex != null
           ? _textLabels[editingIndex].position
           : newPosition;
-      _textEditorController = TextEditingController(
-        text: editingIndex != null ? _textLabels[editingIndex].text : '',
-      );
+          
+      _isEquationEditorActive = editingIndex != null ? _textLabels[editingIndex].isEquation : isEquation;
+      _currentLatexString = editingIndex != null ? _textLabels[editingIndex].text : '';
+      
+      if (_isEquationEditorActive) {
+         _mathEditorController = MathFieldEditingController();
+         // math_keyboard doesn't support setting initial value via constructor, but we can evaluate it if needed
+         // for now we just leave it blank if editing, as math_keyboard API for arbitrary LaTeX injection is complex
+         // (wait, actually, math_keyboard supports inserting LaTeX via controller or it has no initial text natively without parsing)
+      } else {
+         _textEditorController = TextEditingController(
+           text: editingIndex != null ? _textLabels[editingIndex].text : '',
+         );
+      }
       _textEditorOpen = true;
     });
   }
 
   void _commitTextEditor() {
     if (!_textEditorOpen) return;
-    final String value = _textEditorController?.text.trim() ?? '';
+    
+    // We get the raw latex from MathField or plain string from TextField
+    String value = '';
+    if (_isEquationEditorActive) {
+       value = _currentLatexString.trim();
+    } else {
+       value = _textEditorController?.text.trim() ?? '';
+    }
+    
     final int? editingIndex = _textEditingIndex;
     final Offset? newPosition = _textEditorWorldPos;
     setState(() {
@@ -3966,13 +4083,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           position: newPosition,
           text: value,
           color: _selectedColor,
+          isEquation: _isEquationEditorActive,
         );
         _textLabels.add(newLabel);
         _recordAction(MathsPadAction(addedLabels: [newLabel]));
         _selectedTextLabelIndex = _textLabels.length - 1;
       }
+      
       _textEditorController?.dispose();
       _textEditorController = null;
+      _mathEditorController?.dispose();
+      _mathEditorController = null;
+      
       _textEditorOpen = false;
       _textEditingIndex = null;
       _textEditorWorldPos = null;
@@ -4986,8 +5108,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         setState(() => _selectedMediaEmbed = null);
       }
 
-      if (_toolMode == CanvasToolMode.text) {
-        _openTextEditor(newPosition: worldPos);
+      if (_toolMode == CanvasToolMode.text || _toolMode == CanvasToolMode.equation) {
+        _openTextEditor(newPosition: worldPos, isEquation: _toolMode == CanvasToolMode.equation);
         return;
       }
 
@@ -8820,6 +8942,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 const SizedBox(height: 8),
                 _buildSpinnerToolbarButton(),
                 const SizedBox(height: 8),
+                _buildEquationToolbarButton(),
+                const SizedBox(height: 8),
                 _buildGraphingToolbarButton(),
                 const SizedBox(height: 8),
                 _buildPdfExportToolbarButton(),
@@ -9313,6 +9437,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             }),
                           ),
                         ),
+
                         animated(
                           _buildIconButton(
                             icon: Icons.unfold_more_rounded,

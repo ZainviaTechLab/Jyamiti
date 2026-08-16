@@ -459,6 +459,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       _nodeId = node.nodeId;
       _nodeTitle = node.nodeTitle;
       _pages = node.pages;
+      _loading = true;
     });
     await _ensurePagesAndLoad(preferredPageId: initialPageId);
   }

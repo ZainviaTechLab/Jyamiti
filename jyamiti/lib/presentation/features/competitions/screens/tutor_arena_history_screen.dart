@@ -79,11 +79,13 @@ class _TutorArenaHistoryScreenState extends State<TutorArenaHistoryScreen> {
         }
       }
 
+      if (!mounted) return;
       setState(() {
         _competitions = loaded;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _competitions = [];
         _isLoading = false;

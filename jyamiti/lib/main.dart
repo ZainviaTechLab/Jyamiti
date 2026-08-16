@@ -9,6 +9,7 @@ import 'presentation/features/admin/screens/admin_stats_dashboard.dart';
 import 'presentation/features/dashboard/screens/student_dashboard.dart';
 import 'presentation/features/dashboard/screens/tutor_dashboard.dart';
 import 'presentation/features/dashboard/screens/mentor_dashboard.dart';
+import 'presentation/features/auth/screens/onboarding_screen.dart';
 import 'core/theme/app_theme.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'presentation/features/chat/bloc/chat_bloc.dart';
@@ -63,17 +64,6 @@ void main() {
   );
 }
 
-class AppScrollBehavior extends MaterialScrollBehavior {
-  @override
-  Set<PointerDeviceKind> get dragDevices => {
-        PointerDeviceKind.touch,
-        PointerDeviceKind.mouse,
-        PointerDeviceKind.stylus,
-        PointerDeviceKind.invertedStylus,
-        PointerDeviceKind.trackpad,
-      };
-}
-
 class LearningPlatformApp extends StatelessWidget {
   const LearningPlatformApp({super.key});
 
@@ -87,7 +77,6 @@ class LearningPlatformApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: themeProvider.themeMode,
-      scrollBehavior: AppScrollBehavior(),
       builder: (context, child) {
         return ThemeReveal(child: child ?? const SizedBox.shrink());
       },
@@ -226,8 +215,14 @@ class _AuthWrapperState extends State<AuthWrapper> {
           if (auth.userRole == 'ADMIN') {
             return const AdminStatsDashboard();
           } else if (auth.userRole == 'TUTOR') {
+            if (auth.profile?['isProfileComplete'] == false) {
+              return const OnboardingScreen();
+            }
             return const TutorDashboard();
           } else if (auth.userRole == 'MENTOR') {
+            if (auth.profile?['isProfileComplete'] == false) {
+              return const OnboardingScreen();
+            }
             return const MentorDashboard();
           } else {
             return const StudentDashboard();

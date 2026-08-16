@@ -105,8 +105,8 @@ class UploadService {
     }
   }
 
-  /// Uploads a video file to YouTube.
-  Future<void> uploadToYouTube({
+  /// Uploads a video file to YouTube and returns the video ID.
+  Future<String> uploadToYouTube({
     required File video,
     required String title,
     required String description,
@@ -136,14 +136,16 @@ class UploadService {
       // Mocking the actual upload to prevent unauthorized errors with dummy token
       if (token == 'dummy_access_token_from_backend') {
         await Future.delayed(const Duration(seconds: 2));
-        return;
+        return 'dummy_video_id';
       }
       
-      await youtubeApi.videos.insert(
+      final response = await youtubeApi.videos.insert(
         videoMetadata,
         ['snippet', 'status'],
         uploadMedia: media,
       );
+      
+      return response.id ?? '';
     } finally {
       client.close();
     }

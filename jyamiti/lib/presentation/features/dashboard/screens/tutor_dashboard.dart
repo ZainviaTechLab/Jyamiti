@@ -24,6 +24,7 @@ import '../../../widgets/writing_pad_widget.dart';
 import '../../competitions/screens/tutor_competition_host_screen.dart';
 import '../../competitions/screens/tutor_arena_history_screen.dart';
 import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
+import '../../robo_drawing/screens/robo_drawing_screen.dart';
 import 'tutor_recordings_screen.dart';
 import '../../mathpad/recording/mathpad_recording_service.dart';
 
@@ -236,6 +237,8 @@ class _TutorDashboardState extends State<TutorDashboard> {
         );
       case 11:
         return const TutorRecordingsScreen(isInline: true);
+      case 12:
+        return const RoboDrawingScreen(isInline: true);
       default:
         return _buildOverviewTab(profile);
     }
@@ -1288,6 +1291,11 @@ class _TutorDashboardState extends State<TutorDashboard> {
                                   11,
                                   'Recordings',
                                   Icons.video_library_rounded,
+                                ),
+                                _buildSidebarItem(
+                                  12,
+                                  'Robo Drawing',
+                                  Icons.smart_toy_rounded,
                                 ),
                                 if (isEncoding)
                                   Positioned(

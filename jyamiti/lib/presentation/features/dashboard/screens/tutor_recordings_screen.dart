@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../../../services/upload_service.dart';
+import '../../../../services/api_service.dart';
+import '../../../../providers/auth_provider.dart';
 import '../../mathpad/recording/mathpad_recording_service.dart';
 
 class TutorRecordingsScreen extends StatefulWidget {
@@ -28,7 +31,10 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
 
   void _refreshRecordings() {
     setState(() {
-      _recordingsFuture = Provider.of<MathPadRecordingService>(context, listen: false).getRecordings();
+      _recordingsFuture = Provider.of<MathPadRecordingService>(
+        context,
+        listen: false,
+      ).getRecordings();
     });
   }
 
@@ -46,13 +52,17 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
 
   Future<void> _shareViaWhatsApp(File file) async {
     try {
-      final result = await Share.shareXFiles([XFile(file.path)], text: 'Check out my MathPad recording!');
+      final result = await Share.shareXFiles([
+        XFile(file.path),
+      ], text: 'Check out my MathPad recording!');
       if (result.status == ShareResultStatus.success) {
         // Shared successfully
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to share: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to share: $e')));
       }
     }
   }
@@ -62,175 +72,266 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
     final nameController = TextEditingController(text: baseName);
     String? selectedFolderId;
     String selectedFolderName = 'Tutor Uploads (Root Directory)';
-    
+
     showDialog(
       context: context,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
             return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-          child: Container(
-            width: 500,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Image.asset('assets/image/drive_icon.png', width: 24, height: 24, errorBuilder: (c, e, s) => const Icon(Icons.add_to_drive, color: Colors.blue)),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Save to Google Drive',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                    ),
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.green,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.check, color: Colors.white, size: 16),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: Icon(Icons.close, color: isDark ? Colors.white54 : Colors.black54),
-                      onPressed: () => Navigator.pop(context),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.cloud_done, size: 20, color: Colors.blue.shade600),
-                        const SizedBox(width: 8),
-                        Text('Jyamiti Central Drive', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text('File Name', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: nameController,
-                  style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-                  decoration: InputDecoration(
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Text('Destination', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withOpacity(0.02) : Colors.grey.shade50,
-                    border: Border.all(color: isDark ? Colors.white24 : Colors.black12),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.folder, color: isDark ? Colors.white54 : Colors.black54, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(selectedFolderName, style: TextStyle(color: isDark ? Colors.white : Colors.black87), overflow: TextOverflow.ellipsis),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (c) => _FolderSelectionDialog(
-                              isDark: isDark,
-                              onSelected: (id, name) {
-                                setState(() {
-                                  selectedFolderId = id == 'root' ? null : id;
-                                  selectedFolderName = name;
-                                });
-                              },
-                            ),
-                          );
-                        },
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1E293B),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        ),
-                        child: const Text('Select folder'),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+              child: Container(
+                width: 500,
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
+                        Image.asset(
+                          'assets/image/drive_icon.png',
+                          width: 24,
+                          height: 24,
+                          errorBuilder: (c, e, s) => const Icon(
+                            Icons.add_to_drive,
+                            color: Colors.blue,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Save to Google Drive',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: isDark ? Colors.white : Colors.black87,
+                          ),
+                        ),
+                        const Spacer(),
                         Container(
                           padding: const EdgeInsets.all(4),
                           decoration: const BoxDecoration(
                             color: Colors.green,
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(Icons.check, color: Colors.white, size: 12),
+                          child: const Icon(
+                            Icons.check,
+                            color: Colors.white,
+                            size: 16,
+                          ),
                         ),
                         const SizedBox(width: 8),
-                        const Text(
-                          'Video will be saved after export',
-                          style: TextStyle(color: Colors.green),
+                        IconButton(
+                          icon: Icon(
+                            Icons.close,
+                            color: isDark ? Colors.white54 : Colors.black54,
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
                         ),
                       ],
                     ),
-                    FilledButton(
-                      onPressed: () async {
-                        showDialog(
-                          context: context, 
-                          barrierDismissible: false,
-                          builder: (c) => const Center(child: CircularProgressIndicator()),
-                        );
-                        
-                        try {
-                          await UploadService().uploadToDrive(file, nameController.text, folderId: selectedFolderId);
-                          if (context.mounted) {
-                            Navigator.pop(context); // pop loading
-                            Navigator.pop(context); // pop dialog
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully uploaded to Google Drive!')));
-                          }
-                        } catch (e) {
-                          if (context.mounted) {
-                            Navigator.pop(context); // pop loading
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
-                          }
-                        }
-                      },
-                      child: const Text('Save to Drive'),
+                    const SizedBox(height: 16),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.05)
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.cloud_done,
+                              size: 20,
+                              color: Colors.blue.shade600,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Jyamiti Central Drive',
+                              style: TextStyle(
+                                color: isDark ? Colors.white : Colors.black87,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'File Name',
+                      style: TextStyle(
+                        color: isDark ? Colors.white70 : Colors.black87,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: nameController,
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                      decoration: InputDecoration(
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Destination',
+                      style: TextStyle(
+                        color: isDark ? Colors.white70 : Colors.black87,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withOpacity(0.02)
+                            : Colors.grey.shade50,
+                        border: Border.all(
+                          color: isDark ? Colors.white24 : Colors.black12,
+                        ),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.folder,
+                            color: isDark ? Colors.white54 : Colors.black54,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              selectedFolderName,
+                              style: TextStyle(
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: () {
+                              showDialog(
+                                context: context,
+                                builder: (c) => _FolderSelectionDialog(
+                                  isDark: isDark,
+                                  onSelected: (id, name) {
+                                    setState(() {
+                                      selectedFolderId = id == 'root'
+                                          ? null
+                                          : id;
+                                      selectedFolderName = name;
+                                    });
+                                  },
+                                ),
+                              );
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF1E293B),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                            ),
+                            child: const Text('Select folder'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 12,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Video will be saved after export',
+                              style: TextStyle(color: Colors.green),
+                            ),
+                          ],
+                        ),
+                        FilledButton(
+                          onPressed: () async {
+                            showDialog(
+                              context: context,
+                              barrierDismissible: false,
+                              builder: (c) => const Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
+
+                            try {
+                              await UploadService().uploadToDrive(
+                                file,
+                                nameController.text,
+                                folderId: selectedFolderId,
+                              );
+                              if (context.mounted) {
+                                Navigator.pop(context); // pop loading
+                                Navigator.pop(context); // pop dialog
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Successfully uploaded to Google Drive!',
+                                    ),
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                Navigator.pop(context); // pop loading
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Upload failed: $e')),
+                                );
+                              }
+                            }
+                          },
+                          child: const Text('Save to Drive'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
           },
         );
       },
@@ -240,11 +341,72 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
   void _showYouTubeUploadDialog(File file, bool isDark) {
     final baseName = p.basenameWithoutExtension(file.path);
     final titleController = TextEditingController(text: baseName);
-    final descController = TextEditingController(text: 'This video was made with Jyamiti MathPad');
-    final keywordsController = TextEditingController(text: 'Jyamiti, Math, Education');
+    final descController = TextEditingController(
+      text: 'This video was made with Jyamiti MathPad',
+    );
+    final keywordsController = TextEditingController(
+      text: 'Jyamiti, Math, Education',
+    );
     String privacy = 'Unlisted';
     String category = 'Education';
     bool isForKids = false;
+
+    // Tutorial integration state
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final List batches = authProvider.profile?['batches'] as List? ?? [];
+    String? selectedBatchId;
+    String? selectedSession;
+    String? selectedChapter;
+    List<String> _sessionDates = [];
+    List<String> _chapters = [];
+    bool _isLoadingData = false;
+
+    Future<void> fetchBatchDetails(String batchId, StateSetter setModalState) async {
+      setModalState(() => _isLoadingData = true);
+      try {
+        final batch = batches.firstWhere((b) => (b['id'] ?? b['_id']) == batchId, orElse: () => null);
+        
+        // Fetch chapters
+        final courseId = batch?['course']?['id'] ?? batch?['course']?['_id'];
+        if (courseId != null) {
+          final res = await ApiService.get('/courses');
+          if (res.statusCode == 200) {
+            final List courses = jsonDecode(res.body);
+            final course = courses.firstWhere(
+              (c) => c['id'] == courseId || c['_id'] == courseId,
+              orElse: () => null,
+            );
+            if (course != null && course['syllabus'] != null) {
+              _chapters = (course['syllabus'] as List).map((s) => s['title'].toString()).toList();
+            } else {
+              _chapters = [];
+            }
+          }
+        }
+        
+        // Fetch sessions
+        final res2 = await ApiService.get('/schedules/my-schedules');
+        if (res2.statusCode == 200) {
+          final data = jsonDecode(res2.body);
+          final List schedules = data['schedules'] ?? [];
+          final filtered = schedules.where((s) {
+            final schedBatchId = s['batch']?['_id'] ?? s['batch'];
+            return schedBatchId == batchId;
+          }).toList();
+          _sessionDates = filtered.map((s) {
+            final date = DateTime.tryParse(s['date'] ?? '') ?? DateTime.now();
+            return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+          }).toSet().toList()..sort();
+        }
+      } catch (e) {
+        debugPrint('Error fetching batch details: $e');
+      }
+      setModalState(() {
+        _isLoadingData = false;
+        selectedSession = null;
+        selectedChapter = null;
+      });
+    }
 
     showDialog(
       context: context,
@@ -252,7 +414,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
         return StatefulBuilder(
           builder: (context, setState) {
             return Dialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
               backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
               child: Container(
                 width: 650,
@@ -265,45 +429,232 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                       Align(
                         alignment: Alignment.centerRight,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
                           decoration: BoxDecoration(
-                            color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.shade100,
+                            color: isDark
+                                ? Colors.white.withOpacity(0.05)
+                                : Colors.grey.shade100,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.video_camera_front, size: 20, color: Colors.red.shade600),
+                              Icon(
+                                Icons.video_camera_front,
+                                size: 20,
+                                color: Colors.red.shade600,
+                              ),
                               const SizedBox(width: 8),
-                              Text('Jyamiti Official Channel', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.bold)),
+                              Text(
+                                'Jyamiti Official Channel',
+                                style: TextStyle(
+                                  color: isDark ? Colors.white : Colors.black87,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                             ],
                           ),
                         ),
                       ),
                       const SizedBox(height: 16),
-                      Text('Title', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                      Text(
+                        'Title',
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black87,
+                          fontSize: 13,
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       TextField(
                         controller: titleController,
-                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
                         decoration: InputDecoration(
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF6366F1))),
-                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF6366F1))),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                            borderSide: const BorderSide(
+                              color: Color(0xFF6366F1),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                            borderSide: const BorderSide(
+                              color: Color(0xFF6366F1),
+                            ),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 16),
-                      Text('Description', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                      Text(
+                        'Description',
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black87,
+                          fontSize: 13,
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       TextField(
                         controller: descController,
                         maxLines: 4,
-                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
                         decoration: InputDecoration(
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                       ),
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Link as Tutorial (Optional)',
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Select a batch to automatically submit this YouTube video as a tutorial.',
+                        style: TextStyle(
+                          color: isDark ? Colors.white54 : Colors.black54,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Batch / Branch',
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black87,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                        value: selectedBatchId,
+                        dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                        decoration: InputDecoration(
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                        ),
+                        items: batches.map((b) {
+                          return DropdownMenuItem<String>(
+                            value: b['id'] ?? b['_id'],
+                            child: Text(b['name'] ?? 'Unnamed Batch'),
+                          );
+                        }).toList(),
+                        onChanged: (v) {
+                          setState(() => selectedBatchId = v);
+                          if (v != null) {
+                            fetchBatchDetails(v, setState);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      if (_isLoadingData)
+                        const Center(child: CircularProgressIndicator())
+                      else if (selectedBatchId != null) ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Session Date',
+                                    style: TextStyle(
+                                      color: isDark ? Colors.white70 : Colors.black87,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  DropdownButtonFormField<String>(
+                                    value: selectedSession,
+                                    dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                    style: TextStyle(
+                                      color: isDark ? Colors.white : Colors.black87,
+                                    ),
+                                    decoration: InputDecoration(
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    items: _sessionDates.map((e) {
+                                      return DropdownMenuItem(value: e, child: Text(e));
+                                    }).toList(),
+                                    onChanged: (v) => setState(() => selectedSession = v),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Chapter',
+                                    style: TextStyle(
+                                      color: isDark ? Colors.white70 : Colors.black87,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  DropdownButtonFormField<String>(
+                                    value: selectedChapter,
+                                    dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                    style: TextStyle(
+                                      color: isDark ? Colors.white : Colors.black87,
+                                    ),
+                                    decoration: InputDecoration(
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    items: _chapters.map((e) {
+                                      return DropdownMenuItem(value: e, child: Text(e));
+                                    }).toList(),
+                                    onChanged: (v) => setState(() => selectedChapter = v),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      const Divider(),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -311,18 +662,45 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Video Privacy', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                                Text(
+                                  'Video Privacy',
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? Colors.white70
+                                        : Colors.black87,
+                                    fontSize: 13,
+                                  ),
+                                ),
                                 const SizedBox(height: 8),
                                 DropdownButtonFormField<String>(
                                   value: privacy,
-                                  dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-                                  style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-                                  decoration: InputDecoration(
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  dropdownColor: isDark
+                                      ? const Color(0xFF1E293B)
+                                      : Colors.white,
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? Colors.white
+                                        : Colors.black87,
                                   ),
-                                  items: ['Public', 'Unlisted', 'Private'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                                  onChanged: (v) => setState(() => privacy = v!),
+                                  decoration: InputDecoration(
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 12,
+                                    ),
+                                  ),
+                                  items: ['Public', 'Unlisted', 'Private']
+                                      .map(
+                                        (e) => DropdownMenuItem(
+                                          value: e,
+                                          child: Text(e),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (v) =>
+                                      setState(() => privacy = v!),
                                 ),
                               ],
                             ),
@@ -332,18 +710,50 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Category', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                                Text(
+                                  'Category',
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? Colors.white70
+                                        : Colors.black87,
+                                    fontSize: 13,
+                                  ),
+                                ),
                                 const SizedBox(height: 8),
                                 DropdownButtonFormField<String>(
                                   value: category,
-                                  dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-                                  style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-                                  decoration: InputDecoration(
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  dropdownColor: isDark
+                                      ? const Color(0xFF1E293B)
+                                      : Colors.white,
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? Colors.white
+                                        : Colors.black87,
                                   ),
-                                  items: ['Education', 'Entertainment', 'People & Blogs'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                                  onChanged: (v) => setState(() => category = v!),
+                                  decoration: InputDecoration(
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 12,
+                                    ),
+                                  ),
+                                  items:
+                                      [
+                                            'Education',
+                                            'Entertainment',
+                                            'People & Blogs',
+                                          ]
+                                          .map(
+                                            (e) => DropdownMenuItem(
+                                              value: e,
+                                              child: Text(e),
+                                            ),
+                                          )
+                                          .toList(),
+                                  onChanged: (v) =>
+                                      setState(() => category = v!),
                                 ),
                               ],
                             ),
@@ -351,32 +761,62 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                         ],
                       ),
                       const SizedBox(height: 16),
-                      Text('Keywords', style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                      Text(
+                        'Keywords',
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black87,
+                          fontSize: 13,
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       TextField(
                         controller: keywordsController,
-                        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
                         decoration: InputDecoration(
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 24),
-                      Text('Is this video made for kids?', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.w500)),
+                      Text(
+                        'Is this video made for kids?',
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       Text(
                         'In accordance with the Children\'s Online Privacy Protection Act (COPPA) and other laws, we require you to tell us whether your video is made for kids.',
-                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black54, fontSize: 12),
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black54,
+                          fontSize: 12,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       Theme(
                         data: Theme.of(context).copyWith(
-                          unselectedWidgetColor: isDark ? Colors.white54 : Colors.black54,
+                          unselectedWidgetColor: isDark
+                              ? Colors.white54
+                              : Colors.black54,
                         ),
                         child: Column(
                           children: [
                             RadioListTile<bool>(
-                              title: Text('Yes, it\'s made for kids', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 14)),
+                              title: Text(
+                                'Yes, it\'s made for kids',
+                                style: TextStyle(
+                                  color: isDark ? Colors.white : Colors.black87,
+                                  fontSize: 14,
+                                ),
+                              ),
                               value: true,
                               groupValue: isForKids,
                               onChanged: (v) => setState(() => isForKids = v!),
@@ -385,7 +825,13 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                               activeColor: const Color(0xFF6366F1),
                             ),
                             RadioListTile<bool>(
-                              title: Text('No, it\'s not made for kids', style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 14)),
+                              title: Text(
+                                'No, it\'s not made for kids',
+                                style: TextStyle(
+                                  color: isDark ? Colors.white : Colors.black87,
+                                  fontSize: 14,
+                                ),
+                              ),
                               value: false,
                               groupValue: isForKids,
                               onChanged: (v) => setState(() => isForKids = v!),
@@ -399,63 +845,134 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                       const SizedBox(height: 24),
                       Text.rich(
                         TextSpan(
-                          text: 'By clicking "Upload", you certify that the content you are uploading complies with the YouTube Terms of Service (including the YouTube Community Guidelines) at ',
+                          text:
+                              'By clicking "Upload", you certify that the content you are uploading complies with the YouTube Terms of Service (including the YouTube Community Guidelines) at ',
                           children: [
-                            TextSpan(text: 'https://www.youtube.com/t/terms', style: TextStyle(color: const Color(0xFF6366F1), decoration: TextDecoration.underline)),
-                            TextSpan(text: '. Please be sure not to violate the copyright or privacy rights of others.'),
+                            TextSpan(
+                              text: 'https://www.youtube.com/t/terms',
+                              style: TextStyle(
+                                color: const Color(0xFF6366F1),
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                            TextSpan(
+                              text:
+                                  '. Please be sure not to violate the copyright or privacy rights of others.',
+                            ),
                           ],
                         ),
-                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black54, fontSize: 12),
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black54,
+                          fontSize: 12,
+                        ),
                       ),
                       const SizedBox(height: 12),
                       Text.rich(
                         TextSpan(
-                          text: 'For more information on how YouTube in Jyamiti functions, please refer to the following ',
+                          text:
+                              'For more information on how YouTube in Jyamiti functions, please refer to the following ',
                           children: [
-                            TextSpan(text: 'article', style: TextStyle(color: const Color(0xFF6366F1), decoration: TextDecoration.underline)),
+                            TextSpan(
+                              text: 'article',
+                              style: TextStyle(
+                                color: const Color(0xFF6366F1),
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
                             TextSpan(text: '.'),
                           ],
                         ),
-                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black54, fontSize: 12),
+                        style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black54,
+                          fontSize: 12,
+                        ),
                       ),
                       const SizedBox(height: 24),
                       FilledButton(
                         onPressed: () async {
                           showDialog(
-                            context: context, 
+                            context: context,
                             barrierDismissible: false,
-                            builder: (c) => const Center(child: CircularProgressIndicator()),
+                            builder: (c) => const Center(
+                              child: CircularProgressIndicator(),
+                            ),
                           );
-                          
+
                           try {
-                            await UploadService().uploadToYouTube(
+                            final videoId = await UploadService().uploadToYouTube(
                               video: file,
                               title: titleController.text,
                               description: descController.text,
                               privacyStatus: privacy,
-                              categoryId: '27', // Education category ID for YouTube
-                              tags: keywordsController.text.split(',').map((e) => e.trim()).toList(),
+                              categoryId:
+                                  '27', // Education category ID for YouTube
+                              tags: keywordsController.text
+                                  .split(',')
+                                  .map((e) => e.trim())
+                                  .toList(),
                               madeForKids: isForKids,
                             );
+                            
+                            // If user selected a batch, auto-submit tutorial
+                            if (selectedBatchId != null && videoId.isNotEmpty) {
+                              final ytUrl = 'https://www.youtube.com/watch?v=$videoId';
+                              final res = await ApiService.post('/tutorials', {
+                                'batchId': selectedBatchId,
+                                'title': titleController.text.trim(),
+                                'videoUrl': ytUrl,
+                                'sessionDate': selectedSession ?? '',
+                                'chapter': selectedChapter ?? '',
+                                'description': descController.text.trim(),
+                              });
+                              if (res.statusCode != 201) {
+                                final body = jsonDecode(res.body);
+                                debugPrint('Tutorial link failed: ${body['message']}');
+                              }
+                            }
+
                             if (context.mounted) {
                               Navigator.pop(context); // pop loading
                               Navigator.pop(context); // pop dialog
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully uploaded to YouTube!')));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    selectedBatchId != null 
+                                        ? 'Successfully uploaded to YouTube & linked to Tutorial!'
+                                        : 'Successfully uploaded to YouTube!',
+                                  ),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
                             }
                           } catch (e) {
                             if (context.mounted) {
                               Navigator.pop(context); // pop loading
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Upload failed: $e')),
+                              );
                             }
                           }
                         },
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF38B2AC), // Teal color from screenshot
+                          backgroundColor: const Color(
+                            0xFF38B2AC,
+                          ), // Teal color from screenshot
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 32,
+                            vertical: 16,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
                         ),
-                        child: const Text('Upload', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        child: const Text(
+                          'Upload',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -468,9 +985,12 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
     );
   }
 
-  Widget _buildActiveEncodingCard(BuildContext context, MathPadRecordingService service) {
+  Widget _buildActiveEncodingCard(
+    BuildContext context,
+    MathPadRecordingService service,
+  ) {
     final bool isDark = context.isDark;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 24),
       padding: const EdgeInsets.all(24),
@@ -536,10 +1056,14 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
-              value: service.encodingProgress > 0 ? service.encodingProgress : null,
+              value: service.encodingProgress > 0
+                  ? service.encodingProgress
+                  : null,
               minHeight: 8,
               backgroundColor: const Color(0xFFF43F5E).withValues(alpha: 0.15),
-              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF43F5E)),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                Color(0xFFF43F5E),
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -565,8 +1089,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
 
     return Consumer<MathPadRecordingService>(
       builder: (context, recordingService, _) {
-        final bool isEncoding = recordingService.state == MathPadRecordingState.encoding;
-        
+        final bool isEncoding =
+            recordingService.state == MathPadRecordingState.encoding;
+
         return Scaffold(
           backgroundColor: Colors.transparent,
           body: Padding(
@@ -595,7 +1120,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                             });
                           },
                           icon: Icon(
-                            _isGridView ? Icons.view_list_rounded : Icons.grid_view_rounded,
+                            _isGridView
+                                ? Icons.view_list_rounded
+                                : Icons.grid_view_rounded,
                             color: isDark ? Colors.white70 : Colors.black54,
                           ),
                           tooltip: _isGridView ? 'List View' : 'Grid View',
@@ -614,10 +1141,10 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                   ],
                 ),
                 const SizedBox(height: 32),
-                
+
                 if (isEncoding)
                   _buildActiveEncodingCard(context, recordingService),
-                  
+
                 Expanded(
                   child: FutureBuilder<List<File>>(
                     future: _recordingsFuture,
@@ -625,7 +1152,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const Center(child: CircularProgressIndicator());
                       }
-                      
+
                       if (snapshot.hasError) {
                         return Center(
                           child: Text(
@@ -634,9 +1161,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                           ),
                         );
                       }
-                      
+
                       final files = snapshot.data ?? [];
-                      
+
                       if (files.isEmpty && !isEncoding) {
                         return Center(
                           child: Column(
@@ -652,31 +1179,36 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                                 'No recordings found.',
                                 style: TextStyle(
                                   fontSize: 16,
-                                  color: isDark ? Colors.white54 : Colors.black54,
+                                  color: isDark
+                                      ? Colors.white54
+                                      : Colors.black54,
                                 ),
                               ),
                             ],
                           ),
                         );
                       }
-                      
+
                       if (_isGridView) {
                         return GridView.builder(
-                          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 240,
-                            crossAxisSpacing: 16,
-                            mainAxisSpacing: 16,
-                            childAspectRatio: 0.85,
-                          ),
+                          gridDelegate:
+                              const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 240,
+                                crossAxisSpacing: 16,
+                                mainAxisSpacing: 16,
+                                childAspectRatio: 0.85,
+                              ),
                           itemCount: files.length,
-                          itemBuilder: (context, index) => _buildItem(context, files[index], isDark, true),
+                          itemBuilder: (context, index) =>
+                              _buildItem(context, files[index], isDark, true),
                         );
                       }
 
                       return ListView.separated(
                         itemCount: files.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) => _buildItem(context, files[index], isDark, false),
+                        itemBuilder: (context, index) =>
+                            _buildItem(context, files[index], isDark, false),
                       );
                     },
                   ),
@@ -693,7 +1225,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
     final fileName = file.path.split(Platform.pathSeparator).last;
     final baseName = p.basenameWithoutExtension(file.path);
     final parentDir = file.parent.path;
-    final thumbnailFile = File(p.join(parentDir, '.thumbnails', '$baseName.png'));
+    final thumbnailFile = File(
+      p.join(parentDir, '.thumbnails', '$baseName.png'),
+    );
 
     int fileSize = 0;
     DateTime? date;
@@ -749,7 +1283,9 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
             color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black12,
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.1)
+                  : Colors.black12,
             ),
           ),
           child: Column(
@@ -777,10 +1313,14 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                     ),
                     const SizedBox(height: 4),
                     FutureBuilder<String>(
-                      future: context.read<MathPadRecordingService>().getVideoDuration(file.path),
+                      future: context
+                          .read<MathPadRecordingService>()
+                          .getVideoDuration(file.path),
                       builder: (context, durationSnapshot) {
                         final durationStr = durationSnapshot.data ?? '';
-                        final durationPart = durationStr.isNotEmpty ? '$durationStr • ' : '';
+                        final durationPart = durationStr.isNotEmpty
+                            ? '$durationStr • '
+                            : '';
                         return Text(
                           '$durationPart$dateStr\n$sizeStr',
                           maxLines: 2,
@@ -797,10 +1337,18 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         PopupMenuButton<String>(
-                          icon: Icon(Icons.more_vert_rounded, size: 20, color: isDark ? Colors.white70 : Colors.black54),
+                          icon: Icon(
+                            Icons.more_vert_rounded,
+                            size: 20,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
                           tooltip: 'Options',
-                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          color: isDark
+                              ? const Color(0xFF1E293B)
+                              : Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                           onSelected: (value) {
                             if (value == 'drive') {
                               _showDriveUploadDialog(file, isDark);
@@ -815,9 +1363,20 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                               value: 'drive',
                               child: Row(
                                 children: [
-                                  const Icon(Icons.add_to_drive_rounded, color: Colors.blue, size: 20),
+                                  const Icon(
+                                    Icons.add_to_drive_rounded,
+                                    color: Colors.blue,
+                                    size: 20,
+                                  ),
                                   const SizedBox(width: 12),
-                                  Text('Save to Drive', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                                  Text(
+                                    'Save to Drive',
+                                    style: TextStyle(
+                                      color: isDark
+                                          ? Colors.white
+                                          : Colors.black87,
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
@@ -825,9 +1384,20 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                               value: 'youtube',
                               child: Row(
                                 children: [
-                                  const Icon(Icons.play_circle_filled_rounded, color: Colors.red, size: 20),
+                                  const Icon(
+                                    Icons.play_circle_filled_rounded,
+                                    color: Colors.red,
+                                    size: 20,
+                                  ),
                                   const SizedBox(width: 12),
-                                  Text('Upload to YouTube', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                                  Text(
+                                    'Upload to YouTube',
+                                    style: TextStyle(
+                                      color: isDark
+                                          ? Colors.white
+                                          : Colors.black87,
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
@@ -835,9 +1405,20 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                               value: 'whatsapp',
                               child: Row(
                                 children: [
-                                  const Icon(Icons.share_rounded, color: Colors.green, size: 20),
+                                  const Icon(
+                                    Icons.share_rounded,
+                                    color: Colors.green,
+                                    size: 20,
+                                  ),
                                   const SizedBox(width: 12),
-                                  Text('Share via WhatsApp', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                                  Text(
+                                    'Share via WhatsApp',
+                                    style: TextStyle(
+                                      color: isDark
+                                          ? Colors.white
+                                          : Colors.black87,
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
@@ -875,10 +1456,14 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 6.0),
           child: FutureBuilder<String>(
-            future: context.read<MathPadRecordingService>().getVideoDuration(file.path),
+            future: context.read<MathPadRecordingService>().getVideoDuration(
+              file.path,
+            ),
             builder: (context, durationSnapshot) {
               final durationStr = durationSnapshot.data ?? '';
-              final durationPart = durationStr.isNotEmpty ? ' • $durationStr' : '';
+              final durationPart = durationStr.isNotEmpty
+                  ? ' • $durationStr'
+                  : '';
               return Text(
                 'Status: Saved$durationPart • $dateStr • $sizeStr',
                 style: TextStyle(
@@ -893,10 +1478,16 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             PopupMenuButton<String>(
-              icon: Icon(Icons.more_vert_rounded, size: 20, color: isDark ? Colors.white70 : Colors.black54),
+              icon: Icon(
+                Icons.more_vert_rounded,
+                size: 20,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
               tooltip: 'Options',
               color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
               onSelected: (value) {
                 if (value == 'drive') {
                   _showDriveUploadDialog(file, isDark);
@@ -911,9 +1502,18 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                   value: 'drive',
                   child: Row(
                     children: [
-                      const Icon(Icons.add_to_drive_rounded, color: Colors.blue, size: 20),
+                      const Icon(
+                        Icons.add_to_drive_rounded,
+                        color: Colors.blue,
+                        size: 20,
+                      ),
                       const SizedBox(width: 12),
-                      Text('Save to Drive', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                      Text(
+                        'Save to Drive',
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -921,9 +1521,18 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                   value: 'youtube',
                   child: Row(
                     children: [
-                      const Icon(Icons.play_circle_filled_rounded, color: Colors.red, size: 20),
+                      const Icon(
+                        Icons.play_circle_filled_rounded,
+                        color: Colors.red,
+                        size: 20,
+                      ),
                       const SizedBox(width: 12),
-                      Text('Upload to YouTube', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                      Text(
+                        'Upload to YouTube',
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -931,9 +1540,18 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
                   value: 'whatsapp',
                   child: Row(
                     children: [
-                      const Icon(Icons.share_rounded, color: Colors.green, size: 20),
+                      const Icon(
+                        Icons.share_rounded,
+                        color: Colors.green,
+                        size: 20,
+                      ),
                       const SizedBox(width: 12),
-                      Text('Share via WhatsApp', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                      Text(
+                        'Share via WhatsApp',
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -967,7 +1585,10 @@ class _FolderSelectionDialog extends StatefulWidget {
   final bool isDark;
   final void Function(String id, String name) onSelected;
 
-  const _FolderSelectionDialog({required this.isDark, required this.onSelected});
+  const _FolderSelectionDialog({
+    required this.isDark,
+    required this.onSelected,
+  });
 
   @override
   State<_FolderSelectionDialog> createState() => _FolderSelectionDialogState();
@@ -996,7 +1617,9 @@ class _FolderSelectionDialogState extends State<_FolderSelectionDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load folders: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to load folders: $e')));
       }
     }
   }
@@ -1007,15 +1630,28 @@ class _FolderSelectionDialogState extends State<_FolderSelectionDialog> {
       context: context,
       builder: (c) => AlertDialog(
         backgroundColor: widget.isDark ? const Color(0xFF1E293B) : Colors.white,
-        title: Text('New Folder', style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87)),
+        title: Text(
+          'New Folder',
+          style: TextStyle(
+            color: widget.isDark ? Colors.white : Colors.black87,
+          ),
+        ),
         content: TextField(
           controller: controller,
-          style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87),
+          style: TextStyle(
+            color: widget.isDark ? Colors.white : Colors.black87,
+          ),
           decoration: const InputDecoration(hintText: 'Folder Name'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(c, controller.text), child: const Text('Create')),
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(c, controller.text),
+            child: const Text('Create'),
+          ),
         ],
       ),
     );
@@ -1031,7 +1667,9 @@ class _FolderSelectionDialogState extends State<_FolderSelectionDialog> {
       } catch (e) {
         if (mounted) {
           setState(() => _isLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to create folder: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to create folder: $e')),
+          );
         }
       }
     }
@@ -1052,38 +1690,78 @@ class _FolderSelectionDialogState extends State<_FolderSelectionDialog> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Select Folder', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: widget.isDark ? Colors.white : Colors.black87)),
-                IconButton(icon: Icon(Icons.close, color: widget.isDark ? Colors.white54 : Colors.black54), onPressed: () => Navigator.pop(context)),
+                Text(
+                  'Select Folder',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: widget.isDark ? Colors.white : Colors.black87,
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    Icons.close,
+                    color: widget.isDark ? Colors.white54 : Colors.black54,
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                ),
               ],
             ),
             const SizedBox(height: 16),
             Expanded(
-              child: _isLoading 
-                ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
-                    itemCount: _folders.length + 1,
-                    itemBuilder: (context, index) {
-                      if (index == 0) {
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : ListView.builder(
+                      itemCount: _folders.length + 1,
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return ListTile(
+                            leading: Icon(
+                              Icons.folder_shared,
+                              color: widget.isDark
+                                  ? Colors.white54
+                                  : Colors.black54,
+                            ),
+                            title: Text(
+                              'Root Directory',
+                              style: TextStyle(
+                                color: widget.isDark
+                                    ? Colors.white
+                                    : Colors.black87,
+                              ),
+                            ),
+                            onTap: () {
+                              widget.onSelected(
+                                'root',
+                                'Tutor Uploads (Root Directory)',
+                              );
+                              Navigator.pop(context);
+                            },
+                          );
+                        }
+                        final folder = _folders[index - 1];
                         return ListTile(
-                          leading: Icon(Icons.folder_shared, color: widget.isDark ? Colors.white54 : Colors.black54),
-                          title: Text('Root Directory', style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87)),
+                          leading: Icon(
+                            Icons.folder,
+                            color: widget.isDark
+                                ? Colors.white54
+                                : Colors.black54,
+                          ),
+                          title: Text(
+                            folder['name']!,
+                            style: TextStyle(
+                              color: widget.isDark
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
                           onTap: () {
-                            widget.onSelected('root', 'Tutor Uploads (Root Directory)');
+                            widget.onSelected(folder['id']!, folder['name']!);
                             Navigator.pop(context);
                           },
                         );
-                      }
-                      final folder = _folders[index - 1];
-                      return ListTile(
-                        leading: Icon(Icons.folder, color: widget.isDark ? Colors.white54 : Colors.black54),
-                        title: Text(folder['name']!, style: TextStyle(color: widget.isDark ? Colors.white : Colors.black87)),
-                        onTap: () {
-                          widget.onSelected(folder['id']!, folder['name']!);
-                          Navigator.pop(context);
-                        },
-                      );
-                    },
-                  ),
+                      },
+                    ),
             ),
             const SizedBox(height: 16),
             SizedBox(
