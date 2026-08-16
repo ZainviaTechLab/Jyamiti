@@ -4,6 +4,162 @@ import 'package:math_expressions/math_expressions.dart';
 import 'robo_context.dart';
 import 'robo_transformations.dart';
 
+void paintRealisticPencil(Canvas canvas, Offset tipPos, [double angle = -pi / 4]) {
+  canvas.save();
+  canvas.translate(tipPos.dx, tipPos.dy);
+  canvas.rotate(angle);
+
+  // Graphite tip
+  final tipPath = Path()
+    ..moveTo(0, 0)
+    ..lineTo(8, -3)
+    ..lineTo(8, 3)
+    ..close();
+  canvas.drawPath(tipPath, Paint()..color = const Color(0xFF2C3E50));
+
+  // Wood cone
+  final woodPath = Path()
+    ..moveTo(8, -3)
+    ..lineTo(25, -6)
+    ..lineTo(25, 6)
+    ..lineTo(8, 3)
+    ..close();
+  canvas.drawPath(woodPath, Paint()..color = const Color(0xFFF4D03F));
+  
+  canvas.drawLine(const Offset(8, 0), const Offset(25, 0), Paint()..color = const Color(0xFFD4AC0D)..strokeWidth = 1);
+  canvas.drawLine(const Offset(12, -2), const Offset(25, -3), Paint()..color = const Color(0xFFD4AC0D)..strokeWidth = 1);
+  canvas.drawLine(const Offset(12, 2), const Offset(25, 3), Paint()..color = const Color(0xFFD4AC0D)..strokeWidth = 1);
+
+  // Barrel
+  final barrelRect = Rect.fromLTWH(25, -6, 50, 12);
+  canvas.drawRect(barrelRect, Paint()..color = const Color(0xFFF1C40F));
+  canvas.drawLine(const Offset(25, -2), const Offset(75, -2), Paint()..color = const Color(0xFFF39C12)..strokeWidth = 1);
+  canvas.drawLine(const Offset(25, 2), const Offset(75, 2), Paint()..color = const Color(0xFFF39C12)..strokeWidth = 1);
+
+  // Jyamiti Brand Logo / Text on the barrel
+  final tp = TextPainter(
+    text: const TextSpan(
+      text: 'Jyamiti',
+      style: TextStyle(color: Color(0xFFB9770E), fontSize: 6, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  
+  canvas.save();
+  // Position the text in the middle of the barrel (X=50, Y=0)
+  canvas.translate(50, 0);
+  // Center the text
+  tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+  canvas.restore();
+
+  // Ferrule
+  final ferruleRect = Rect.fromLTWH(75, -6, 12, 12);
+  canvas.drawRect(ferruleRect, Paint()..color = const Color(0xFFBDC3C7));
+  canvas.drawLine(const Offset(78, -6), const Offset(78, 6), Paint()..color = const Color(0xFF95A5A6)..strokeWidth = 1);
+  canvas.drawLine(const Offset(81, -6), const Offset(81, 6), Paint()..color = const Color(0xFF95A5A6)..strokeWidth = 1);
+  canvas.drawLine(const Offset(84, -6), const Offset(84, 6), Paint()..color = const Color(0xFF95A5A6)..strokeWidth = 1);
+
+  // Eraser
+  final eraserRect = RRect.fromLTRBR(87, -6, 95, 6, const Radius.circular(3));
+  canvas.drawRRect(eraserRect, Paint()..color = const Color(0xFFF1948A));
+
+  canvas.restore();
+}
+
+void paintRealisticProtractor(Canvas canvas, Offset center, double baseAngle, double targetAngle, double measuredAngle, double progress, {double opacity = 1.0, double translateY = 0.0, double extraRotation = 0.0, bool drawArc = true}) {
+  if (opacity <= 0.0) return;
+  canvas.save();
+  canvas.translate(center.dx, center.dy + translateY);
+  
+  double vBase = -baseAngle;
+  double vTarget = -targetAngle;
+  double vDiff = vTarget - vBase;
+  
+  while (vDiff <= -pi) vDiff += 2 * pi;
+  while (vDiff > pi) vDiff -= 2 * pi;
+  
+  double sweepDirection = (vDiff < 0) ? -1.0 : 1.0;
+  
+  canvas.rotate(vBase + extraRotation);
+  
+  double radius = 120;
+  
+  Path bodyPath = Path()
+    ..moveTo(-radius - 20, 0)
+    ..lineTo(radius + 20, 0)
+    ..arcTo(Rect.fromCircle(center: Offset.zero, radius: radius + 20), 0, sweepDirection * pi, false)
+    ..close();
+  
+  Paint plasticPaint = Paint()
+    ..color = Colors.lightBlueAccent.withValues(alpha: 0.3 * opacity)
+    ..style = PaintingStyle.fill;
+    
+  canvas.drawPath(bodyPath, plasticPaint);
+  
+  canvas.drawPath(bodyPath, Paint()..color = Colors.blueGrey.withValues(alpha: 0.8 * opacity)..style = PaintingStyle.stroke..strokeWidth = 2);
+
+  canvas.drawCircle(Offset.zero, 5, Paint()..color = Colors.blueGrey.withValues(alpha: opacity)..style = PaintingStyle.stroke..strokeWidth = 1);
+  canvas.drawLine(const Offset(-15, 0), const Offset(15, 0), Paint()..color = Colors.blueGrey.withValues(alpha: opacity)..strokeWidth = 1);
+  canvas.drawLine(const Offset(0, 0), Offset(0, sweepDirection * 15), Paint()..color = Colors.blueGrey.withValues(alpha: opacity)..strokeWidth = 1);
+  
+  Paint tickPaint = Paint()..color = Colors.black87.withValues(alpha: opacity)..strokeWidth = 1;
+  Paint boldTickPaint = Paint()..color = Colors.black87.withValues(alpha: opacity)..strokeWidth = 2;
+  
+  for (int i = 0; i <= 180; i += 5) {
+    double rad = sweepDirection * i * pi / 180; 
+    double innerR = (i % 10 == 0) ? radius - 15 : ((i % 5 == 0) ? radius - 10 : radius - 5);
+    Paint p = (i % 10 == 0) ? boldTickPaint : tickPaint;
+    
+    Offset p1 = Offset(innerR * cos(rad), innerR * sin(rad));
+    Offset p2 = Offset(radius * cos(rad), radius * sin(rad));
+    canvas.drawLine(p1, p2, p);
+    
+    if (i % 10 == 0) {
+      TextPainter tp = TextPainter(
+        text: TextSpan(text: i.toString(), style: TextStyle(color: Colors.black.withValues(alpha: opacity), fontSize: 10)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      
+      canvas.save();
+      Offset textPos = Offset((radius - 25) * cos(rad), (radius - 25) * sin(rad));
+      canvas.translate(textPos.dx, textPos.dy);
+      
+      double textRot = rad + sweepDirection * pi / 2;
+      if (i > 90) textRot += pi;
+      canvas.rotate(textRot);
+      tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+      canvas.restore();
+    }
+  }
+  
+  double currentSweep = vDiff.abs() * progress;
+  
+  if (drawArc) {
+    Paint arcPaint = Paint()..color = Colors.redAccent.withValues(alpha: 0.6 * opacity)..style = PaintingStyle.fill;
+    canvas.drawArc(Rect.fromCircle(center: Offset.zero, radius: 40), 0, sweepDirection * currentSweep, true, arcPaint);
+    canvas.drawArc(Rect.fromCircle(center: Offset.zero, radius: 40), 0, sweepDirection * currentSweep, true, Paint()..color = Colors.red.withValues(alpha: opacity)..style = PaintingStyle.stroke..strokeWidth = 2);
+  }
+  
+  Offset currentPos = Offset(radius * cos(sweepDirection * currentSweep), radius * sin(sweepDirection * currentSweep));
+  canvas.drawLine(Offset.zero, currentPos, Paint()..color = Colors.redAccent.withValues(alpha: opacity)..strokeWidth = 2);
+  
+  if (drawArc) {
+    double currentDeg = measuredAngle * progress;
+    TextPainter measureTp = TextPainter(
+      text: TextSpan(
+        text: "${currentDeg.toStringAsFixed(1)}°",
+        style: TextStyle(color: Colors.white.withValues(alpha: opacity), fontSize: 14, fontWeight: FontWeight.bold, shadows: [Shadow(color: Colors.black54.withValues(alpha: opacity), blurRadius: 2)]),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    Offset labelPos = Offset(60 * cos(sweepDirection * currentSweep / 2), 60 * sin(sweepDirection * currentSweep / 2));
+    measureTp.paint(canvas, Offset(labelPos.dx - measureTp.width / 2, labelPos.dy - measureTp.height / 2));
+  }
+
+  canvas.restore();
+}
+
 /// Base class for all executable drawing commands.
 abstract class RoboCommand {
   /// The raw string typed by the user (e.g., 'a=line(A,B)')
@@ -34,8 +190,17 @@ class RoboPointCommand extends RoboCommand {
 
   @override
   void evaluate(RoboContext ctx) {
-    double x = xRef is double ? xRef : (ctx.evaluateExpression(xRef) as double? ?? 0.0);
-    double y = yRef is double ? yRef : (ctx.evaluateExpression(yRef) as double? ?? 0.0);
+    dynamic xEval = xRef is double ? xRef : ctx.evaluateExpression(xRef);
+    
+    if (xEval is Offset && yRef == null) {
+      if (assignedVar != null) {
+        ctx.setVar(assignedVar!, xEval);
+      }
+      return;
+    }
+    
+    double x = (xEval as num?)?.toDouble() ?? 0.0;
+    double y = yRef is double ? yRef : ((ctx.evaluateExpression(yRef) as num?)?.toDouble() ?? 0.0);
     
     if (assignedVar != null) {
       ctx.setVar(assignedVar!, Offset(x, y));
@@ -92,15 +257,7 @@ class RoboPointCommand extends RoboCommand {
       canvas.drawCircle(px, obj.strokeWidth * 2 * progress, paint);
     }
     
-    // Draw a pencil tip marking the point
-    final pencilPaint = Paint()
-      ..color = Colors.redAccent
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke;
-      
-    // A simple simulated pencil coming from top-right
-    canvas.drawLine(px, px + const Offset(20, -20), pencilPaint);
-    canvas.drawCircle(px, 2, Paint()..color = Colors.black);
+    paintRealisticPencil(canvas, px);
   }
 }
 
@@ -165,13 +322,7 @@ class RoboLineCommand extends RoboCommand {
     // Draw a virtual ruler
     _drawRuler(canvas, px1, px2);
 
-    // Draw the pencil at current point
-    final pencilPaint = Paint()
-      ..color = Colors.redAccent
-      ..strokeWidth = 4
-      ..style = PaintingStyle.stroke;
-    canvas.drawLine(currentPx, currentPx + const Offset(15, -25), pencilPaint);
-    canvas.drawCircle(currentPx, 2, Paint()..color = Colors.black);
+    paintRealisticPencil(canvas, currentPx);
   }
 
   void _drawRuler(Canvas canvas, Offset p1, Offset p2) {
@@ -327,8 +478,9 @@ class RoboCircleCommand extends RoboCommand {
     canvas.drawLine(hinge, pencilOffset, compassPaint); // Pencil arm
     canvas.drawCircle(hinge, 4, Paint()..color = Colors.black); // Hinge
     
-    // Pencil tip
-    canvas.drawCircle(pencilOffset, 3, Paint()..color = Colors.redAccent);
+    // Realistic pencil pointing towards hinge
+    double angle = atan2(hinge.dy - pencilOffset.dy, hinge.dx - pencilOffset.dx);
+    paintRealisticPencil(canvas, pencilOffset, angle);
   }
 }
 
@@ -435,9 +587,10 @@ class RoboArcCommand extends RoboCommand {
     Offset hinge = Offset(pxCenter.dx + (pencilOffset.dx - pxCenter.dx) / 2, pxCenter.dy - 100);
     canvas.drawLine(hinge, pxCenter, compassPaint); 
     canvas.drawLine(hinge, pencilOffset, compassPaint); 
-    canvas.drawCircle(hinge, 4, Paint()..color = Colors.black); 
     
-    canvas.drawCircle(pencilOffset, 3, Paint()..color = Colors.redAccent);
+    // Realistic pencil pointing towards hinge
+    double angle = atan2(hinge.dy - pencilOffset.dy, hinge.dx - pencilOffset.dx);
+    paintRealisticPencil(canvas, pencilOffset, angle); 
   }
 }
 
@@ -1000,7 +1153,24 @@ class RoboMathCommand extends RoboCommand {
               double angle2 = atan2(p4.dy - p3.dy, p4.dx - p3.dx);
               double diff = (angle2 - angle1) * 180.0 / pi;
               if (diff < 0) diff += 360;
-              result = diff;
+              
+              double denom = (p1.dx - p2.dx) * (p3.dy - p4.dy) - (p1.dy - p2.dy) * (p3.dx - p4.dx);
+              Offset vertex;
+              if (denom != 0) {
+                double px = ((p1.dx * p2.dy - p1.dy * p2.dx) * (p3.dx - p4.dx) - (p1.dx - p2.dx) * (p3.dx * p4.dy - p3.dy * p4.dx)) / denom;
+                double py = ((p1.dx * p2.dy - p1.dy * p2.dx) * (p3.dy - p4.dy) - (p1.dy - p2.dy) * (p3.dx * p4.dy - p3.dy * p4.dx)) / denom;
+                vertex = Offset(px, py);
+              } else {
+                vertex = p2;
+              }
+              
+              result = {
+                'type': 'measured_angle',
+                'value': diff,
+                'vertex': RoboTransformations.generateAnonVar(ctx, vertex),
+                'baseAngle': angle1,
+                'targetAngle': angle2
+              };
             }
           }
         }
@@ -1082,8 +1252,9 @@ class RoboMathCommand extends RoboCommand {
         int idx = args.length > 2 ? (ctx.evaluateExpression(args[2]) as double? ?? 1.0).toInt() : 1;
         
         if (obj1 is Map && obj2 is Map) {
-          String type1 = obj1['type'];
-          String type2 = obj2['type'];
+          // Treat 'arc' as 'circle' for intersections
+          String type1 = obj1['type'] == 'arc' ? 'circle' : obj1['type'];
+          String type2 = obj2['type'] == 'arc' ? 'circle' : obj2['type'];
           
           if (type1 == 'line' && type2 == 'line') {
              Offset? p1 = ctx.evaluateExpression(obj1['p1']);
@@ -1166,17 +1337,102 @@ class RoboMathCommand extends RoboCommand {
       
       if (assignedVar != null && result != null) {
         ctx.setVar(assignedVar!, result);
+        if (result is Map && result['type'] == 'measured_angle') {
+          ctx.variables[assignedVar!]?.speedOverride = 0.5;
+        }
       }
     } catch (e) {
       debugPrint("Math Error: \$e");
     }
   }
 
-  @override
-  void paintStatic(Canvas canvas, Size size, RoboContext ctx) {}
+  void _paintPencilArc(Canvas canvas, Offset center, double baseAngle, double targetAngle, double measuredAngle, double progress, {bool showPencil = true}) {
+    if (progress <= 0.0) return;
+    double vBase = -baseAngle;
+    double vTarget = -targetAngle;
+    double vDiff = vTarget - vBase;
+    while (vDiff <= -pi) vDiff += 2 * pi;
+    while (vDiff > pi) vDiff -= 2 * pi;
+    double sweepDirection = (vDiff < 0) ? -1.0 : 1.0;
+    
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(vBase);
+    
+    double currentSweep = vDiff.abs() * progress;
+    
+    canvas.drawArc(Rect.fromCircle(center: Offset.zero, radius: 40), 0, sweepDirection * currentSweep, false, Paint()..color = Colors.red..style = PaintingStyle.stroke..strokeWidth = 2);
+    
+    if (showPencil && progress < 1.0) {
+        Offset pencilPos = Offset(40 * cos(sweepDirection * currentSweep), 40 * sin(sweepDirection * currentSweep));
+        double pencilRot = (sweepDirection * currentSweep) + (sweepDirection * pi / 2);
+        paintRealisticPencil(canvas, pencilPos, pencilRot - pi/4);
+    }
+    
+    double currentDeg = measuredAngle * progress;
+    TextPainter measureTp = TextPainter(
+      text: TextSpan(
+        text: "${currentDeg.toStringAsFixed(1)}°",
+        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, shadows: [Shadow(color: Colors.black54, blurRadius: 2)]),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    Offset labelPos = Offset(60 * cos(sweepDirection * currentSweep / 2), 60 * sin(sweepDirection * currentSweep / 2));
+    measureTp.paint(canvas, Offset(labelPos.dx - measureTp.width / 2, labelPos.dy - measureTp.height / 2));
+    
+    canvas.restore();
+  }
 
   @override
-  void paintAnimated(Canvas canvas, Size size, RoboContext ctx, double progress) {}
+  void paintStatic(Canvas canvas, Size size, RoboContext ctx) {
+    if (assignedVar != null) {
+       dynamic data = ctx.getVar(assignedVar!);
+       if (data is Map && data['type'] == 'measured_angle') {
+          Offset? vertex = ctx.evaluateExpression(data['vertex']);
+          if (vertex != null) {
+            _paintPencilArc(canvas, ctx.gridToPixel(vertex.dx, vertex.dy), data['baseAngle'], data['targetAngle'], data['value'], 1.0, showPencil: false);
+          }
+       }
+    }
+  }
+
+  @override
+  void paintAnimated(Canvas canvas, Size size, RoboContext ctx, double progress) {
+    if (assignedVar != null) {
+       dynamic data = ctx.getVar(assignedVar!);
+       if (data is Map && data['type'] == 'measured_angle') {
+          Offset? vertex = ctx.evaluateExpression(data['vertex']);
+          if (vertex != null) {
+             double pArrive = (progress / 0.15).clamp(0.0, 1.0);
+             double pMeasure = ((progress - 0.15) / 0.25).clamp(0.0, 1.0);
+             double pClearRot = ((progress - 0.4) / 0.15).clamp(0.0, 1.0);
+             double pFadeOut = ((progress - 0.55) / 0.05).clamp(0.0, 1.0);
+             double pArc = ((progress - 0.6) / 0.4).clamp(0.0, 1.0);
+             
+             Offset center = ctx.gridToPixel(vertex.dx, vertex.dy);
+             
+             if (pFadeOut < 1.0) {
+                 double opacity = 1.0;
+                 if (pArrive < 0.5) opacity = pArrive / 0.5;
+                 if (pFadeOut > 0.0) opacity = 1.0 - pFadeOut;
+                 
+                 double easeArrive = sin(pArrive * pi / 2);
+                 double easeClear = 1.0 - cos(pClearRot * pi / 2);
+                 
+                 double extraRotation = (1.0 - easeArrive) * (-pi / 3) + (easeClear) * (-pi / 3);
+                 double translateY = -easeClear * 60.0;
+                 
+                 paintRealisticProtractor(canvas, center, data['baseAngle'], data['targetAngle'], data['value'], pMeasure, opacity: opacity, translateY: translateY, extraRotation: extraRotation, drawArc: true);
+             }
+             
+             if (progress > 0.4) {
+                 _paintPencilArc(canvas, center, data['baseAngle'], data['targetAngle'], data['value'], pArc);
+             }
+          }
+       }
+    }
+  }
 }
 
 class RoboPlotCommand extends RoboCommand {
