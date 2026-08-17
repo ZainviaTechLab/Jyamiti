@@ -91,7 +91,7 @@ class RoboPresets {
           "B=point(15,10)",
           "base=line(A,B)",
           "text('Draw an arc from A with radius > half AB')",
-          "arcA=arc(A,7,270,90)",
+          "arcA=arc(A,7,270,180)",
           "text('Draw an arc from B with same radius')",
           "arcB=arc(B,7,90,270)",
           "text('Mark the intersection point')",

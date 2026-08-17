@@ -647,17 +647,18 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
           Expanded(
             child: Container(
               color: _isDarkMode ? Colors.black : Colors.white,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: RoboCanvas(
-                      ctx: _ctx,
-                      commands: _commands,
-                      activeCommandIndex: _activeCommandIndex,
-                      animationProgress: _animController.value,
-                      showGrid: _showGrid,
-                      isDarkMode: _isDarkMode,
-                    ),
+              child: ClipRect(
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: RoboCanvas(
+                        ctx: _ctx,
+                        commands: _commands,
+                        activeCommandIndex: _activeCommandIndex,
+                        animationProgress: _animController.value,
+                        showGrid: _showGrid,
+                        isDarkMode: _isDarkMode,
+                      ),
                   ),
                   Positioned(
                     top: 16,
@@ -697,6 +698,7 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
               ),
             ),
           ),
+        ),
         ],
       ),
     );

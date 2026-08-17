@@ -1099,14 +1099,36 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
     return Scaffold(
       extendBodyBehindAppBar: !isLargeScreen,
-      floatingActionButton: JyamitiPadFab(
-        enableSaveNotes: true,
-        onPressed: () {
-          setState(() {
-            _selectedSidebarTab = 10;
-            _activeInlineSubScreen = null;
-          });
-        },
+      floatingActionButton: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'robo_drawing_fab',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const RoboDrawingScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.smart_toy_rounded),
+            label: const Text('Robo Drawing', style: TextStyle(fontWeight: FontWeight.bold)),
+            backgroundColor: _roleColor,
+            foregroundColor: Colors.white,
+            elevation: 4,
+          ),
+          const SizedBox(width: 16),
+          JyamitiPadFab(
+            enableSaveNotes: true,
+            onPressed: () {
+              setState(() {
+                _selectedSidebarTab = 10;
+                _activeInlineSubScreen = null;
+              });
+            },
+          ),
+        ],
       ),
       appBar: isLargeScreen
           ? null
@@ -1291,11 +1313,6 @@ class _TutorDashboardState extends State<TutorDashboard> {
                                   11,
                                   'Recordings',
                                   Icons.video_library_rounded,
-                                ),
-                                _buildSidebarItem(
-                                  12,
-                                  'Robo Drawing',
-                                  Icons.smart_toy_rounded,
                                 ),
                                 if (isEncoding)
                                   Positioned(
