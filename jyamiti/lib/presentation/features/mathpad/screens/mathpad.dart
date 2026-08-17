@@ -1355,6 +1355,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // participate in gesture-arena resolution, so this can't interfere with
   // any existing tool.
   Timer? _longPressPasteTimer;
+  Timer? _rightToolbarHoverTimer;
+  Timer? _rightToolbarHideTimer;
+  bool _isRightToolbarVisible = false;
   Offset? _longPressPasteDownScreenPos;
   Offset? _pastePopupWorldPos;
 
@@ -1759,6 +1762,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void dispose() {
     _circleHoldTimer?.cancel();
     _longPressPasteTimer?.cancel();
+    _rightToolbarHoverTimer?.cancel();
+    _rightToolbarHideTimer?.cancel();
     _textEditorController?.dispose();
     _canvasFocusNode.dispose();
     _panNotifier.dispose();
@@ -3126,6 +3131,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// `_insertTemplate`. Lives entirely inside `_MathsPadWidgetState` (not
   /// injected via a `leadingToolbarAction`-style external param) since its
   /// behavior is intrinsically tied to this state's private methods.
+  void _startRightToolbarHideTimer() {
+    _rightToolbarHideTimer?.cancel();
+    _rightToolbarHideTimer = Timer(const Duration(seconds: 10), () {
+      if (mounted) setState(() => _isRightToolbarVisible = false);
+    });
+  }
+
+  void _keepRightToolbarOpen() {
+    _rightToolbarHideTimer?.cancel();
+    if (!_isRightToolbarVisible && mounted) {
+      setState(() => _isRightToolbarVisible = true);
+    }
+  }
+
   Widget _buildAssetLibraryToolbarButton() {
     return Tooltip(
       message: 'Asset Library',
@@ -4740,6 +4759,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _isDoubleTapPointerDown = false;
       _lastPointerDownTime = null;
       _lastPointerDownScreenPos = null;
+    }
+
+    // Dismiss the right toolbar if the user touches the canvas (and it's currently visible)
+    // but only if they didn't touch the toolbar itself (which is handled by its own Listener).
+    if (_isRightToolbarVisible) {
+      _rightToolbarHideTimer?.cancel();
+      setState(() => _isRightToolbarVisible = false);
     }
 
     // Arm the long-press-to-paste timer for a single-finger press. If a
@@ -8932,25 +8958,65 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               ),
             ),
 
-          // Left Side Tools (Asset Library, Spinner, Graphing)
-          Positioned(
-            left: 16,
+          // Right Side Tools (Asset Library, Spinner, Graphing)
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeInCubic,
+            right: _isRightToolbarVisible ? 16 : -100,
             top: 100,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildAssetLibraryToolbarButton(),
-                const SizedBox(height: 8),
-                _buildSpinnerToolbarButton(),
-                const SizedBox(height: 8),
-                _buildEquationToolbarButton(),
-                const SizedBox(height: 8),
-                _buildGraphingToolbarButton(),
-                const SizedBox(height: 8),
-                _buildPdfExportToolbarButton(),
-              ],
+            child: MouseRegion(
+              onEnter: (_) => _keepRightToolbarOpen(),
+              onExit: (_) => _startRightToolbarHideTimer(),
+              child: Listener(
+                onPointerDown: (_) {
+                  _keepRightToolbarOpen();
+                  _startRightToolbarHideTimer();
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildAssetLibraryToolbarButton(),
+                    const SizedBox(height: 8),
+                    _buildSpinnerToolbarButton(),
+                    const SizedBox(height: 8),
+                    _buildEquationToolbarButton(),
+                    const SizedBox(height: 8),
+                    _buildGraphingToolbarButton(),
+                    const SizedBox(height: 8),
+                    _buildPdfExportToolbarButton(),
+                  ],
+                ),
+              ),
             ),
           ),
+
+          if (!_isRightToolbarVisible)
+            Positioned(
+              right: 0,
+              top: 100,
+              width: 40,
+              height: 300,
+              child: MouseRegion(
+                onEnter: (_) {
+                  _rightToolbarHoverTimer?.cancel();
+                  _rightToolbarHoverTimer = Timer(const Duration(seconds: 3), () {
+                    _keepRightToolbarOpen();
+                    _startRightToolbarHideTimer();
+                  });
+                },
+                onExit: (_) {
+                  _rightToolbarHoverTimer?.cancel();
+                },
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () {
+                    _keepRightToolbarOpen();
+                    _startRightToolbarHideTimer();
+                  },
+                  child: const SizedBox(width: 40, height: 300),
+                ),
+              ),
+            ),
 
           // Floating Tool Hint Pill
           if (_selectedLines.isEmpty && !_isStylusBarrelPressed)
