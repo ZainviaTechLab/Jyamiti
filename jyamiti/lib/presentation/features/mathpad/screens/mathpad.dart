@@ -4633,7 +4633,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         event.kind == PointerDeviceKind.invertedStylus ||
         (event.buttons & kSecondaryButton != 0);
     final bool isSecondaryBarrel = (event.buttons & kTertiaryButton != 0);
-    final bool isBarrelOrInverted = isPrimaryBarrel || isSecondaryBarrel;
+    final bool isBarrelOrInverted = isPrimaryBarrel;
 
     if (_isStylusBarrelPressed != isBarrelOrInverted) {
       setState(() {
@@ -4992,7 +4992,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _initialScale = _scale;
 
     // 2-finger touch is dedicated to canvas panning and zooming
-    if (details.pointerCount > 1 || _activePointers.length >= 2) {
+    if (details.pointerCount > 1 || _activePointers.length >= 2 || _isSecondaryBarrelPressed) {
       if (_currentLine != null) {
         if (_lines.isNotEmpty && _lines.last == _currentLine) {
           _lines.removeLast();
@@ -5003,7 +5003,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return;
     }
 
-    if (details.pointerCount == 1 && _toolMode != CanvasToolMode.pan) {
+    if (details.pointerCount == 1 && _toolMode != CanvasToolMode.pan && !_isSecondaryBarrelPressed) {
       final worldPos = _screenToWorld(details.localFocalPoint);
 
       // Any tap while the text editor is open commits/closes it first,
@@ -5312,7 +5312,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (!widget.isTransparentBg &&
         (details.pointerCount > 1 ||
             _activePointers.length >= 2 ||
-            _toolMode == CanvasToolMode.pan)) {
+            _toolMode == CanvasToolMode.pan ||
+            _isSecondaryBarrelPressed)) {
       if (_currentLine != null) {
         if (_lines.isNotEmpty && _lines.last == _currentLine) {
           _lines.removeLast();
@@ -5751,7 +5752,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
 
     // Trigger smooth inertial gliding velocity physics when flinging 2 fingers or Hand Tool
-    if (_toolMode == CanvasToolMode.pan || _activePointers.length >= 2) {
+    if (_toolMode == CanvasToolMode.pan || _activePointers.length >= 2 || _isSecondaryBarrelPressed) {
       _startInertialFling(details.velocity.pixelsPerSecond);
     }
 
