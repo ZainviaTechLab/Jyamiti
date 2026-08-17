@@ -696,11 +696,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _themeMode == MathPadTheme.aswadLail;
   }
 
-  Color get _textColor => _isDarkTheme ? Colors.white : const Color(0xFF1E293B);
+  Color get _textColor => _isDarkTheme ? Colors.white : _darkPanelColor;
+  
+  Color get _darkPanelColor => _themeMode == MathPadTheme.aswadLail 
+      ? const Color(0xFF222222) 
+      : const Color(0xFF1E293B);
+  
+  Color get _darkPillColor => _themeMode == MathPadTheme.aswadLail 
+      ? const Color(0xFF121212) 
+      : const Color(0xFF0F172A);
   Color get _textColor70 =>
-      _isDarkTheme ? Colors.white70 : const Color(0xFF1E293B).withOpacity(0.7);
+      _isDarkTheme ? Colors.white70 : _darkPanelColor.withOpacity(0.7);
   Color get _textColor60 =>
-      _isDarkTheme ? Colors.white60 : const Color(0xFF1E293B).withOpacity(0.6);
+      _isDarkTheme ? Colors.white60 : _darkPanelColor.withOpacity(0.6);
   MathsPadLine? _currentLine;
   // Live cursor ring drawn on the (cheap, per-frame) active overlay layer
   // while an area-eraser stroke is being dragged -- see the comment at its
@@ -3200,7 +3208,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              color: _isDarkTheme ? _darkPanelColor : Colors.white,
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
@@ -3237,7 +3245,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              color: _isDarkTheme ? _darkPanelColor : Colors.white,
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
@@ -3274,7 +3282,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             decoration: BoxDecoration(
               color: isSelected 
                   ? const Color(0xFF6366F1) 
-                  : (_isDarkTheme ? const Color(0xFF1E293B) : Colors.white),
+                  : (_isDarkTheme ? _darkPanelColor : Colors.white),
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
@@ -3311,7 +3319,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              color: _isDarkTheme ? _darkPanelColor : Colors.white,
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
@@ -3341,7 +3349,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: _isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+              color: _isDarkTheme ? _darkPanelColor : Colors.white,
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
@@ -3538,7 +3546,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   child: _isEquationEditorActive
                       ? DefaultTextStyle(
                           style: TextStyle(
-                            color: isDark ? Colors.white : const Color(0xFF1E293B),
+                            color: isDark ? Colors.white : _darkPanelColor,
                             fontSize: 18,
                           ),
                           child: MathField(
@@ -3568,7 +3576,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           autofocus: true,
                           cursorColor: isDark ? Colors.white : Colors.black87,
                           style: TextStyle(
-                            color: isDark ? Colors.white : const Color(0xFF1E293B),
+                            color: isDark ? Colors.white : _darkPanelColor,
                             fontSize: 16,
                             letterSpacing: -0.3,
                           ),
@@ -3613,7 +3621,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              color: isDark ? _darkPanelColor : Colors.white,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: const Color(0xFF6366F1), width: 1.5),
               boxShadow: [
@@ -3636,7 +3644,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 Text(
                   'Paste',
                   style: TextStyle(
-                    color: isDark ? Colors.white : const Color(0xFF1E293B),
+                    color: isDark ? Colors.white : _darkPanelColor,
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
                   ),
@@ -3733,7 +3741,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               border: live
                   ? null
                   : Border.all(
-                      color: const Color(0xFF1E293B).withOpacity(0.12),
+                      color: _darkPanelColor.withOpacity(0.12),
                     ),
               boxShadow: [
                 BoxShadow(
@@ -3746,7 +3754,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             child: Text(
               text,
               style: TextStyle(
-                color: live ? Colors.white : const Color(0xFF1E293B),
+                color: live ? Colors.white : _darkPanelColor,
                 fontWeight: FontWeight.bold,
                 fontSize: 12,
               ),
@@ -7455,7 +7463,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
               decoration: BoxDecoration(
                 color: isDark
-                    ? const Color(0xFF1E293B)
+                    ? _darkPanelColor
                     : const Color(0xFFFFFFFF),
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
@@ -7478,7 +7486,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   Text(
                     'Loading page…',
                     style: TextStyle(
-                      color: isDark ? Colors.white : const Color(0xFF1E293B),
+                      color: isDark ? Colors.white : _darkPanelColor,
                       fontWeight: FontWeight.w600,
                       fontSize: 13,
                     ),
@@ -7645,7 +7653,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: isDark
-            ? const Color(0xFF1E293B).withValues(alpha: 0.85)
+            ? _darkPanelColor.withValues(alpha: 0.85)
             : Colors.white.withValues(alpha: 0.85),
         borderRadius: const BorderRadius.vertical(
           top: Radius.circular(50),
@@ -7722,7 +7730,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// target directly (rather than one wrapping the other) so a tap on an
   /// inner button while expanded can't also re-trigger the outer toggle.
   Widget _buildFullScreenQuickTools(bool isDark) {
-    final Color iconColor = isDark ? Colors.white : const Color(0xFF1E293B);
+    final Color iconColor = isDark ? Colors.white : _darkPanelColor;
 
     Widget glassShell({required double width, required Widget child}) {
       return ClipRRect(
@@ -8612,7 +8620,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: (isDark ? const Color(0xFF1E293B) : Colors.white)
+                      color: (isDark ? _darkPanelColor : Colors.white)
                           .withOpacity(0.95),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
@@ -8767,7 +8775,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    color: isDark ? _darkPanelColor : Colors.white,
                     borderRadius: BorderRadius.circular(25),
                     boxShadow: [
                       BoxShadow(
@@ -9261,7 +9269,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        color: isDark ? _darkPanelColor : const Color(0xFFF1F5F9),
         borderRadius: radius,
         border: _toolbarOnLeft
             ? Border(top: edgeBorder)
@@ -9297,7 +9305,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   // Pen, Stroke Eraser, Tap-to-Select, Lasso Select, & Pan Tool
                   Container(
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                      color: isDark ? _darkPillColor : Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.white12),
                     ),
@@ -9560,7 +9568,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   // Geometry Instruments: Ruler, Protractor, Compass, Set Squares
                   Container(
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                      color: isDark ? _darkPillColor : Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.white12),
                     ),
@@ -9715,7 +9723,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         ],
                       ),
                     ),
-                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    color: isDark ? _darkPanelColor : Colors.white,
                     onSelected: (w) => setState(() {
                       _selectedWidth = w;
                       if (_toolMode == CanvasToolMode.eraser) {
@@ -9772,7 +9780,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    color: isDark ? _darkPanelColor : Colors.white,
                     icon: RotatedBox(
                       quarterTurns: _toolbarOnLeft ? -1 : 0,
                       child: Container(
@@ -9883,7 +9891,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         ],
                       ),
                     ),
-                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    color: isDark ? _darkPanelColor : Colors.white,
                     onSelected: (m) => setState(() => _bgMode = m),
                     itemBuilder: (ctx) => [
                       PopupMenuItem(
@@ -9931,7 +9939,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         ],
                       ),
                     ),
-                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    color: isDark ? _darkPanelColor : Colors.white,
                     onSelected: (m) async {
                       setState(() {
                         _themeMode = m;
@@ -10334,7 +10342,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
-            backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+            backgroundColor: isDark ? _darkPanelColor : Colors.white,
             title: Text(
               'Recording in Progress',
               style: TextStyle(
@@ -10450,7 +10458,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          backgroundColor: isDark ? _darkPanelColor : Colors.white,
           title: Text(
             widget.noteId != null
                 ? 'Update Saved Note'

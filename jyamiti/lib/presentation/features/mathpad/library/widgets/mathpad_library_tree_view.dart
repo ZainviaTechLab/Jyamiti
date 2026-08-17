@@ -301,7 +301,30 @@ class _MathPadLibraryTreeViewState extends State<MathPadLibraryTreeView> {
                     subtitle: book.isDefault
                         ? const Text('Course Book', style: TextStyle(color: Color(0xFF6366F1), fontSize: 12))
                         : null,
-                    trailing: const Icon(Icons.chevron_right_rounded),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (!book.isDefault)
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                            onPressed: () async {
+                              final confirmed = await _confirmDelete('Book');
+                              if (confirmed) {
+                                final removedPages = widget.index.removeBook(book.id);
+                                if (removedPages.isNotEmpty) {
+                                  await widget.storage.deletePages(
+                                    widget.batchId,
+                                    removedPages.map((p) => p.id).toList(),
+                                  );
+                                }
+                                await widget.onPersistIndex();
+                                setState(() {});
+                              }
+                            },
+                          ),
+                        const Icon(Icons.chevron_right_rounded),
+                      ],
+                    ),
                     onTap: () => _selectBook(book),
                   ),
                 ),
