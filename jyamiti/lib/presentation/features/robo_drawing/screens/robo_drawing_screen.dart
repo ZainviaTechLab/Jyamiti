@@ -456,29 +456,39 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: (widget.isInline || _isFullScreen) ? null : AppBar(
-        title: const Text('Robo Drawing'),
-        backgroundColor: Colors.blueGrey.shade900,
-        foregroundColor: Colors.white,
-      ),
-      body: Row(
-        children: [
-          if (!_isFullScreen) ...[
-            // 1. Library Sidebar
-            Container(
-            width: 250,
-            color: Colors.grey.shade200,
-            child: Column(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  color: Colors.blueGrey.shade800,
-                  width: double.infinity,
-                  child: const Text(
-                    "Library",
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+      body: SafeArea(
+        child: Row(
+          children: [
+            if (!_isFullScreen) ...[
+              // 1. Library Sidebar
+              Container(
+              width: 250,
+              color: Colors.grey.shade200,
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    color: Colors.blueGrey.shade800,
+                    width: double.infinity,
+                    child: Row(
+                      children: [
+                        if (!widget.isInline)
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back, color: Colors.white),
+                            onPressed: () => Navigator.of(context).pop(),
+                          ),
+                        const Expanded(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 8.0),
+                            child: Text(
+                              "Library",
+                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
                 Expanded(
                   child: ListView.builder(
                     itemCount: _library.length,
@@ -700,6 +710,7 @@ class _RoboDrawingScreenState extends State<RoboDrawingScreen> with SingleTicker
           ),
         ),
         ],
+      ),
       ),
     );
   }

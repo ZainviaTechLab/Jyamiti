@@ -1113,7 +1113,10 @@ class _TutorDashboardState extends State<TutorDashboard> {
               );
             },
             icon: const Icon(Icons.smart_toy_rounded),
-            label: const Text('Robo Drawing', style: TextStyle(fontWeight: FontWeight.bold)),
+            label: const Text(
+              'Jya-Nirmiti',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             backgroundColor: _roleColor,
             foregroundColor: Colors.white,
             elevation: 4,
@@ -1303,10 +1306,12 @@ class _TutorDashboardState extends State<TutorDashboard> {
                           'My Notes',
                           Icons.note_alt_rounded,
                         ),
-                        
+
                         Consumer<MathPadRecordingService>(
                           builder: (context, recordingService, child) {
-                            final bool isEncoding = recordingService.state == MathPadRecordingState.encoding;
+                            final bool isEncoding =
+                                recordingService.state ==
+                                MathPadRecordingState.encoding;
                             return Stack(
                               children: [
                                 _buildSidebarItem(
@@ -1323,9 +1328,10 @@ class _TutorDashboardState extends State<TutorDashboard> {
                                       height: 14,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          Color(0xFFF43F5E),
-                                        ),
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              Color(0xFFF43F5E),
+                                            ),
                                       ),
                                     ),
                                   ),
@@ -1333,7 +1339,6 @@ class _TutorDashboardState extends State<TutorDashboard> {
                             );
                           },
                         ),
-
 
                         const Spacer(),
 

@@ -2510,19 +2510,19 @@ class RoboMathCommand extends RoboCommand {
             baseAngle,
             targetAngle,
             degrees,
-            1.0, // Fully measure the angle visually on the protractor
+            pMark, 
             opacity: opacity,
             translateY: translateY,
             extraRotation: extraRotation,
-            drawArc: false,
+            drawArc: true,
           );
         }
 
-        if (pMark > 0) {
+        if (pDrawLine > 0) {
           Offset pxEndPt = ctx.gridToPixel(data['endPt'].dx, data['endPt'].dy);
           
-          if (pFadeOut < 1.0) {
-            double pPencilMove = sin(pMark * pi / 2);
+          if (pDrawLine < 1.0) {
+            double pPencilMove = sin(pDrawLine * pi / 2);
             Offset startPencilPos = Offset(
               pxEndPt.dx + 50,
               pxEndPt.dy - 50,
@@ -2531,7 +2531,7 @@ class RoboMathCommand extends RoboCommand {
             paintRealisticPencil(canvas, currentPencilPos, -targetAngle - pi/4);
           }
           
-          if (pMark > 0.8) {
+          if (pDrawLine > 0.8) {
             final paint = Paint()
               ..color = Colors.blue
               ..style = ctx.currentPointType == 'cross'
@@ -2578,6 +2578,7 @@ class RoboMathCommand extends RoboCommand {
         double pMark = ((progress - 0.15) / 0.25).clamp(0.0, 1.0);
         double pClearRot = ((progress - 0.4) / 0.15).clamp(0.0, 1.0);
         double pFadeOut = ((progress - 0.55) / 0.05).clamp(0.0, 1.0);
+        double pDrawLine = ((progress - 0.6) / 0.4).clamp(0.0, 1.0);
 
         if (pFadeOut < 1.0) {
           double opacity = 1.0;
@@ -2596,22 +2597,22 @@ class RoboMathCommand extends RoboCommand {
             baseAngle,
             targetAngle,
             degrees,
-            1.0, 
+            pMark, 
             opacity: opacity,
             translateY: translateY,
             extraRotation: extraRotation,
-            drawArc: false,
+            drawArc: true,
           );
         }
 
-        if (pMark > 0) {
+        if (pDrawLine > 0) {
           Offset pencilTargetPos = Offset(
             center.dx + pencilR * cos(-targetAngle),
             center.dy + pencilR * sin(-targetAngle),
           );
           
-          if (pFadeOut < 1.0) {
-            double pPencilMove = sin(pMark * pi / 2);
+          if (pDrawLine < 1.0) {
+            double pPencilMove = sin(pDrawLine * pi / 2);
             Offset startPencilPos = Offset(
               pencilTargetPos.dx + 50,
               pencilTargetPos.dy - 50,
@@ -2620,7 +2621,7 @@ class RoboMathCommand extends RoboCommand {
             paintRealisticPencil(canvas, currentPencilPos, -targetAngle - pi/4);
           }
           
-          if (pMark > 0.8) {
+          if (pDrawLine > 0.8) {
             final tickPaint = Paint()
               ..color = Colors.orange
               ..strokeWidth = 3.0
