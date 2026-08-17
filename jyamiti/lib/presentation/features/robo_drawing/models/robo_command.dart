@@ -2111,33 +2111,32 @@ class RoboMathCommand extends RoboCommand {
         if (p1 != null && p2 != null) {
           Offset center = Offset.lerp(p1, p2, ratio)!;
           double baseAngle = atan2(p2.dy - p1.dy, p2.dx - p1.dx);
-          double radius =
-              (p1 - p2).distance * 0.3; // Arbitrary radius for the arc
+          double radius = (p1 - p2).distance * 0.3; // Arbitrary radius for the arc
           if (radius == 0) radius = 2.0;
-
-          double sweep = degrees;
-          String anonArc = RoboTransformations.generateAnonVar(ctx, {
-            'type': 'arc',
-            'center': RoboTransformations.generateAnonVar(ctx, center),
-            'radius': radius,
-            'start': baseAngle * 180 / pi,
-            'sweep': sweep,
-          });
 
           Offset endPt = Offset(
             center.dx + radius * 1.5 * cos(baseAngle + degrees * pi / 180),
             center.dy + radius * 1.5 * sin(baseAngle + degrees * pi / 180),
           );
-          String anonLine = RoboTransformations.generateAnonVar(ctx, {
-            'type': 'line',
-            'p1': RoboTransformations.generateAnonVar(ctx, center),
-            'p2': RoboTransformations.generateAnonVar(ctx, endPt),
-          });
 
           result = {
-            'type': 'group',
-            'items': [anonArc, anonLine],
+            'type': 'drawn_angle',
+            'center': center,
+            'baseAngle': baseAngle,
+            'degrees': degrees,
+            'radius': radius,
+            'endPt': endPt,
           };
+        }
+      } else if (func == 'tick') {
+        dynamic obj = ctx.evaluateDetailed(args[0]);
+        if (obj is Map && obj['type'] == 'drawn_angle') {
+          result = {
+            'type': 'tick_mark',
+            'angle_data': obj,
+          };
+        } else if (obj is Map && obj['type'] == 'tick_mark') {
+          result = obj;
         }
       } else if (func == 'intersect') {
         dynamic obj1 = ctx.evaluateExpression(args[0]);
@@ -2363,6 +2362,59 @@ class RoboMathCommand extends RoboCommand {
             showPencil: false,
           );
         }
+      } else if (data is Map && data['type'] == 'drawn_angle') {
+        Offset pxEndPt = ctx.gridToPixel(data['endPt'].dx, data['endPt'].dy);
+
+        final paint = Paint()
+          ..color = Colors.blue
+          ..style = ctx.currentPointType == 'cross'
+              ? PaintingStyle.stroke
+              : PaintingStyle.fill
+          ..strokeWidth = 2.0;
+        
+        if (ctx.currentPointType == 'cross') {
+          canvas.drawLine(pxEndPt - const Offset(5, 5), pxEndPt + const Offset(5, 5), paint);
+          canvas.drawLine(pxEndPt - const Offset(5, -5), pxEndPt + const Offset(5, -5), paint);
+        } else {
+          canvas.drawCircle(pxEndPt, 4.0, paint);
+        }
+
+        if (assignedVar != null) {
+          TextSpan span = TextSpan(
+            style: const TextStyle(
+              color: Colors.blue,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+            text: assignedVar,
+          );
+          TextPainter tp = TextPainter(
+            text: span,
+            textAlign: TextAlign.left,
+            textDirection: TextDirection.ltr,
+          );
+          tp.layout();
+          tp.paint(canvas, pxEndPt + const Offset(5, 5));
+        }
+      } else if (data is Map && data['type'] == 'tick_mark') {
+        var angleData = data['angle_data'];
+        Offset center = ctx.gridToPixel(angleData['center'].dx, angleData['center'].dy);
+
+        double baseAngle = angleData['baseAngle'];
+        double degrees = angleData['degrees'];
+        double targetAngle = baseAngle + degrees * pi / 180.0;
+        double pencilR = 140.0;
+
+        final tickPaint = Paint()
+          ..color = Colors.orange
+          ..strokeWidth = 3.0
+          ..strokeCap = StrokeCap.round;
+        
+        canvas.drawLine(
+          Offset(center.dx + (pencilR - 8) * cos(-targetAngle), center.dy + (pencilR - 8) * sin(-targetAngle)),
+          Offset(center.dx + (pencilR + 8) * cos(-targetAngle), center.dy + (pencilR + 8) * sin(-targetAngle)),
+          tickPaint
+        );
       }
     }
   }
@@ -2422,6 +2474,163 @@ class RoboMathCommand extends RoboCommand {
               data['value'],
               pArc,
             );
+          }
+        }
+      } else if (data is Map && data['type'] == 'drawn_angle') {
+        Offset center = ctx.gridToPixel(data['center'].dx, data['center'].dy);
+        Offset endPt = ctx.gridToPixel(data['endPt'].dx, data['endPt'].dy);
+        double pxRadius = (endPt - center).distance * 0.3;
+        if (pxRadius <= 0) pxRadius = 20;
+
+        double baseAngle = data['baseAngle'];
+        double degrees = data['degrees'];
+        double targetAngle = baseAngle + degrees * pi / 180.0;
+        double sweepRad = degrees * pi / 180.0;
+
+        double pArrive = (progress / 0.15).clamp(0.0, 1.0);
+        double pMark = ((progress - 0.15) / 0.25).clamp(0.0, 1.0);
+        double pClearRot = ((progress - 0.4) / 0.15).clamp(0.0, 1.0);
+        double pFadeOut = ((progress - 0.55) / 0.05).clamp(0.0, 1.0);
+        double pDrawLine = ((progress - 0.6) / 0.4).clamp(0.0, 1.0);
+
+        if (pFadeOut < 1.0) {
+          double opacity = 1.0;
+          if (pArrive < 0.5) opacity = pArrive / 0.5;
+          if (pFadeOut > 0.0) opacity = 1.0 - pFadeOut;
+
+          double easeArrive = sin(pArrive * pi / 2);
+          double easeClear = 1.0 - cos(pClearRot * pi / 2);
+
+          double extraRotation = (1.0 - easeArrive) * (-pi / 3) + (easeClear) * (-pi / 3);
+          double translateY = -easeClear * 60.0;
+
+          paintRealisticProtractor(
+            canvas,
+            center,
+            baseAngle,
+            targetAngle,
+            degrees,
+            1.0, // Fully measure the angle visually on the protractor
+            opacity: opacity,
+            translateY: translateY,
+            extraRotation: extraRotation,
+            drawArc: false,
+          );
+        }
+
+        if (pMark > 0) {
+          Offset pxEndPt = ctx.gridToPixel(data['endPt'].dx, data['endPt'].dy);
+          
+          if (pFadeOut < 1.0) {
+            double pPencilMove = sin(pMark * pi / 2);
+            Offset startPencilPos = Offset(
+              pxEndPt.dx + 50,
+              pxEndPt.dy - 50,
+            );
+            Offset currentPencilPos = Offset.lerp(startPencilPos, pxEndPt, pPencilMove)!;
+            paintRealisticPencil(canvas, currentPencilPos, -targetAngle - pi/4);
+          }
+          
+          if (pMark > 0.8) {
+            final paint = Paint()
+              ..color = Colors.blue
+              ..style = ctx.currentPointType == 'cross'
+                  ? PaintingStyle.stroke
+                  : PaintingStyle.fill
+              ..strokeWidth = 2.0;
+            
+            if (ctx.currentPointType == 'cross') {
+              canvas.drawLine(pxEndPt - const Offset(5, 5), pxEndPt + const Offset(5, 5), paint);
+              canvas.drawLine(pxEndPt - const Offset(5, -5), pxEndPt + const Offset(5, -5), paint);
+            } else {
+              canvas.drawCircle(pxEndPt, 4.0, paint);
+            }
+
+            if (assignedVar != null) {
+              TextSpan span = TextSpan(
+                style: const TextStyle(
+                  color: Colors.blue,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+                text: assignedVar,
+              );
+              TextPainter tp = TextPainter(
+                text: span,
+                textAlign: TextAlign.left,
+                textDirection: TextDirection.ltr,
+              );
+              tp.layout();
+              tp.paint(canvas, pxEndPt + const Offset(5, 5));
+            }
+          }
+        }
+      } else if (data is Map && data['type'] == 'tick_mark') {
+        var angleData = data['angle_data'];
+        Offset center = ctx.gridToPixel(angleData['center'].dx, angleData['center'].dy);
+
+        double baseAngle = angleData['baseAngle'];
+        double degrees = angleData['degrees'];
+        double targetAngle = baseAngle + degrees * pi / 180.0;
+        double pencilR = 140.0;
+
+        double pArrive = (progress / 0.15).clamp(0.0, 1.0);
+        double pMark = ((progress - 0.15) / 0.25).clamp(0.0, 1.0);
+        double pClearRot = ((progress - 0.4) / 0.15).clamp(0.0, 1.0);
+        double pFadeOut = ((progress - 0.55) / 0.05).clamp(0.0, 1.0);
+
+        if (pFadeOut < 1.0) {
+          double opacity = 1.0;
+          if (pArrive < 0.5) opacity = pArrive / 0.5;
+          if (pFadeOut > 0.0) opacity = 1.0 - pFadeOut;
+
+          double easeArrive = sin(pArrive * pi / 2);
+          double easeClear = 1.0 - cos(pClearRot * pi / 2);
+
+          double extraRotation = (1.0 - easeArrive) * (-pi / 3) + (easeClear) * (-pi / 3);
+          double translateY = -easeClear * 60.0;
+
+          paintRealisticProtractor(
+            canvas,
+            center,
+            baseAngle,
+            targetAngle,
+            degrees,
+            1.0, 
+            opacity: opacity,
+            translateY: translateY,
+            extraRotation: extraRotation,
+            drawArc: false,
+          );
+        }
+
+        if (pMark > 0) {
+          Offset pencilTargetPos = Offset(
+            center.dx + pencilR * cos(-targetAngle),
+            center.dy + pencilR * sin(-targetAngle),
+          );
+          
+          if (pFadeOut < 1.0) {
+            double pPencilMove = sin(pMark * pi / 2);
+            Offset startPencilPos = Offset(
+              pencilTargetPos.dx + 50,
+              pencilTargetPos.dy - 50,
+            );
+            Offset currentPencilPos = Offset.lerp(startPencilPos, pencilTargetPos, pPencilMove)!;
+            paintRealisticPencil(canvas, currentPencilPos, -targetAngle - pi/4);
+          }
+          
+          if (pMark > 0.8) {
+            final tickPaint = Paint()
+              ..color = Colors.orange
+              ..strokeWidth = 3.0
+              ..strokeCap = StrokeCap.round;
+            canvas.drawLine(
+              Offset(center.dx + (pencilR - 8) * cos(-targetAngle), center.dy + (pencilR - 8) * sin(-targetAngle)),
+              Offset(center.dx + (pencilR + 8) * cos(-targetAngle), center.dy + (pencilR + 8) * sin(-targetAngle)),
+              tickPaint
+            );
+
           }
         }
       }

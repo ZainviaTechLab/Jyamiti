@@ -6,6 +6,21 @@ class RoboPresets {
   static List<RoboDrawingData> loadPresets() {
     return [
       RoboDrawingData(
+        name: "Draw an angle",
+        commands: [
+          "text('Constructing a Right Angle')",
+          "A=point(4,4)",
+          "B=point(10,4)",
+          "C=line(A,B)",
+          "text('Mark 50 degrees using the protractor')",
+          "D=angle(A,B,50)",
+          "text('Draw the perpendicular line')",
+          "E=line(A,D)",
+          "text('Measure the angle between the two lines')",
+          "findangle(C,E)",
+        ],
+      ),
+      RoboDrawingData(
         name: "Bisection of an Angle",
         commands: [
           "text('Construct a line which bisects an angle')",

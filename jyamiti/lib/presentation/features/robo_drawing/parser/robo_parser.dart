@@ -156,6 +156,7 @@ class RoboParser {
         case 'parallel':
         case 'angle':
         case 'intersect':
+        case 'tick':
           if (args.isNotEmpty) {
             return RoboMathCommand(line, assignedVar, cmdName, args);
           }

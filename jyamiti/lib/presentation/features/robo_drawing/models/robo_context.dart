@@ -148,6 +148,12 @@ class RoboContext {
       if (data is Map && (data['type'] == 'measured_angle' || data['type'] == 'measured_distance')) {
         return data['value'];
       }
+      if (data is Map && data['type'] == 'drawn_angle') {
+        return data['endPt'];
+      }
+      if (data is Map && data['type'] == 'tick_mark') {
+        return data['angle_data']['endPt'];
+      }
       return data;
     }
 
