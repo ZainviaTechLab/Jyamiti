@@ -1131,6 +1131,13 @@ class _TutorDashboardState extends State<TutorDashboard> {
               });
             },
           ),
+          const SizedBox(width: 16),
+          JyamitiPadFab(
+            heroTag: 'whiteboard_fab',
+            enableSaveNotes: true,
+            label: 'Whiteboard',
+            icon: Icons.draw_rounded,
+          ),
         ],
       ),
       appBar: isLargeScreen
@@ -1655,6 +1662,7 @@ class _TutorDashboardState extends State<TutorDashboard> {
       final pointsList = (l['points'] as List).map((p) {
         return StrokePoint(
           Offset((p['dx'] as num).toDouble(), (p['dy'] as num).toDouble()),
+          (p['pr'] as num?)?.toDouble(),
         );
       }).toList();
       return DrawnLine(
@@ -1663,6 +1671,7 @@ class _TutorDashboardState extends State<TutorDashboard> {
         strokeWidth: (l['strokeWidth'] as num).toDouble(),
         isEraser: l['isEraser'] ?? false,
         isShape: l['isShape'] ?? false,
+        isPencil: l['isPencil'] ?? false,
       );
     }).toList();
 
