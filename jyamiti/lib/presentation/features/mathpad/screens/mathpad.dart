@@ -8529,6 +8529,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                                     _eraserCursorPos,
                                                 eraserCursorRadius:
                                                     _eraserWidth * 1.75,
+                                                isRecording:
+                                                    _recordingState == MathPadRecordingState.recording,
                                               ),
                                         ),
                                       );
@@ -11331,6 +11333,7 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
   final double selectionGlowPhase;
   final Offset? eraserCursorPos;
   final double eraserCursorRadius;
+  final bool isRecording;
 
   _MathsPadActiveOverlayPainter({
     required this.currentLine,
@@ -11348,6 +11351,7 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
     this.selectionGlowPhase = 0.0,
     this.eraserCursorPos,
     this.eraserCursorRadius = 20.0,
+    this.isRecording = false,
   });
 
   /// Mirrors `_MathsPadWidgetState._selectedImageRotation` -- when exactly
@@ -11482,7 +11486,8 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
 
         // Draw a distinct pen tip at the very end of the stroke so viewers of
         // the recorded video can clearly see the exact drawing position.
-        if (!line.isEraser) {
+        // Only shown during recording -- not on the live drawing screen.
+        if (!line.isEraser && isRecording) {
           final Offset tipPos = line.points.last.offset;
 
           // Draw a small contrasting halo/shadow to make the tip pop against any line color
