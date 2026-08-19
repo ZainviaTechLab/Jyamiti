@@ -281,7 +281,24 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
 
   Future<void> _addPage() async {
     await _saveCurrentLive(captureThumbnail: true);
+
+    // Carry the current page's theme forward onto the new page instead of
+    // always resetting to the light-theme default -- reading from the live
+    // editor state (freshest source, same as `_saveCurrentLive` itself just
+    // used), falling back to the last-loaded snapshot if the editor hasn't
+    // registered a reader yet.
+    final MathPadTheme carriedTheme =
+        _liveReader?.call().themeMode ?? _snapshot?.themeMode ?? MathPadTheme.light;
+
     final newRef = MathPadPageRef.create('Page ${_pages.length + 1}');
+    // Pre-save a blank page carrying that theme, so `_loadPage` below finds
+    // an actual file on disk instead of falling through to
+    // `MathPadPageSnapshot.empty()`'s hardcoded light-theme default.
+    await widget.storage.savePage(
+      widget.batchId,
+      newRef.id,
+      MathPadPageSnapshot.empty(themeMode: carriedTheme),
+    );
     setState(() => _pages.add(newRef));
     await widget.onPagesChanged();
     await _loadPage(_pages.length - 1);

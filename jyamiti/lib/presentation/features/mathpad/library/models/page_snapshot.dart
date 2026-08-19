@@ -27,13 +27,21 @@ class MathPadPageSnapshot {
     required this.themeMode,
   });
 
-  factory MathPadPageSnapshot.empty() => MathPadPageSnapshot(
+  /// A blank page. [bgMode]/[themeMode] default to the app's own defaults,
+  /// but callers creating a new page alongside existing ones (see
+  /// `_addPage` in `mathpad_page_editor_page.dart`) should pass the
+  /// previous page's values instead, so a freshly added page continues the
+  /// tutor's current look rather than jumping back to light/grid.
+  factory MathPadPageSnapshot.empty({
+    CanvasBgMode bgMode = CanvasBgMode.grid,
+    MathPadTheme themeMode = MathPadTheme.light,
+  }) => MathPadPageSnapshot(
     lines: [],
     instruments: [],
     textLabels: [],
     fixedAngleLabels: [],
-    bgMode: CanvasBgMode.grid,
-    themeMode: MathPadTheme.light,
+    bgMode: bgMode,
+    themeMode: themeMode,
   );
 }
 
@@ -88,11 +96,19 @@ Future<Map<String, dynamic>> encodePageSnapshot(
       }
     }
     lineJsons.add({
-      'points': line.points.map((p) => _offsetToJson(p.offset)).toList(),
+      'points': line.points
+          .map(
+            (p) => {
+              ..._offsetToJson(p.offset),
+              if (p.pressure != null) 'pr': p.pressure,
+            },
+          )
+          .toList(),
       'color': line.color.toARGB32(),
       'strokeWidth': line.strokeWidth,
       'isEraser': line.isEraser,
       'isShape': line.isShape,
+      'isPencil': line.isPencil,
       'fillImageFile': fillImageFile,
       'rotation': line.rotation,
       'isPastedImage': line.isPastedImage,
@@ -258,9 +274,13 @@ Future<MathPadPageSnapshot> decodePageSnapshot(
   final List<MathsPadLine> lines = [];
   for (final raw in (json['lines'] as List? ?? [])) {
     final lineJson = raw as Map<String, dynamic>;
-    final points = (lineJson['points'] as List)
-        .map((p) => MathsPadStrokePoint(_offsetFromJson(p as Map<String, dynamic>)))
-        .toList();
+    final points = (lineJson['points'] as List).map((p) {
+      final ptJson = p as Map<String, dynamic>;
+      return MathsPadStrokePoint(
+        _offsetFromJson(ptJson),
+        (ptJson['pr'] as num?)?.toDouble(),
+      );
+    }).toList();
 
     ui.Image? fillImage;
     Rect? fillWorldBounds;
@@ -284,6 +304,7 @@ Future<MathPadPageSnapshot> decodePageSnapshot(
         strokeWidth: (lineJson['strokeWidth'] as num).toDouble(),
         isEraser: lineJson['isEraser'] as bool? ?? false,
         isShape: lineJson['isShape'] as bool? ?? false,
+        isPencil: lineJson['isPencil'] as bool? ?? false,
         fillImage: fillImage,
         fillWorldBounds: fillWorldBounds,
         rotation: (lineJson['rotation'] as num?)?.toDouble() ?? 0,

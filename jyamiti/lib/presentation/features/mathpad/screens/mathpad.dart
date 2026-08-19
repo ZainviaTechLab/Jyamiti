@@ -17,6 +17,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:math_keyboard/math_keyboard.dart';
+import 'package:perfect_freehand/perfect_freehand.dart';
+import '../../../../services/stylus_prediction_service.dart';
 
 import '../../../../providers/theme_provider.dart';
 import '../instruments/instrument_models.dart';
@@ -68,7 +70,13 @@ typedef MathsPadLiveStateReader =
 
 class MathsPadStrokePoint {
   Offset offset;
-  MathsPadStrokePoint(this.offset);
+  // Normalized (0..1) hardware stylus pressure at this point, or null when
+  // the input device (mouse/touch/trackpad, or resampling like the Eraser's
+  // stroke-cut) doesn't carry real pressure -- the Pencil tool then
+  // simulates pressure from stroke velocity instead. Unrelated to
+  // `_currentPointerPressure`'s pen-only fixed-width-multiplier use.
+  final double? pressure;
+  MathsPadStrokePoint(this.offset, [this.pressure]);
 }
 
 class MathsPadLine {
@@ -82,6 +90,11 @@ class MathsPadLine {
   final bool isMagic;
   final bool isEraser;
   final bool isShape;
+  // True for strokes drawn with the Pencil tool (perfect_freehand
+  // pressure-sensitive filled outline) as opposed to the classic
+  // constant-width Pen -- a completely separate rendering path, see
+  // `_buildPencilOutlinePath`/`_paintInkLine`.
+  final bool isPencil;
 
   // A Fill Tool result: a rasterized flood-fill of some enclosed region,
   // rendered as an image instead of a stroked path. When set, `points` holds
@@ -136,6 +149,7 @@ class MathsPadLine {
     this.isMagic = false,
     this.isEraser = false,
     this.isShape = false,
+    this.isPencil = false,
     this.fillImage,
     this.fillWorldBounds,
     this.rotation = 0,
@@ -212,6 +226,7 @@ class MathsPadTextLabel {
 
 enum CanvasToolMode {
   pen,
+  pencil,
   straightLine,
   angle,
   polygonAngle,
@@ -718,6 +733,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             ? SystemMouseCursors.grabbing
             : SystemMouseCursors.grab;
       case CanvasToolMode.pen:
+        // Standard OS arrow instead of the crosshair -- same as the Pencil
+        // tool (which already falls through to `SystemMouseCursors.basic`
+        // via the `default` case below).
+        return SystemMouseCursors.basic;
       case CanvasToolMode.straightLine:
       case CanvasToolMode.angle:
       case CanvasToolMode.polygonAngle:
@@ -733,6 +752,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       case CanvasToolMode.equation:
         return SystemMouseCursors.text;
       case CanvasToolMode.tapSelect:
+        // Standard OS "clickable" pointing-hand cursor -- matches the
+        // tap-to-select interaction better than the plain arrow.
+        return SystemMouseCursors.click;
       case CanvasToolMode.lasso:
       default:
         return SystemMouseCursors.basic;
@@ -1176,6 +1198,66 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // pressure-sensitive stylus.
   double _currentPointerPressure = 1.0;
 
+  // Dedicated to the Pencil tool -- deliberately separate from
+  // `_currentPointerPressure` above (the Pen's own fixed-per-stroke-width
+  // mechanism). Normalized (0..1) via pressureMin/pressureMax and only
+  // trusted from an actual stylus/inverted-stylus; null for mouse/touch/
+  // trackpad, so the Pencil tool falls back to perfect_freehand's
+  // velocity-based simulated pressure instead.
+  double? _lastPencilStylusPressure;
+
+  // Android-only Pen tool latency reduction (see `StylusPredictionService`
+  // and `MainActivity.kt`'s `dispatchTouchEvent`) -- true exactly when the
+  // last point in `_currentLine.points` is a speculative predicted point
+  // rather than a real touch sample. Always stripped before a real point,
+  // a tool/stroke change, or a commit ever sees it -- it must never reach
+  // `_lines`, undo history, baking, or a save. Deliberately scoped to the
+  // classic Pen only; Pencil, Eraser, and every other tool are untouched.
+  bool _predictedTailPresent = false;
+
+  void _onStylusPredictedDelta() {
+    final Offset? delta = StylusPredictionService.instance.predictedDelta.value;
+    if (delta == null ||
+        _currentLine == null ||
+        _currentLine!.isEraser ||
+        _currentLine!.isPencil ||
+        _toolMode != CanvasToolMode.pen ||
+        _lastPointerWorldPos == null) {
+      return;
+    }
+    // Defensive sanity clamp -- discard an implausibly large jump rather
+    // than let a stale prediction (e.g. right after a 2-finger pan
+    // releases back to single-pointer drawing, the native predictor's
+    // internal history is momentarily stale) fling the speculative tail
+    // far from the real stroke.
+    if (delta.distance > 40.0) return;
+
+    final Offset predictedWorldPos =
+        _lastPointerWorldPos! +
+        (widget.isTransparentBg ? delta : delta / _scale);
+
+    if (_predictedTailPresent && _currentLine!.points.isNotEmpty) {
+      _currentLine!.points.removeLast();
+    }
+    _currentLine!.points.add(MathsPadStrokePoint(predictedWorldPos));
+    _predictedTailPresent = true;
+    _activeDrawingNotifier.value++;
+  }
+
+  void _capturePencilStylusPressure(PointerEvent event) {
+    final bool isStylus =
+        event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
+    if (isStylus && event.pressureMax > event.pressureMin) {
+      _lastPencilStylusPressure =
+          ((event.pressure - event.pressureMin) /
+                  (event.pressureMax - event.pressureMin))
+              .clamp(0.0, 1.0);
+    } else {
+      _lastPencilStylusPressure = null;
+    }
+  }
+
   // ─── Pen Tool: auto-shape on hold ───────────────────────────────────────
   // While freehand drawing (ink only, not the eraser), pausing mid-stroke
   // for a beat snaps the stroke-so-far to a clean shape IF it already
@@ -1575,6 +1657,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   bool _isMagicPenMode = false;
   Color _selectedColor = const Color(0xFF6366F1);
   double _penWidth = 3.0;
+  double _pencilWidth = 6.0;
   double _eraserWidth = 14.0;
   double _selectedWidth = 3.0;
   CanvasBgMode _bgMode = CanvasBgMode.grid;
@@ -1587,7 +1670,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     Color(0xFF10B981), // Green
     Color(0xFFF59E0B), // Amber
     Color(0xFF3B82F6), // Blue
-    Color(0xFFEF4444), // Red
+    Color(0xFFE71225), // Red
     Colors.white,
     Colors.black,
   ];
@@ -1793,10 +1876,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       ),
     );
     widget.onThumbnailCaptureReady?.call(_captureThumbnail);
+
+    StylusPredictionService.instance.ensureInitialized();
+    StylusPredictionService.instance.predictedDelta.addListener(
+      _onStylusPredictedDelta,
+    );
   }
 
   @override
   void dispose() {
+    StylusPredictionService.instance.predictedDelta.removeListener(
+      _onStylusPredictedDelta,
+    );
     _circleHoldTimer?.cancel();
     _longPressPasteTimer?.cancel();
     _rightToolbarHoverTimer?.cancel();
@@ -4825,6 +4916,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _activePointers[event.pointer] = event.localPosition;
     _lastCentroid = _calculateCentroid();
     _currentPointerPressure = event.pressure;
+    _capturePencilStylusPressure(event);
 
     // Double-tap-to-select-image tracking -- compare THIS down against
     // the PREVIOUS one (recorded last time) before overwriting it, so
@@ -4877,6 +4969,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void _onPointerMove(PointerMoveEvent event) {
     _updatePointerPos(event.localPosition);
     _currentPointerPressure = event.pressure;
+    _capturePencilStylusPressure(event);
 
     if (_longPressPasteTimer != null && _longPressPasteDownScreenPos != null) {
       const double moveTolerance = 10.0;
@@ -5395,21 +5488,29 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         // for anyone without a pressure-sensitive pen.
         final double pressureMultiplier = (0.5 + _currentPointerPressure * 0.5)
             .clamp(0.4, 1.6);
+        // Pencil is a completely separate tool from Pen -- it never uses
+        // Pen's fixed-per-stroke `pressureMultiplier` (perfect_freehand
+        // does its own continuous pressure tapering instead) and never
+        // triggers Magic Pen mode.
+        final bool isPencilStroke =
+            !isEraserStroke && _toolMode == CanvasToolMode.pencil;
         final double activeWidth = isEraserStroke
             ? _eraserWidth
-            : _penWidth * pressureMultiplier;
+            : (isPencilStroke ? _pencilWidth : _penWidth * pressureMultiplier);
 
         final newLine = MathsPadLine(
-          points: [MathsPadStrokePoint(worldPos)],
+          points: [MathsPadStrokePoint(worldPos, _lastPencilStylusPressure)],
           color: _selectedColor,
           strokeWidth: activeWidth,
           isEraser: isEraserStroke,
+          isPencil: isPencilStroke,
           isMagic:
               !isEraserStroke &&
               _toolMode == CanvasToolMode.pen &&
               _isMagicPenMode,
         );
         _currentLine = newLine;
+        _predictedTailPresent = false;
         _resetPenAutoShape();
 
         _selectedLines.clear();
@@ -5658,6 +5759,14 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       // 1-finger freehand drawing stroke update
       final worldPos = _screenToWorld(details.localFocalPoint);
 
+      // Any speculative predicted tail point (see `_onStylusPredictedDelta`)
+      // must never influence auto-shape snapping or get compounded with a
+      // real point -- always strip it first, before anything else below.
+      if (_predictedTailPresent && _currentLine!.points.isNotEmpty) {
+        _currentLine!.points.removeLast();
+        _predictedTailPresent = false;
+      }
+
       if (_penAutoCircled && _penAutoCircleCenter != null) {
         // Already snapped to a circle by the hold -- keep resizing its
         // radius to follow the pointer's distance from the center,
@@ -5684,9 +5793,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         return;
       }
 
+      final double minDist = _currentLine!.isPencil ? 2.0 : 1.2;
       if (_currentLine!.points.isEmpty ||
-          (worldPos - _currentLine!.points.last.offset).distance >= 1.2) {
-        _currentLine!.points.add(MathsPadStrokePoint(worldPos));
+          (worldPos - _currentLine!.points.last.offset).distance >= minDist) {
+        _currentLine!.points.add(
+          MathsPadStrokePoint(worldPos, _lastPencilStylusPressure),
+        );
         if (_currentLine!.isEraser) {
           // NOT `_finishedStrokesNotifier.value++` here -- the eraser
           // stroke only gets merged into `_lines` at gesture-end (see
@@ -5709,19 +5821,23 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         // Fold the stroke-so-far into Layer 2a's cached snapshot once
         // enough new points have accumulated -- see `_kLiveBakeEvery`'s
         // doc comment (fixes "writing a long line/sentence gets
-        // progressively slower the longer it runs").
-        if (_currentLine!.points.length - _currentLine!.liveBakedPointCount >=
-            _kLiveBakeEvery) {
+        // progressively slower the longer it runs"). Pencil strokes are
+        // deliberately never baked here -- their perfect_freehand outline
+        // is recomputed fresh every frame by the Active Overlay layer
+        // instead (see `_MathsPadActiveOverlayPainter.paint`), so
+        // `liveBakedPointCount` staying 0 for the whole stroke is what
+        // keeps Layer 2a a no-op for them.
+        if (!_currentLine!.isPencil &&
+            _currentLine!.points.length - _currentLine!.liveBakedPointCount >=
+                _kLiveBakeEvery) {
           _currentLine!.liveBakedPointCount = _currentLine!.points.length;
         }
         _activeDrawingNotifier.value++;
       }
 
-      // Hold-to-straighten: ink only, and only restart the timer once the
-      // pointer has actually moved away from wherever it's currently
-      // anchored -- same hold-to-arm pattern the Circle/Arc, Compass, and
-      // Square tools already use.
-      if (!_currentLine!.isEraser) {
+      // Hold-to-straighten: Pen ink only -- never the Pencil tool, which
+      // stays pure freehand with no auto-shape snapping.
+      if (!_currentLine!.isEraser && !_currentLine!.isPencil) {
         const double holdTolerance = 6.0;
         if (_penHoldAnchor == null ||
             (worldPos - _penHoldAnchor!).distance > holdTolerance) {
@@ -5969,6 +6085,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   strokeWidth: line.strokeWidth,
                   isMagic: line.isMagic,
                   isShape: line.isShape,
+                  isPencil: line.isPencil,
                   groupId: line.groupId,
                   isPastedImage: line.isPastedImage,
                 );
@@ -5998,6 +6115,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _finishedStrokesNotifier.value++;
         _activeDrawingNotifier.value++;
       } else {
+        // A speculative predicted tail point must never become part of the
+        // permanently committed stroke -- see `_onStylusPredictedDelta`.
+        if (_predictedTailPresent && _currentLine!.points.isNotEmpty) {
+          _currentLine!.points.removeLast();
+          _predictedTailPresent = false;
+        }
         _currentLine!.invalidateCache();
         _buildAndCachePath(_currentLine!);
         _lines.add(_currentLine!);
@@ -6081,12 +6204,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _clipboard = _selectedLines.map((line) {
         return MathsPadLine(
           points: line.points
-              .map((p) => MathsPadStrokePoint(p.offset))
+              .map((p) => MathsPadStrokePoint(p.offset, p.pressure))
               .toList(),
           color: line.color,
           strokeWidth: line.strokeWidth,
           isEraser: line.isEraser,
           isShape: line.isShape,
+          isPencil: line.isPencil,
           fillImage: line.fillImage,
           fillWorldBounds: line.fillWorldBounds,
           rotation: line.rotation,
@@ -6151,12 +6275,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       final newLine = MathsPadLine(
         points: line.points
-            .map((p) => MathsPadStrokePoint(p.offset + translation))
+            .map(
+              (p) => MathsPadStrokePoint(p.offset + translation, p.pressure),
+            )
             .toList(),
         color: line.color,
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
         isShape: line.isShape,
+        isPencil: line.isPencil,
         fillImage: line.fillImage,
         fillWorldBounds: line.fillWorldBounds?.shift(translation),
         rotation: line.rotation,
@@ -6375,7 +6502,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
       final newPoints = line.points
           .map<MathsPadStrokePoint>(
-            (p) => MathsPadStrokePoint(p.offset + copyOffset),
+            (p) => MathsPadStrokePoint(p.offset + copyOffset, p.pressure),
           )
           .toList();
       final newLine = MathsPadLine(
@@ -6384,6 +6511,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
         isShape: line.isShape,
+        isPencil: line.isPencil,
         fillImage: line.fillImage,
         fillWorldBounds: line.fillWorldBounds?.shift(copyOffset),
         rotation: line.rotation,
@@ -9172,7 +9300,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                       ? Icons.gesture_rounded
                                       : (_toolMode == CanvasToolMode.pan
                                             ? Icons.back_hand_rounded
-                                            : Icons.edit_rounded))),
+                                            : (_toolMode ==
+                                                      CanvasToolMode.pencil
+                                                  ? Icons.draw_rounded
+                                                  : Icons.edit_rounded)))),
                       size: 14,
                       color: _textColor70,
                     ),
@@ -9192,7 +9323,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                         ? 'Tap any line to select & move/duplicate'
                                         : (_toolMode == CanvasToolMode.lasso
                                               ? 'Draw loop around items to select & move/duplicate'
-                                              : 'Infinite Canvas')),
+                                              : (_toolMode ==
+                                                        CanvasToolMode.pencil
+                                                    ? 'Pencil • Pressure-Sensitive'
+                                                    : 'Infinite Canvas'))),
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
@@ -9449,7 +9583,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         animated(
                           _buildIconButton(
                             icon: Icons.edit_rounded,
-                            tooltip: 'Pen Mode',
+                            tooltip: 'Pen Mode (Constant Width)',
                             isSelected:
                                 _toolMode == CanvasToolMode.pen &&
                                 _activeShapeTool == null,
@@ -9457,6 +9591,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               _toolMode = CanvasToolMode.pen;
                               _activeShapeTool = null;
                               _selectedWidth = _penWidth;
+                              _selectedLines.clear();
+                            }),
+                          ),
+                        ),
+                        animated(
+                          _buildIconButton(
+                            icon: Icons.draw_rounded,
+                            tooltip: 'Pencil Mode (Pressure-Sensitive)',
+                            isSelected:
+                                _toolMode == CanvasToolMode.pencil &&
+                                _activeShapeTool == null,
+                            onTap: () => setState(() {
+                              _toolMode = CanvasToolMode.pencil;
+                              _activeShapeTool = null;
+                              _selectedWidth = _pencilWidth;
                               _selectedLines.clear();
                             }),
                           ),
@@ -9778,7 +9927,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                   Row(
                     children: _palette.map((color) {
                       final isSelected =
-                          _toolMode == CanvasToolMode.pen &&
+                          (_toolMode == CanvasToolMode.pen ||
+                              _toolMode == CanvasToolMode.pencil) &&
                           _activeShapeTool == null &&
                           _selectedColor.value == color.value;
                       return GestureDetector(
@@ -9804,9 +9954,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           }
                           setState(() {
                             _selectedColor = color;
-                            _toolMode = CanvasToolMode.pen;
+                            // Preserve Pencil mode if already active;
+                            // otherwise default back to the classic Pen.
+                            if (_toolMode != CanvasToolMode.pencil) {
+                              _toolMode = CanvasToolMode.pen;
+                            }
                             _activeShapeTool = null;
-                            _selectedWidth = _penWidth;
+                            _selectedWidth = _toolMode == CanvasToolMode.pencil
+                                ? _pencilWidth
+                                : _penWidth;
                             _isMagicPenMode = false;
                           });
                         },
@@ -9863,6 +10019,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       _selectedWidth = w;
                       if (_toolMode == CanvasToolMode.eraser) {
                         _eraserWidth = w;
+                      } else if (_toolMode == CanvasToolMode.pencil) {
+                        _pencilWidth = w;
                       } else {
                         _penWidth = w;
                       }
@@ -10721,12 +10879,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   Map<String, dynamic> _lineToJson(MathsPadLine line) {
     return {
       'points': line.points
-          .map((p) => {'dx': p.offset.dx, 'dy': p.offset.dy})
+          .map(
+            (p) => {
+              'dx': p.offset.dx,
+              'dy': p.offset.dy,
+              if (p.pressure != null) 'pr': p.pressure,
+            },
+          )
           .toList(),
       'color': line.color.value,
       'strokeWidth': line.strokeWidth,
       'isEraser': line.isEraser,
       'isShape': line.isShape,
+      'isPencil': line.isPencil,
     };
   }
 }
@@ -10856,6 +11021,63 @@ List<Offset> _chaikinSmooth(List<Offset> pts, {int iterations = 3}) {
   return current;
 }
 
+// Builds a pressure-sensitive stroke outline for the Pencil tool using
+// perfect_freehand, returning a closed fillable polygon path -- completely
+// separate from the Chaikin/quadratic-bezier centerline path Pen strokes
+// use above. Uses each point's real stylus pressure when available;
+// otherwise simulates pressure from stroke velocity (perfect_freehand's
+// signature tapered look), matching the Pencil tool on the whiteboard
+// (`writing_pad_widget.dart`'s `_buildPencilOutlinePath`).
+Path _buildPencilOutlinePath(MathsPadLine line, {bool isComplete = true}) {
+  final path = Path();
+  if (line.points.isEmpty) return path;
+
+  final bool hasRealPressure = line.points.any((p) => p.pressure != null);
+  final List<PointVector> inputPoints = line.points
+      .map((p) => PointVector(p.offset.dx, p.offset.dy, p.pressure))
+      .toList();
+
+  final List<Offset> outline = getStroke(
+    inputPoints,
+    options: StrokeOptions(
+      size: line.strokeWidth,
+      thinning: 0.5,
+      smoothing: 0.7,
+      streamline: 0.65,
+      simulatePressure: !hasRealPressure,
+      isComplete: isComplete,
+    ),
+  );
+
+  if (outline.isEmpty) return path;
+  if (outline.length < 3) {
+    path.moveTo(outline[0].dx, outline[0].dy);
+    for (int i = 1; i < outline.length; i++) {
+      path.lineTo(outline[i].dx, outline[i].dy);
+    }
+    path.close();
+    return path;
+  }
+
+  // Smooth the outline polygon with quadratic Bézier curves so curves and
+  // corners render as polished arcs instead of jagged straight segments.
+  path.moveTo(outline[0].dx, outline[0].dy);
+  for (int i = 1; i < outline.length - 1; i++) {
+    final midX = (outline[i].dx + outline[i + 1].dx) / 2;
+    final midY = (outline[i].dy + outline[i + 1].dy) / 2;
+    path.quadraticBezierTo(outline[i].dx, outline[i].dy, midX, midY);
+  }
+  // Final segment back to the closing point
+  path.quadraticBezierTo(
+    outline[outline.length - 2].dx,
+    outline[outline.length - 2].dy,
+    outline.last.dx,
+    outline.last.dy,
+  );
+  path.close();
+  return path;
+}
+
 void _buildAndCachePath(MathsPadLine line) {
   if (line.fillImage != null) {
     // Fill Tool result -- rendered as an image (see _drawStrokes), not a
@@ -10881,7 +11103,9 @@ void _buildAndCachePath(MathsPadLine line) {
     return;
   }
 
-  if (line.isShape || line.points.length <= 2) {
+  if (line.isPencil) {
+    line.cachedPath = _buildPencilOutlinePath(line, isComplete: true);
+  } else if (line.isShape || line.points.length <= 2) {
     final path = Path();
     path.moveTo(line.points[0].offset.dx, line.points[0].offset.dy);
     for (int i = 1; i < line.points.length; i++) {
@@ -11213,6 +11437,11 @@ void _paintInkLine(Canvas canvas, MathsPadLine line) {
   } else {
     paint.shader = null;
     paint.color = line.color;
+    if (line.isPencil) {
+      // Pencil strokes are a filled perfect_freehand outline polygon, not
+      // a stroked centerline -- fill it instead.
+      paint.style = PaintingStyle.fill;
+    }
   }
   paint.strokeWidth = line.strokeWidth;
 
@@ -11224,7 +11453,7 @@ void _paintInkLine(Canvas canvas, MathsPadLine line) {
       _buildAndCachePath(line);
     }
 
-    if (!line.isEraser) {
+    if (!line.isEraser && !line.isPencil) {
       final softUnderPaint = Paint()
         ..isAntiAlias = true
         ..strokeCap = StrokeCap.round
@@ -11412,76 +11641,101 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
       // 1. Draw Active Stroke Live Path
       if (currentLine != null && currentLine!.points.isNotEmpty) {
         final line = currentLine!;
-        final paint = Paint()
-          ..isAntiAlias = true
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round
-          ..style = PaintingStyle.stroke;
 
-        if (line.isEraser) {
-          // Draw the eraser path as a translucent red "highlighter" trail so the
-          // user can see exactly what they're erasing before they lift their finger.
-          paint.color = const Color(
-            0xFFF43F5E,
-          ).withValues(alpha: 0.35); // Rose-500
-          paint.strokeWidth = line.strokeWidth * 3.5;
-        } else if (line.isMagic && line.points.isNotEmpty) {
-          paint.shader = const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFFFF7A00),
-              Color(0xFFFF2E9A),
-              Color(0xFF00E5FF),
-              Color(0xFF39FF14),
-              Color(0xFFFF7A00),
-            ],
-            tileMode: TileMode.repeated,
-          ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
-        } else {
-          paint.shader = null;
-          paint.color = line.color;
-        }
-
-        if (!line.isEraser) {
-          paint.strokeWidth = line.strokeWidth;
-        }
-
-        if (line.points.length == 1) {
-          paint.style = PaintingStyle.fill;
-          canvas.drawCircle(
-            line.points.first.offset,
-            paint.strokeWidth / 2,
-            paint,
-          );
-        } else {
-          // Only draw what Layer 2a's cached "stroke-so-far" snapshot
-          // doesn't already cover -- a few points of overlap for
-          // smoothing continuity at the seam -- instead of the whole
-          // line every frame. See `_kLiveBakeEvery`'s doc comment. When
-          // nothing's baked yet (a short stroke, or the first
-          // `_kLiveBakeEvery` points of a new one) this is just the
-          // whole line, same as before this layer existed.
-          final int bakedCount = line.liveBakedPointCount;
-          final int tailStart = bakedCount <= 0
-              ? 0
-              : (bakedCount - 3).clamp(0, line.points.length - 1);
-          final Path livePath = _buildLivePathRange(
-            line,
-            tailStart,
-            line.points.length,
-          );
-          if (!line.isEraser) {
-            final softUnderPaint = Paint()
-              ..isAntiAlias = true
-              ..strokeCap = StrokeCap.round
-              ..strokeJoin = StrokeJoin.round
-              ..style = PaintingStyle.stroke
-              ..color = line.color.withValues(alpha: 0.12)
-              ..strokeWidth = line.strokeWidth * 1.35;
-            canvas.drawPath(livePath, softUnderPaint);
+        if (line.isPencil) {
+          // Pencil: pressure-sensitive perfect_freehand fill, recomputed
+          // fresh every frame (never baked, see `_onScaleUpdate`) --
+          // completely separate from the Pen/Eraser/Magic Pen stroke path
+          // in the `else` branch below, which stays untouched.
+          final fillPaint = Paint()
+            ..isAntiAlias = true
+            ..style = PaintingStyle.fill
+            ..color = line.color;
+          if (line.points.length == 1) {
+            canvas.drawCircle(
+              line.points.first.offset,
+              line.strokeWidth / 2,
+              fillPaint,
+            );
+          } else {
+            final Path livePath = _buildPencilOutlinePath(
+              line,
+              isComplete: false,
+            );
+            canvas.drawPath(livePath, fillPaint);
           }
-          canvas.drawPath(livePath, paint);
+        } else {
+          final paint = Paint()
+            ..isAntiAlias = true
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..style = PaintingStyle.stroke;
+
+          if (line.isEraser) {
+            // Draw the eraser path as a translucent red "highlighter" trail so the
+            // user can see exactly what they're erasing before they lift their finger.
+            paint.color = const Color(
+              0xFFF43F5E,
+            ).withValues(alpha: 0.35); // Rose-500
+            paint.strokeWidth = line.strokeWidth * 3.5;
+          } else if (line.isMagic && line.points.isNotEmpty) {
+            paint.shader = const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFFFF7A00),
+                Color(0xFFFF2E9A),
+                Color(0xFF00E5FF),
+                Color(0xFF39FF14),
+                Color(0xFFFF7A00),
+              ],
+              tileMode: TileMode.repeated,
+            ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
+          } else {
+            paint.shader = null;
+            paint.color = line.color;
+          }
+
+          if (!line.isEraser) {
+            paint.strokeWidth = line.strokeWidth;
+          }
+
+          if (line.points.length == 1) {
+            paint.style = PaintingStyle.fill;
+            canvas.drawCircle(
+              line.points.first.offset,
+              paint.strokeWidth / 2,
+              paint,
+            );
+          } else {
+            // Only draw what Layer 2a's cached "stroke-so-far" snapshot
+            // doesn't already cover -- a few points of overlap for
+            // smoothing continuity at the seam -- instead of the whole
+            // line every frame. See `_kLiveBakeEvery`'s doc comment. When
+            // nothing's baked yet (a short stroke, or the first
+            // `_kLiveBakeEvery` points of a new one) this is just the
+            // whole line, same as before this layer existed.
+            final int bakedCount = line.liveBakedPointCount;
+            final int tailStart = bakedCount <= 0
+                ? 0
+                : (bakedCount - 3).clamp(0, line.points.length - 1);
+            final Path livePath = _buildLivePathRange(
+              line,
+              tailStart,
+              line.points.length,
+            );
+            if (!line.isEraser) {
+              final softUnderPaint = Paint()
+                ..isAntiAlias = true
+                ..strokeCap = StrokeCap.round
+                ..strokeJoin = StrokeJoin.round
+                ..style = PaintingStyle.stroke
+                ..color = line.color.withValues(alpha: 0.12)
+                ..strokeWidth = line.strokeWidth * 1.35;
+              canvas.drawPath(livePath, softUnderPaint);
+            }
+            canvas.drawPath(livePath, paint);
+          }
         }
 
         // Draw a distinct pen tip at the very end of the stroke so viewers of
@@ -11692,6 +11946,14 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
   }
 
   Path _buildLivePath(MathsPadLine line) {
+    if (line.isPencil) {
+      // Defensive fallback only (a committed pencil line always has
+      // `cachedPath` set by `_buildAndCachePath` already) -- if it's ever
+      // hit, stay on the Pencil tool's own outline geometry rather than
+      // falling through to the Pen's centerline smoothing below.
+      return _buildPencilOutlinePath(line, isComplete: true);
+    }
+
     final path = Path();
     if (line.points.isEmpty) return path;
 
@@ -11862,6 +12124,39 @@ class _MathsPadActiveOverlayPainter extends CustomPainter {
       }
 
       if (line.points.length < 2) continue;
+
+      if (line.isPencil) {
+        // Pencil's `cachedPath` is already a filled outline polygon (its
+        // own true silhouette), not a zero-width centerline like Pen's --
+        // stroking a centerline-based halo/punch here would double-count
+        // the ink's own width. Instead: stroke along the polygon's own
+        // boundary to lay down a band straddling it, then clear-fill the
+        // polygon's interior to remove the inward half, leaving a ring
+        // that hugs the pencil stroke's actual silhouette.
+        final Path fillPath =
+            line.cachedPath ?? _buildPencilOutlinePath(line, isComplete: true);
+        final Rect layerBounds = bounds.inflate(strokeStandoff * 2 + 20);
+        canvas.saveLayer(layerBounds, Paint());
+        try {
+          final Paint haloPaint = Paint()
+            ..isAntiAlias = true
+            ..style = PaintingStyle.stroke
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..strokeWidth = strokeStandoff * 2
+            ..shader = neonShader;
+          canvas.drawPath(fillPath, haloPaint);
+
+          final Paint punchPaint = Paint()
+            ..style = PaintingStyle.fill
+            ..blendMode = BlendMode.clear;
+          canvas.drawPath(fillPath, punchPaint);
+        } finally {
+          canvas.restore();
+        }
+        continue;
+      }
+
       final Path centerline = line.cachedPath ?? _buildLivePath(line);
 
       // For an arbitrary freehand/shape stroke there's no simple "offset

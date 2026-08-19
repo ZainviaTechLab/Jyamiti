@@ -1131,13 +1131,6 @@ class _TutorDashboardState extends State<TutorDashboard> {
               });
             },
           ),
-          const SizedBox(width: 16),
-          JyamitiPadFab(
-            heroTag: 'whiteboard_fab',
-            enableSaveNotes: true,
-            label: 'Whiteboard',
-            icon: Icons.draw_rounded,
-          ),
         ],
       ),
       appBar: isLargeScreen

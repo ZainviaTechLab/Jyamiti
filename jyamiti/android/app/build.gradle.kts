@@ -61,3 +61,11 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Backs `MainActivity.dispatchTouchEvent`'s stylus latency-reduction
+    // bridge (see `StylusPredictionService` on the Dart side) -- Jetpack's
+    // motion prediction library, works pre- and post-Android 14 (unlike the
+    // framework-only `android.view.MotionPredictor`, API 34+).
+    implementation("androidx.input:input-motionprediction:1.0.0")
+}

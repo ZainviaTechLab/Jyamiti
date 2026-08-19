@@ -2,13 +2,18 @@ import 'dart:math';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:perfect_freehand/perfect_freehand.dart';
 import '../../providers/theme_provider.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class StrokePoint {
   Offset offset;
-  StrokePoint(this.offset);
+  // Normalized (0..1) hardware stylus pressure at this point, or null when
+  // the input device (mouse/touch/trackpad) doesn't report real pressure --
+  // in that case the Pencil tool simulates pressure from stroke velocity.
+  final double? pressure;
+  StrokePoint(this.offset, [this.pressure]);
 }
 
 class DrawnLine {
@@ -17,6 +22,9 @@ class DrawnLine {
   final double strokeWidth;
   final bool isEraser;
   final bool isShape;
+  // True for strokes drawn with the Pencil tool (perfect_freehand
+  // pressure-sensitive outline) as opposed to the classic constant-width Pen.
+  final bool isPencil;
 
   Path? cachedPath;
   Rect? cachedBounds;
@@ -27,6 +35,7 @@ class DrawnLine {
     required this.strokeWidth,
     this.isEraser = false,
     this.isShape = false,
+    this.isPencil = false,
     this.cachedPath,
     this.cachedBounds,
   });
@@ -37,7 +46,7 @@ class DrawnLine {
   }
 }
 
-enum CanvasToolMode { pen, eraser, tapSelect, lasso, pan }
+enum CanvasToolMode { pen, pencil, eraser, tapSelect, lasso, pan }
 
 enum EraserMode { area, stroke }
 
@@ -231,9 +240,16 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
   CanvasToolMode _toolMode = CanvasToolMode.pen;
   Color _selectedColor = const Color(0xFF6366F1);
   double _penWidth = 3.0;
+  double _pencilWidth = 6.0;
   double _eraserWidth = 14.0;
   double _selectedWidth = 3.0;
   CanvasBgMode _bgMode = CanvasBgMode.grid;
+
+  // Latest normalized (0..1) hardware stylus pressure, captured from raw
+  // PointerEvents. Null when the active pointer isn't a pressure-reporting
+  // stylus -- the Pencil tool then falls back to perfect_freehand's
+  // velocity-based simulated pressure.
+  double? _lastRawPressure;
 
   final List<Color> _palette = const [
     Color(0xFF6366F1), // Indigo
@@ -451,9 +467,28 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     _updatePointerPos(event.localPosition);
   }
 
+  // Reads the raw hardware pressure off a PointerEvent for the Pencil tool.
+  // Only trusts real stylus/inverted-stylus input that actually reports a
+  // pressure range -- everything else (mouse, touch, trackpad) is left null
+  // so the Pencil tool simulates pressure from velocity instead.
+  void _captureStylusPressure(PointerEvent event) {
+    final bool isStylus =
+        event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
+    if (isStylus && event.pressureMax > event.pressureMin) {
+      _lastRawPressure =
+          ((event.pressure - event.pressureMin) /
+                  (event.pressureMax - event.pressureMin))
+              .clamp(0.0, 1.0);
+    } else {
+      _lastRawPressure = null;
+    }
+  }
+
   void _onPointerDown(PointerDownEvent event) {
     _frictionController?.stop();
     _updatePointerPos(event.localPosition);
+    _captureStylusPressure(event);
     _activePointers[event.pointer] = event.localPosition;
     _lastCentroid = _calculateCentroid();
 
@@ -470,6 +505,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
 
   void _onPointerMove(PointerMoveEvent event) {
     _updatePointerPos(event.localPosition);
+    _captureStylusPressure(event);
     if (_activePointers.containsKey(event.pointer)) {
       _activePointers[event.pointer] = event.localPosition;
 
@@ -651,12 +687,17 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
       } else {
         final bool isEraserStroke =
             _toolMode == CanvasToolMode.eraser || _isStylusBarrelPressed;
-        final double activeWidth = isEraserStroke ? _eraserWidth : _penWidth;
+        final bool isPencilStroke =
+            !isEraserStroke && _toolMode == CanvasToolMode.pencil;
+        final double activeWidth = isEraserStroke
+            ? _eraserWidth
+            : (isPencilStroke ? _pencilWidth : _penWidth);
         final newLine = DrawnLine(
-          points: [StrokePoint(worldPos)],
+          points: [StrokePoint(worldPos, _lastRawPressure)],
           color: _selectedColor,
           strokeWidth: activeWidth,
           isEraser: isEraserStroke,
+          isPencil: isPencilStroke,
         );
         _currentLine = newLine;
         _undoHistory.clear();
@@ -805,9 +846,10 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     } else if (_currentLine != null) {
       // 1-finger drawing stroke update
       final worldPos = _screenToWorld(details.localFocalPoint);
+      final double minDist = _currentLine!.isPencil ? 2.0 : 1.2;
       if (_currentLine!.points.isEmpty ||
-          (worldPos - _currentLine!.points.last.offset).distance >= 1.2) {
-        _currentLine!.points.add(StrokePoint(worldPos));
+          (worldPos - _currentLine!.points.last.offset).distance >= minDist) {
+        _currentLine!.points.add(StrokePoint(worldPos, _lastRawPressure));
         if (_currentLine!.isEraser) {
           _finishedStrokesNotifier.value++;
         }
@@ -939,11 +981,14 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     setState(() {
       _clipboard = _selectedLines.map((line) {
         return DrawnLine(
-          points: line.points.map((p) => StrokePoint(p.offset)).toList(),
+          points: line.points
+              .map((p) => StrokePoint(p.offset, p.pressure))
+              .toList(),
           color: line.color,
           strokeWidth: line.strokeWidth,
           isEraser: line.isEraser,
           isShape: line.isShape,
+          isPencil: line.isPencil,
         );
       }).toList();
     });
@@ -994,12 +1039,13 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
     final List<DrawnLine> pasted = _clipboard.map((line) {
       final newLine = DrawnLine(
         points: line.points
-            .map((p) => StrokePoint(p.offset + translation))
+            .map((p) => StrokePoint(p.offset + translation, p.pressure))
             .toList(),
         color: line.color,
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
         isShape: line.isShape,
+        isPencil: line.isPencil,
       );
       _buildAndCachePath(newLine);
       return newLine;
@@ -1023,13 +1069,15 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
 
     for (final line in _selectedLines) {
       final newPoints = line.points
-          .map((p) => StrokePoint(p.offset + copyOffset))
+          .map((p) => StrokePoint(p.offset + copyOffset, p.pressure))
           .toList();
       final newLine = DrawnLine(
         points: newPoints,
         color: line.color,
         strokeWidth: line.strokeWidth,
         isEraser: line.isEraser,
+        isShape: line.isShape,
+        isPencil: line.isPencil,
       );
       _buildAndCachePath(newLine);
       duplicatedLines.add(newLine);
@@ -1991,7 +2039,13 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                                                 : (_toolMode ==
                                                           CanvasToolMode.pan
                                                       ? Icons.back_hand_rounded
-                                                      : Icons.edit_rounded))),
+                                                      : (_toolMode ==
+                                                                CanvasToolMode
+                                                                    .pencil
+                                                            ? Icons
+                                                                  .draw_rounded
+                                                            : Icons
+                                                                  .edit_rounded)))),
                                 size: 14,
                                 color: context.textColor70,
                               ),
@@ -2009,7 +2063,11 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                                               : (_toolMode ==
                                                         CanvasToolMode.lasso
                                                     ? 'Draw loop around items to select & move/duplicate'
-                                                    : 'Infinite Canvas • ${(sc * 100).round()}%')),
+                                                    : (_toolMode ==
+                                                              CanvasToolMode
+                                                                  .pencil
+                                                          ? 'Pencil • Pressure-Sensitive • ${(sc * 100).round()}%'
+                                                          : 'Infinite Canvas • ${(sc * 100).round()}%'))),
                                     style: TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w600,
@@ -2057,7 +2115,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                 children: [
                   _buildIconButton(
                     icon: Icons.edit_rounded,
-                    tooltip: 'Pen Mode',
+                    tooltip: 'Pen Mode (Constant Width)',
                     isSelected:
                         _toolMode == CanvasToolMode.pen &&
                         _activeShapeTool == null,
@@ -2065,6 +2123,19 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                       _toolMode = CanvasToolMode.pen;
                       _activeShapeTool = null;
                       _selectedWidth = _penWidth;
+                      _selectedLines.clear();
+                    }),
+                  ),
+                  _buildIconButton(
+                    icon: Icons.draw_rounded,
+                    tooltip: 'Pencil Mode (Pressure-Sensitive)',
+                    isSelected:
+                        _toolMode == CanvasToolMode.pencil &&
+                        _activeShapeTool == null,
+                    onTap: () => setState(() {
+                      _toolMode = CanvasToolMode.pencil;
+                      _activeShapeTool = null;
+                      _selectedWidth = _pencilWidth;
                       _selectedLines.clear();
                     }),
                   ),
@@ -2119,16 +2190,23 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
             Row(
               children: _palette.map((color) {
                 final isSelected =
-                    _toolMode == CanvasToolMode.pen &&
+                    (_toolMode == CanvasToolMode.pen ||
+                        _toolMode == CanvasToolMode.pencil) &&
                     _activeShapeTool == null &&
                     _selectedColor.value == color.value;
                 return GestureDetector(
                   onTap: () {
                     setState(() {
                       _selectedColor = color;
-                      _toolMode = CanvasToolMode.pen;
+                      // Preserve Pencil mode if already active; otherwise
+                      // default back to the classic Pen.
+                      if (_toolMode != CanvasToolMode.pencil) {
+                        _toolMode = CanvasToolMode.pen;
+                      }
                       _activeShapeTool = null;
-                      _selectedWidth = _penWidth;
+                      _selectedWidth = _toolMode == CanvasToolMode.pencil
+                          ? _pencilWidth
+                          : _penWidth;
                     });
                   },
                   child: Container(
@@ -2181,6 +2259,8 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                 _selectedWidth = w;
                 if (_toolMode == CanvasToolMode.eraser) {
                   _eraserWidth = w;
+                } else if (_toolMode == CanvasToolMode.pencil) {
+                  _pencilWidth = w;
                 } else {
                   _penWidth = w;
                 }
@@ -2674,12 +2754,19 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
   Map<String, dynamic> _lineToJson(DrawnLine line) {
     return {
       'points': line.points
-          .map((p) => {'dx': p.offset.dx, 'dy': p.offset.dy})
+          .map(
+            (p) => {
+              'dx': p.offset.dx,
+              'dy': p.offset.dy,
+              if (p.pressure != null) 'pr': p.pressure,
+            },
+          )
           .toList(),
       'color': line.color.value,
       'strokeWidth': line.strokeWidth,
       'isEraser': line.isEraser,
       'isShape': line.isShape,
+      'isPencil': line.isPencil,
     };
   }
 }
@@ -2728,6 +2815,60 @@ List<Offset> _chaikinSmooth(List<Offset> pts, {int iterations = 3}) {
   return current;
 }
 
+// Builds a pressure-sensitive stroke outline for the Pencil tool using
+// perfect_freehand, returning a closed fillable polygon path. Uses each
+// point's real stylus pressure when available; otherwise simulates pressure
+// from stroke velocity (perfect_freehand's signature tapered look).
+Path _buildPencilOutlinePath(DrawnLine line, {bool isComplete = true}) {
+  final path = Path();
+  if (line.points.isEmpty) return path;
+
+  final bool hasRealPressure = line.points.any((p) => p.pressure != null);
+  final List<PointVector> inputPoints = line.points
+      .map((p) => PointVector(p.offset.dx, p.offset.dy, p.pressure))
+      .toList();
+
+  final List<Offset> outline = getStroke(
+    inputPoints,
+    options: StrokeOptions(
+      size: line.strokeWidth,
+      thinning: 0.5,
+      smoothing: 0.7,
+      streamline: 0.65,
+      simulatePressure: !hasRealPressure,
+      isComplete: isComplete,
+    ),
+  );
+
+  if (outline.isEmpty) return path;
+  if (outline.length < 3) {
+    path.moveTo(outline[0].dx, outline[0].dy);
+    for (int i = 1; i < outline.length; i++) {
+      path.lineTo(outline[i].dx, outline[i].dy);
+    }
+    path.close();
+    return path;
+  }
+
+  // Smooth the outline polygon with quadratic Bézier curves so curves and
+  // corners render as polished arcs instead of jagged straight segments.
+  path.moveTo(outline[0].dx, outline[0].dy);
+  for (int i = 1; i < outline.length - 1; i++) {
+    final midX = (outline[i].dx + outline[i + 1].dx) / 2;
+    final midY = (outline[i].dy + outline[i + 1].dy) / 2;
+    path.quadraticBezierTo(outline[i].dx, outline[i].dy, midX, midY);
+  }
+  // Final segment back to the closing point
+  path.quadraticBezierTo(
+    outline[outline.length - 2].dx,
+    outline[outline.length - 2].dy,
+    outline.last.dx,
+    outline.last.dy,
+  );
+  path.close();
+  return path;
+}
+
 void _buildAndCachePath(DrawnLine line) {
   if (line.points.isEmpty) return;
 
@@ -2747,7 +2888,9 @@ void _buildAndCachePath(DrawnLine line) {
     return;
   }
 
-  if (line.isShape || line.points.length <= 2) {
+  if (line.isPencil) {
+    line.cachedPath = _buildPencilOutlinePath(line, isComplete: true);
+  } else if (line.isShape || line.points.length <= 2) {
     final path = Path();
     path.moveTo(line.points[0].offset.dx, line.points[0].offset.dy);
     for (int i = 1; i < line.points.length; i++) {
@@ -2913,6 +3056,11 @@ class _FinishedStrokesPainter extends CustomPainter {
       } else {
         paint.color = line.color;
         paint.strokeWidth = line.strokeWidth;
+        if (line.isPencil) {
+          // Pencil strokes are a filled perfect_freehand outline polygon,
+          // not a stroked centerline -- fill it instead.
+          paint.style = PaintingStyle.fill;
+        }
       }
 
       if (line.points.length == 1) {
@@ -2927,7 +3075,7 @@ class _FinishedStrokesPainter extends CustomPainter {
           _buildAndCachePath(line);
         }
 
-        if (!line.isEraser) {
+        if (!line.isEraser && !line.isPencil) {
           final softUnderPaint = Paint()
             ..isAntiAlias = true
             ..strokeCap = StrokeCap.round
@@ -3019,6 +3167,9 @@ class _ActiveDrawingOverlayPainter extends CustomPainter {
         } else {
           paint.color = line.color;
           paint.strokeWidth = line.strokeWidth;
+          if (line.isPencil) {
+            paint.style = PaintingStyle.fill;
+          }
         }
 
         if (line.points.length == 1) {
@@ -3030,7 +3181,7 @@ class _ActiveDrawingOverlayPainter extends CustomPainter {
           );
         } else {
           final Path livePath = _buildLivePath(line);
-          if (!line.isEraser) {
+          if (!line.isEraser && !line.isPencil) {
             final softUnderPaint = Paint()
               ..isAntiAlias = true
               ..strokeCap = StrokeCap.round
@@ -3117,6 +3268,13 @@ class _ActiveDrawingOverlayPainter extends CustomPainter {
   }
 
   Path _buildLivePath(DrawnLine line) {
+    if (line.isPencil) {
+      // Live perfect_freehand outline while the pencil stroke is still in
+      // progress -- isComplete:false keeps the tip trailing naturally
+      // instead of snapping to a hard end-cap mid-stroke.
+      return _buildPencilOutlinePath(line, isComplete: false);
+    }
+
     final path = Path();
     if (line.points.isEmpty) return path;
 
@@ -3278,12 +3436,16 @@ class JyamitiPadFab extends StatelessWidget {
   final VoidCallback? onPressed;
   final String heroTag;
   final bool enableSaveNotes;
+  final String label;
+  final IconData icon;
 
   const JyamitiPadFab({
     super.key,
     this.onPressed,
     this.heroTag = 'jyamiti_pad_fab',
     this.enableSaveNotes = false,
+    this.label = 'JyamitiPad',
+    this.icon = Icons.gesture_rounded,
   });
 
   @override
@@ -3298,10 +3460,10 @@ class JyamitiPadFab extends StatelessWidget {
           ),
       backgroundColor: const Color(0xFF10B981),
       elevation: 8,
-      icon: const Icon(Icons.gesture_rounded, color: Colors.white, size: 22),
-      label: const Text(
-        'JyamitiPad',
-        style: TextStyle(
+      icon: Icon(icon, color: Colors.white, size: 22),
+      label: Text(
+        label,
+        style: const TextStyle(
           color: Colors.white,
           fontWeight: FontWeight.bold,
           letterSpacing: 0.5,

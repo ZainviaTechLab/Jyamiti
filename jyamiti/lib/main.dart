@@ -23,13 +23,14 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'services/api_service.dart';
 import 'services/offline_sync_service.dart';
 import 'presentation/widgets/theme_reveal.dart';
 import 'presentation/features/mathpad/mathpad_shader_warmup.dart';
 import 'presentation/features/mathpad/recording/mathpad_recording_service.dart';
 
-void main() {
+Future<void> main() async {
   // Must be set before `WidgetsFlutterBinding.ensureInitialized()` --
   // `PaintingBinding.initInstances()` (which that call triggers) is what
   // actually runs it. See `MathPadShaderWarmUp`'s doc comment for the real
@@ -37,6 +38,13 @@ void main() {
   // spending 461ms compiling shaders mid-drawing on a heavily-used page).
   PaintingBinding.shaderWarmUp = const MathPadShaderWarmUp();
   WidgetsFlutterBinding.ensureInitialized();
+  // Set the highest refresh rate supported by the display -- `flutter_displaymode`
+  // only has an Android implementation; calling it on any other platform
+  // (Windows, iOS, macOS, Linux, web) throws a MissingPluginException since
+  // there's no native side to handle the method channel call.
+  if (!kIsWeb && Platform.isAndroid) {
+    await FlutterDisplayMode.setHighRefreshRate();
+  }
   // Must run once before any `media_kit` Player is created -- backs the
   // Math Pad Asset Library's video embeds (see `MediaEmbedWidget`).
   MediaKit.ensureInitialized();
