@@ -4867,9 +4867,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         if (_lastSecondaryBarrelPressTime != null &&
             now.difference(_lastSecondaryBarrelPressTime!) <=
                 _kDoubleTapMaxGap) {
-          if (_toolMode != CanvasToolMode.lasso) {
+          if (_toolMode != CanvasToolMode.tapSelect) {
             setState(() {
-              _toolMode = CanvasToolMode.lasso;
+              _toolMode = CanvasToolMode.tapSelect;
               _activeShapeTool = null;
             });
           }
@@ -5200,9 +5200,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _initialScale = _scale;
 
     // 2-finger touch is dedicated to canvas panning and zooming
-    if (details.pointerCount > 1 ||
-        _activePointers.length >= 2 ||
-        _isSecondaryBarrelPressed) {
+    if (details.pointerCount > 1 || _activePointers.length >= 2) {
       if (_currentLine != null) {
         if (_lines.isNotEmpty && _lines.last == _currentLine) {
           _lines.removeLast();
@@ -5213,9 +5211,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return;
     }
 
-    if (details.pointerCount == 1 &&
-        _toolMode != CanvasToolMode.pan &&
-        !_isSecondaryBarrelPressed) {
+    if (details.pointerCount == 1 && _toolMode != CanvasToolMode.pan) {
       final worldPos = _screenToWorld(details.localFocalPoint);
 
       // Any tap while the text editor is open commits/closes it first,
@@ -5452,7 +5448,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             }
           }
         });
-      } else if (_toolMode == CanvasToolMode.lasso) {
+      } else if (_toolMode == CanvasToolMode.lasso ||
+          _isSecondaryBarrelPressed) {
+        // Holding the secondary stylus barrel button and dragging gives a
+        // temporary Lasso Select, regardless of whichever tool is actually
+        // active -- same override pattern the primary barrel button
+        // already uses for the Eraser.
         setState(() {
           _lassoPoints = [worldPos];
           _selectedLines.clear();
@@ -5536,8 +5537,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (!widget.isTransparentBg &&
         (details.pointerCount > 1 ||
             _activePointers.length >= 2 ||
-            _toolMode == CanvasToolMode.pan ||
-            _isSecondaryBarrelPressed)) {
+            _toolMode == CanvasToolMode.pan)) {
       if (_currentLine != null) {
         if (_lines.isNotEmpty && _lines.last == _currentLine) {
           _lines.removeLast();
@@ -5712,7 +5712,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _activeDrawingNotifier.value++;
     } else if (_toolMode == CanvasToolMode.laser) {
       _addLaserPoint(_screenToWorld(details.localFocalPoint));
-    } else if (_toolMode == CanvasToolMode.lasso && _lassoPoints.isNotEmpty) {
+    } else if ((_toolMode == CanvasToolMode.lasso || _isSecondaryBarrelPressed) &&
+        _lassoPoints.isNotEmpty) {
       final worldPos = _screenToWorld(details.localFocalPoint);
       _lassoPoints.add(worldPos);
       _activeDrawingNotifier.value++;
@@ -5959,8 +5960,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return;
     }
 
-    // Perform Lasso Selection: enclosed strokes become selected for Move or Duplicate
-    if (_toolMode == CanvasToolMode.lasso && _lassoPoints.length > 2) {
+    // Perform Lasso Selection: enclosed strokes become selected for Move or
+    // Duplicate -- also fires for a secondary-barrel-held drag, matching
+    // its temporary Lasso override in `_onScaleStart`/`_onScaleUpdate`.
+    if ((_toolMode == CanvasToolMode.lasso || _isSecondaryBarrelPressed) &&
+        _lassoPoints.length > 2) {
       final lassoPath = Path();
       lassoPath.moveTo(_lassoPoints.first.dx, _lassoPoints.first.dy);
       for (int i = 1; i < _lassoPoints.length; i++) {
@@ -5991,9 +5995,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
 
     // Trigger smooth inertial gliding velocity physics when flinging 2 fingers or Hand Tool
-    if (_toolMode == CanvasToolMode.pan ||
-        _activePointers.length >= 2 ||
-        _isSecondaryBarrelPressed) {
+    if (_toolMode == CanvasToolMode.pan || _activePointers.length >= 2) {
       _startInertialFling(details.velocity.pixelsPerSecond);
     }
 

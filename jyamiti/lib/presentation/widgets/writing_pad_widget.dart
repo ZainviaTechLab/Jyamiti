@@ -1652,21 +1652,23 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                                         return RepaintBoundary(
                                           child: CustomPaint(
                                             size: Size.infinite,
-                                            painter: _ActiveDrawingOverlayPainter(
-                                              currentLine: _currentLine,
-                                              selectedLines: _selectedLines,
-                                              lassoPoints: _lassoPoints,
-                                              panOffset: pan,
-                                              scale: sc,
-                                              activeShapeTool: _activeShapeTool,
-                                              shapeDragStartPos:
-                                                  _shapeDragStartPos,
-                                              shapeDragCurrentPos:
-                                                  _shapeDragCurrentPos,
-                                              selectedColor: _selectedColor,
-                                              penWidth: _penWidth,
-                                              isDark: isDark,
-                                            ),
+                                            painter:
+                                                _ActiveDrawingOverlayPainter(
+                                                  currentLine: _currentLine,
+                                                  selectedLines: _selectedLines,
+                                                  lassoPoints: _lassoPoints,
+                                                  panOffset: pan,
+                                                  scale: sc,
+                                                  activeShapeTool:
+                                                      _activeShapeTool,
+                                                  shapeDragStartPos:
+                                                      _shapeDragStartPos,
+                                                  shapeDragCurrentPos:
+                                                      _shapeDragCurrentPos,
+                                                  selectedColor: _selectedColor,
+                                                  penWidth: _penWidth,
+                                                  isDark: isDark,
+                                                ),
                                           ),
                                         );
                                       },
@@ -2042,8 +2044,7 @@ class _WritingPadWidgetState extends State<WritingPadWidget>
                                                       : (_toolMode ==
                                                                 CanvasToolMode
                                                                     .pencil
-                                                            ? Icons
-                                                                  .draw_rounded
+                                                            ? Icons.draw_rounded
                                                             : Icons
                                                                   .edit_rounded)))),
                                 size: 14,
@@ -2976,20 +2977,34 @@ class _FinishedStrokesPainter extends CustomPainter {
         final double gridEndY = (endY / step).ceil() * step + step;
 
         for (double x = gridStartX; x <= gridEndX; x += step) {
-          canvas.drawLine(Offset(x, gridStartY), Offset(x, gridEndY), gridPaint);
+          canvas.drawLine(
+            Offset(x, gridStartY),
+            Offset(x, gridEndY),
+            gridPaint,
+          );
         }
         for (double y = gridStartY; y <= gridEndY; y += step) {
-          canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
+          canvas.drawLine(
+            Offset(gridStartX, y),
+            Offset(gridEndX, y),
+            gridPaint,
+          );
         }
       } else if (bgMode == CanvasBgMode.ruled) {
         const double lineStep = 32.0;
-        final double gridStartX = (startX / lineStep).floor() * lineStep - lineStep;
+        final double gridStartX =
+            (startX / lineStep).floor() * lineStep - lineStep;
         final double gridEndX = (endX / lineStep).ceil() * lineStep + lineStep;
-        final double lineStartY = (startY / lineStep).floor() * lineStep - lineStep;
+        final double lineStartY =
+            (startY / lineStep).floor() * lineStep - lineStep;
         final double lineEndY = (endY / lineStep).ceil() * lineStep + lineStep;
 
         for (double y = lineStartY; y <= lineEndY; y += lineStep) {
-          canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
+          canvas.drawLine(
+            Offset(gridStartX, y),
+            Offset(gridEndX, y),
+            gridPaint,
+          );
         }
       }
 
@@ -3444,7 +3459,7 @@ class JyamitiPadFab extends StatelessWidget {
     this.onPressed,
     this.heroTag = 'jyamiti_pad_fab',
     this.enableSaveNotes = false,
-    this.label = 'JyamitiPad',
+    this.label = 'Jyamiti-Pad',
     this.icon = Icons.gesture_rounded,
   });
 
