@@ -1830,6 +1830,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
 
     _recordingState = _recordingService.state;
+    // Sync the elapsed-time badge immediately too, not just the state --
+    // without this, switching to a new page mid-recording shows "REC
+    // 00:00" (this field's zero-initialized default) for up to ~1 second
+    // until the next periodic `onUpdate` tick happens to correct it,
+    // instead of continuing from the real elapsed time right away.
+    _recordingElapsed = _recordingService.elapsed;
     if (_recordingState == MathPadRecordingState.recording) {
       _recordingService.updateCanvasKey(_canvasCaptureKey);
     }

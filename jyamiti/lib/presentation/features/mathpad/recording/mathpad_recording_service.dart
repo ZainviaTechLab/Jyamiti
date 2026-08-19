@@ -86,11 +86,23 @@ class MathPadRecordingService extends ChangeNotifier {
   DateTime? _startedAt;
   GlobalKey? _canvasKey;
 
+  // How much later than `_startedAt` (the video timeline's own zero point)
+  // each OTHER capture stream actually started, in seconds -- measured,
+  // not assumed, so `encode()`/`_overlayCamera` can shift each stream
+  // later by exactly this much via ffmpeg's `-itsoffset` and keep
+  // everything genuinely aligned instead of just hoping the streams
+  // happened to start close enough together. See their measurement sites
+  // in `start()` for what each one actually bounds.
+  double _audioStartOffsetSeconds = 0.0;
+  double _cameraStartOffsetSeconds = 0.0;
+
   // Intermediate state for delayed encode choice
   List<_ConcatEntry>? _capturedConcatEntries;
   Directory? _capturedSessionDir;
   bool _capturedCameraWasEnabled = false;
   String? _capturedAudioPath;
+  double _capturedAudioStartOffsetSeconds = 0.0;
+  double _capturedCameraStartOffsetSeconds = 0.0;
 
   // Byte-for-byte content of the most recently *written* frame, so an
   // unchanged board (the tutor pausing to talk, or a slow capture falling
@@ -295,9 +307,46 @@ class MathPadRecordingService extends ChangeNotifier {
     );
     await sessionDir.create(recursive: true);
 
+    // The video timeline's zero point -- set as the very first thing in
+    // this function's real capture-triggering work, immediately before
+    // asking the mic to start, rather than after (the old ordering set
+    // this only once audio.start() had already resolved, so the WAV file
+    // always began recording measurably before the video's own t=0,
+    // permanently offsetting the audio ahead of the picture). Every
+    // capture stream's actual start latency is measured relative to THIS
+    // instant and compensated for at mux time in `encode()`/
+    // `_overlayCamera` via ffmpeg's `-itsoffset`, rather than assumed away.
+    _startedAt = DateTime.now();
+    elapsed = Duration.zero;
+
     try {
       await _audioRecorder.start(
-        const RecordConfig(encoder: AudioEncoder.wav),
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          // Matches the sample rate Windows' own WASAPI shared-mode audio
+          // engine mixes at by default (48kHz) -- capturing at the
+          // historical default of 44.1kHz instead forces an extra
+          // resample step in the OS audio pipeline before it ever reaches
+          // this app, a real (if subtle) source of quality loss for no
+          // benefit. This is what "the natural Windows setting" actually
+          // means at the API level: matching the engine's own native
+          // format instead of a value that predates it.
+          sampleRate: 48000,
+          // A single presenter's narration is a mono source -- recording
+          // stereo just duplicates that one mic channel into both L/R
+          // (bigger file, zero real quality gain) and risks an audible
+          // channel imbalance on drivers that don't upmix cleanly.
+          numChannels: 1,
+          // Device-level noise suppression/auto-gain (where the input
+          // device actually supports it) -- complements, rather than
+          // replaces, the `loudnorm` normalization already applied at
+          // encode time below. `echoCancel` deliberately left off: it
+          // exists for two-way calls with a live speaker output feeding
+          // back into the mic, not a solo narration recording, and
+          // enabling it with nothing to cancel can only cost fidelity.
+          autoGain: true,
+          noiseSuppress: true,
+        ),
         path: p.join(sessionDir.path, 'audio.wav'),
       );
     } catch (e) {
@@ -306,6 +355,18 @@ class MathPadRecordingService extends ChangeNotifier {
       }
       throw MathPadRecordingException('Could not start audio recording: $e');
     }
+    // `_audioRecorder.start()` resolving is the earliest confirmation the
+    // mic is actually capturing -- the true start happened SOMEWHERE in
+    // the interval between `_startedAt` and now, but "now" is the
+    // soonest-available, safe upper-bound estimate (assuming it started
+    // any later would risk clipping real narration off the front of the
+    // muxed track). Zero, not negative, since a `-itsoffset` compensating
+    // for audio starting AFTER the video's t=0 needs the audio pushed
+    // later in the output timeline -- see its use in `encode()`.
+    _audioStartOffsetSeconds = max(
+      0.0,
+      DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
+    );
 
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
@@ -314,8 +375,6 @@ class MathPadRecordingService extends ChangeNotifier {
     _writtenFrameIndex = 0;
     _concatEntries.clear();
     encodingProgress = 0.0;
-    _startedAt = DateTime.now();
-    elapsed = Duration.zero;
 
     // Camera is best-effort and starts AFTER the canvas/mic side is
     // already fully committed above -- so any trouble here (no webcam,
@@ -349,12 +408,25 @@ class MathPadRecordingService extends ChangeNotifier {
                   p.join(sessionDir.path, 'camera.mp4'),
                 ];
           _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
-          // IMPORTANT: We must consume stdout and stderr, otherwise the OS 
-          // pipe buffer fills up with ffmpeg's continuous status output and 
+          // Best-effort start-offset estimate, same idea as
+          // `_audioStartOffsetSeconds` -- a LOWER bound, not exact: this
+          // only measures how long spawning the OS process itself took,
+          // not how much longer ffmpeg then spent actually opening the
+          // DirectShow device inside it (camera device open latency is
+          // typically the slowest of the three capture streams to
+          // actually start, and isn't observable from here without
+          // fragile stderr-message parsing). Still meaningfully better
+          // than the previous behaviour of assuming zero offset.
+          _cameraStartOffsetSeconds = max(
+            0.0,
+            DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
+          );
+          // IMPORTANT: We must consume stdout and stderr, otherwise the OS
+          // pipe buffer fills up with ffmpeg's continuous status output and
           // causes ffmpeg to freeze permanently.
           _cameraProcess!.stdout.listen((_) {});
           _cameraProcess!.stderr.listen((_) {});
-          
+
           _cameraEnabled = true;
         }
       } catch (e) {
@@ -520,6 +592,8 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedSessionDir = _sessionDir;
     _capturedCameraWasEnabled = _cameraEnabled;
     _capturedAudioPath = audioPath;
+    _capturedAudioStartOffsetSeconds = _audioStartOffsetSeconds;
+    _capturedCameraStartOffsetSeconds = _cameraStartOffsetSeconds;
 
     _canvasKey = null;
     _sessionDir = null;
@@ -530,6 +604,8 @@ class MathPadRecordingService extends ChangeNotifier {
     _writtenFrameIndex = 0;
     _lastFrameBytes = null;
     _concatEntries.clear();
+    _audioStartOffsetSeconds = 0.0;
+    _cameraStartOffsetSeconds = 0.0;
 
     _state = MathPadRecordingState.waitingForEncodeChoice;
     _emit();
@@ -546,6 +622,8 @@ class MathPadRecordingService extends ChangeNotifier {
     final Directory sessionDir = _capturedSessionDir!;
     final bool cameraWasEnabled = _capturedCameraWasEnabled;
     final String? audioPath = _capturedAudioPath;
+    final double audioStartOffsetSeconds = _capturedAudioStartOffsetSeconds;
+    final double cameraStartOffsetSeconds = _capturedCameraStartOffsetSeconds;
 
     _state = MathPadRecordingState.encoding;
     _emit();
@@ -625,7 +703,20 @@ class MathPadRecordingService extends ChangeNotifier {
         '-f', 'concat',
         '-safe', '0',
         '-i', manifestFile.path,
-        if (audioPath != null) ...['-i', audioPath],
+        if (audioPath != null) ...[
+          // Shifts the audio input later in the output timeline by
+          // however much it actually started after the video's own t=0
+          // (measured in `start()`, see `_audioStartOffsetSeconds`'s doc
+          // comment) -- without this, the mic's recorded WAV -- which
+          // always began capturing at least a little later than the
+          // video's zero point once the mic was genuinely ready -- gets
+          // muxed as if it started at the exact same instant, permanently
+          // offsetting narration relative to the picture by that amount
+          // for the whole recording.
+          if (audioStartOffsetSeconds > 0.0005)
+            ...['-itsoffset', audioStartOffsetSeconds.toStringAsFixed(6)],
+          '-i', audioPath,
+        ],
         // Normalizes the concat demuxer's variable-duration input frames
         // into a proper constant-frame-rate output stream -- cheap for
         // ffmpeg to do internally (it's just frame duplication at encode
@@ -755,6 +846,7 @@ class MathPadRecordingService extends ChangeNotifier {
           outDir: outDir,
           totalDurationSeconds: totalDurationSeconds,
           fastEncode: fastEncode,
+          cameraStartOffsetSeconds: cameraStartOffsetSeconds,
         );
         await _generateThumbnail(finalVideoPath);
         return finalVideoPath;
@@ -788,6 +880,7 @@ class MathPadRecordingService extends ChangeNotifier {
     required Directory outDir,
     required double totalDurationSeconds,
     required bool fastEncode,
+    double cameraStartOffsetSeconds = 0.0,
   }) async {
     final String finalPath =
         p.join(outDir.path, 'MathPad_${DateTime.now().millisecondsSinceEpoch}_cam.mp4');
@@ -796,6 +889,15 @@ class MathPadRecordingService extends ChangeNotifier {
       '-progress', 'pipe:1',
       '-nostats',
       '-i', canvasVideoPath,
+      // Shifts the camera stream later to match how much after the canvas
+      // video's own t=0 it actually started (measured in `start()`, see
+      // `_cameraStartOffsetSeconds`'s doc comment) -- the DirectShow
+      // device is typically the slowest of the three capture streams to
+      // actually come online, so without this the picture-in-picture box
+      // visibly leads the canvas/audio by that same amount for the whole
+      // recording.
+      if (cameraStartOffsetSeconds > 0.0005)
+        ...['-itsoffset', cameraStartOffsetSeconds.toStringAsFixed(6)],
       '-i', cameraVideoPath,
       // Camera box: cropped to a square and scaled to 240x240 for a significantly
       // larger PIP presence. Placed in the top-right corner with a small
