@@ -1828,35 +1828,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
 
     _recordingState = _recordingService.state;
-    // Sync the elapsed-time badge immediately too, not just the state --
-    // without this, switching to a new page mid-recording shows "REC
-    // 00:00" (this field's zero-initialized default) for up to ~1 second
-    // until the next periodic `onUpdate` tick happens to correct it,
-    // instead of continuing from the real elapsed time right away.
     _recordingElapsed = _recordingService.elapsed;
+    _encodingProgress = _recordingService.encodingProgress;
+    _encodingPhaseLabel = _recordingService.encodingPhaseLabel;
     if (_recordingState == MathPadRecordingState.recording) {
       _recordingService.updateCanvasKey(_canvasCaptureKey);
-    }
-
-    _recordingService.onUpdate = (state, elapsed) {
-      if (!mounted) return;
-      setState(() {
-        _recordingState = state;
-        _recordingElapsed = elapsed;
-        if (state != MathPadRecordingState.encoding) {
-          _encodingProgress = 0.0;
-          _encodingPhaseLabel = 'Encoding…';
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            _recordingService.state == MathPadRecordingState.recording) {
+          _recordingService.updateCanvasKey(_canvasCaptureKey);
         }
       });
-    };
-    _recordingService.onEncodingProgress = (progress) {
-      if (!mounted) return;
-      setState(() => _encodingProgress = progress);
-    };
-    _recordingService.onEncodingPhaseChanged = (label) {
-      if (!mounted) return;
-      setState(() => _encodingPhaseLabel = label);
-    };
+    }
+
+    _recordingService.addListener(_onRecordingServiceChanged);
     _recordingService.onCameraWarning = (message) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1887,6 +1872,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
+  void _onRecordingServiceChanged() {
+    if (!mounted) return;
+    setState(() {
+      _recordingState = _recordingService.state;
+      _recordingElapsed = _recordingService.elapsed;
+      _encodingProgress = _recordingService.encodingProgress;
+      _encodingPhaseLabel = _recordingService.encodingPhaseLabel;
+    });
+  }
+
   @override
   void dispose() {
     StylusPredictionService.instance.predictedDelta.removeListener(
@@ -1905,49 +1900,63 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _activeDrawingNotifier.dispose();
     _frictionController?.dispose();
 
-    _recordingService.onUpdate = null;
-    _recordingService.onEncodingProgress = null;
-    _recordingService.onEncodingPhaseChanged = null;
+    _recordingService.removeListener(_onRecordingServiceChanged);
     _laserFadeTimer?.cancel();
     _selectionGlowTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _toggleRecording() async {
-    if (_recordingState == MathPadRecordingState.recording) {
-      try {
-        await _recordingService.stopCapture();
-        final String path = await _recordingService.encode();
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Recording saved to $path'),
-            backgroundColor: const Color(0xFF10B981),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      } on MathPadRecordingException catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.message),
-            backgroundColor: Colors.redAccent,
-            duration: const Duration(seconds: 10),
-          ),
-        );
-      }
-      return;
-    }
+  Future<void> _startRecording({required bool includeCamera}) async {
     if (_recordingState != MathPadRecordingState.idle) return;
+    if (includeCamera) {
+      final hasCam = await _recordingService.hasCamera();
+      if (!hasCam) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No camera found -- check your webcam connection.'),
+            backgroundColor: Colors.redAccent,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+    }
+    setState(() => _recordWithCamera = includeCamera);
     try {
       await _recordingService.start(
         _canvasCaptureKey,
-        includeCamera: _recordWithCamera,
+        includeCamera: includeCamera,
       );
     } on MathPadRecordingException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    if (_recordingState != MathPadRecordingState.recording) return;
+    try {
+      await _recordingService.stopCapture();
+      final String path = await _recordingService.encode();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Recording saved to $path'),
+          backgroundColor: const Color(0xFF10B981),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } on MathPadRecordingException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 10),
+        ),
       );
     }
   }
@@ -10672,51 +10681,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
                   if (!kIsWeb &&
                       MathPadRecordingService.isSupportedPlatform) ...[
-                    const SizedBox(width: 8),
-                    // Opt-in, off by default -- only changes what a NEW
-                    // recording does when you press the record button
-                    // next; never touches the plain canvas+voice
-                    // recording itself. Baked into the exported video
-                    // only (never shown live here on the canvas), so
-                    // toggling it doesn't add anything to what you're
-                    // looking at while you draw.
-                    IconButton(
-                      icon: Icon(
-                        _recordWithCamera
-                            ? Icons.videocam_rounded
-                            : Icons.videocam_off_rounded,
-                        size: 20,
-                        color: _recordWithCamera
-                            ? const Color(0xFF6366F1)
-                            : _textColor,
-                      ),
-                      onPressed: _recordingState == MathPadRecordingState.idle
-                          ? () async {
-                              if (!_recordWithCamera) {
-                                final hasCam = await _recordingService
-                                    .hasCamera();
-                                if (!hasCam) {
-                                  if (!mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('No camera found'),
-                                      backgroundColor: Colors.redAccent,
-                                      duration: Duration(seconds: 3),
-                                    ),
-                                  );
-                                  return;
-                                }
-                              }
-                              setState(
-                                () => _recordWithCamera = !_recordWithCamera,
-                              );
-                            }
-                          : null,
-                      tooltip: _recordWithCamera
-                          ? 'Camera box will be added to the exported video -- tap to turn off'
-                          : 'Add a small camera box to the exported video -- tap to turn on',
-                    ),
-                    const SizedBox(width: 8),
                     // Real-time background segment sealing strategy (see
                     // `SegmentSealMode`) -- locked while a recording is
                     // actually in progress, since changing it mid-recording
@@ -10757,30 +10721,54 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       ],
                     ),
                     const SizedBox(width: 8),
-                    IconButton(
-                      icon: Icon(
-                        _recordingState == MathPadRecordingState.recording
-                            ? Icons.stop_circle_rounded
-                            : Icons.fiber_manual_record_rounded,
-                        size: 20,
-                        color:
-                            _recordingState == MathPadRecordingState.recording
-                            ? Colors.redAccent
-                            : _textColor,
+                    if (_recordingState == MathPadRecordingState.recording)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.stop_circle_rounded,
+                          size: 20,
+                          color: Colors.redAccent,
+                        ),
+                        onPressed: _stopRecording,
+                        tooltip: 'Stop Recording',
+                      )
+                    else if (_recordingState == MathPadRecordingState.encoding)
+                      IconButton(
+                        icon: Icon(
+                          Icons.fiber_manual_record_rounded,
+                          size: 20,
+                          color: _textColor60,
+                        ),
+                        onPressed: null,
+                        tooltip: 'Encoding…',
+                      )
+                    else
+                      PopupMenuButton<bool>(
+                        tooltip: 'Start Recording',
+                        icon: Icon(
+                          Icons.fiber_manual_record_rounded,
+                          size: 20,
+                          color: _textColor,
+                        ),
+                        color: isDark ? _darkPanelColor : Colors.white,
+                        onSelected: (withCamera) =>
+                            _startRecording(includeCamera: withCamera),
+                        itemBuilder: (ctx) => [
+                          _recordingOptionMenuItem(
+                            value: false,
+                            icon: Icons.videocam_off_rounded,
+                            iconColor: _textColor,
+                            label: 'Without Camera',
+                            description: 'Record canvas & microphone audio only',
+                          ),
+                          _recordingOptionMenuItem(
+                            value: true,
+                            icon: Icons.videocam_rounded,
+                            iconColor: const Color(0xFF6366F1),
+                            label: 'With Camera',
+                            description: 'Record canvas, audio & webcam overlay PIP',
+                          ),
+                        ],
                       ),
-                      onPressed:
-                          _recordingState == MathPadRecordingState.encoding
-                          ? null
-                          : _toggleRecording,
-                      tooltip:
-                          _recordingState == MathPadRecordingState.recording
-                          ? 'Stop Recording'
-                          : (_recordingState == MathPadRecordingState.encoding
-                                ? 'Encoding…'
-                                : (_recordWithCamera
-                                      ? 'Record Board + Voice + Camera'
-                                      : 'Record Board + Voice')),
-                    ),
                   ],
 
                   const SizedBox(width: 8),
@@ -10831,6 +10819,46 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               child: widget.trailingToolbarAction!,
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  PopupMenuItem<bool> _recordingOptionMenuItem({
+    required bool value,
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String description,
+  }) {
+    return PopupMenuItem<bool>(
+      value: value,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: iconColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: _textColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  description,
+                  style: TextStyle(color: _textColor60, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

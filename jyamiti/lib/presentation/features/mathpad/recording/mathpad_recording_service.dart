@@ -264,6 +264,9 @@ class MathPadRecordingService extends ChangeNotifier {
   /// ffmpeg's own `-progress` stream in `stop()`, not estimated.
   double encodingProgress = 0.0;
 
+  /// Current human-readable encoding status (e.g. "Encoding…", "Adding camera…")
+  String encodingPhaseLabel = 'Encoding…';
+
   /// Called on every state change and roughly once a second while
   /// recording (to update the elapsed-time badge).
   void Function(MathPadRecordingState state, Duration elapsed)? onUpdate;
@@ -630,10 +633,22 @@ class MathPadRecordingService extends ChangeNotifier {
   }
 
   Future<void> _captureFrame() async {
-    if (_captureInFlight || _sessionDir == null || _startedAt == null) return;
+    if (_sessionDir == null || _startedAt == null) return;
+    
+    // Always keep elapsed time updated
+    elapsed = DateTime.now().difference(_startedAt!);
+
+    if (_captureInFlight) {
+      _emit();
+      return;
+    }
+    
     // Nothing new due yet -- capturing again right now would just be a
-    // needless duplicate of the last frame.
-    if (_targetFrameCountNow() <= _frameCount) return;
+    // needless duplicate of the last frame, but we still emitted the latest elapsed time.
+    if (_targetFrameCountNow() <= _frameCount) {
+      _emit();
+      return;
+    }
 
     _captureInFlight = true;
     try {
@@ -698,6 +713,18 @@ class MathPadRecordingService extends ChangeNotifier {
             // `_evaluateSegmentSeal` watches for `idleOnly`/`hybrid`.
             _lastDistinctFrameAt = DateTime.now();
           }
+          _frameCount = fillTo;
+        }
+      } else if (_concatEntries.isNotEmpty) {
+        // While switching pages or transitioning between routes, the canvas
+        // may be briefly unmounted or rebuilding. Keep the timeline advancing
+        // and hold the last valid frame so video frames, recording timer,
+        // and audio narration remain continuously in sync without stalling.
+        final int fillTo = max(_targetFrameCountNow(), _frameCount + 1);
+        final int slotsElapsed = fillTo - _frameCount;
+        if (slotsElapsed > 0) {
+          final double durationSeconds = slotsElapsed / fps;
+          _concatEntries.last.durationSeconds += durationSeconds;
           _frameCount = fillTo;
         }
       }
@@ -852,10 +879,11 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
-  /// Stops capturing, halts all inputs, and moves to a waiting state.
-  /// Call `encode()` immediately after to process the captured data.
+  /// Updates the canvas capture key (e.g. when switching pages in MathPad).
   void updateCanvasKey(GlobalKey canvasKey) {
     _canvasKey = canvasKey;
+    _lastFrameBytes = null;
+    notifyListeners();
   }
 
   Future<void> stopCapture() async {
