@@ -64,11 +64,19 @@ class InstrumentHandle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final circle = Container(
+    // The pencil handle sits directly over the drawing itself (unlike
+    // move/rotate/resize/remove, which float beside the instrument body),
+    // so the flat opaque white disc the other roles use was needlessly
+    // blocking whatever's underneath it. No fill and no blur/backdrop
+    // effect at all -- just a plain see-through ring (the same coloured
+    // border every other handle already uses) with the icon on top.
+    final bool isPencil = role == InstrumentHandleRole.pencil;
+
+    final Widget circle = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isPencil ? null : Colors.white,
         shape: BoxShape.circle,
         border: Border.all(color: _color, width: 2),
         boxShadow: [

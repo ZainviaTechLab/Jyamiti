@@ -43,11 +43,10 @@ class ProtractorWidget extends StatelessWidget {
                   logoImage: logoImage,
                 ),
               ),
-              _visualHandle(handles['move']!, InstrumentHandleRole.move),
               _visualHandle(handles['rotate']!, InstrumentHandleRole.rotate),
               _visualHandle(handles['resize']!, InstrumentHandleRole.resize),
               if (handles.containsKey('pencil'))
-                _visualHandle(handles['pencil']!, InstrumentHandleRole.pencil, armed: state.pencilArmed),
+                _visualPencilHandle(handles['pencil']!),
             ],
           ),
         ),
@@ -61,6 +60,39 @@ class ProtractorWidget extends StatelessWidget {
       left: worldPos.dx - r,
       top: worldPos.dy - r,
       child: InstrumentHandle(role: role, tooltip: '', armed: armed),
+    );
+  }
+
+  // `Icons.edit_rounded`'s glyph rests tip-pointing up-right, not
+  // down-left as first guessed (confirmed backwards -- flipped 180° from
+  // the original `3*pi/4` estimate) -- this is the correction so the
+  // icon's actual drawn TIP, not its bounding box, ends up pointing along
+  // `pointAngle` below.
+  static const double _pencilIconTipAngle = -pi / 4;
+
+  /// Rotates the pencil handle to point radially outward from the pivot,
+  /// like a real pointer arm swept around the arc -- at the 90° mark it
+  /// points straight up, and it continuously re-orients as it's dragged,
+  /// instead of always sitting upright regardless of where it is on the
+  /// protractor. `state.pencilAngle` is the pencil's own position around
+  /// the arc (radians, local space); `state.rotation` is the whole
+  /// protractor's own rotation -- both together give the pencil's true
+  /// outward direction in world space, matching how its world position is
+  /// computed elsewhere (see `_MathsPadWidgetState`'s pencil-drag handling).
+  Widget _visualPencilHandle(Offset worldPos) {
+    const r = InstrumentHandle.size / 2;
+    final double pointAngle = state.pencilAngle + state.rotation;
+    return Positioned(
+      left: worldPos.dx - r,
+      top: worldPos.dy - r,
+      child: Transform.rotate(
+        angle: pointAngle - _pencilIconTipAngle,
+        child: InstrumentHandle(
+          role: InstrumentHandleRole.pencil,
+          tooltip: '',
+          armed: state.pencilArmed,
+        ),
+      ),
     );
   }
 }

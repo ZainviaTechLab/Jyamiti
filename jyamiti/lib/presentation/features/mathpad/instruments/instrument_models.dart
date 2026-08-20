@@ -73,7 +73,7 @@ class RulerState extends InstrumentState {
   RulerState({
     required super.pivot,
     super.rotation = 0,
-    this.lengthCm = 20,
+    this.lengthCm = 15,
     this.pencilArmed = false,
     double? pencilOffsetPx,
   }) : pencilOffsetPx = pencilOffsetPx ?? (lengthCm * kPxPerCm) / 2;
@@ -99,10 +99,12 @@ class RulerState extends InstrumentState {
     final halfLen = lengthPx / 2;
     final clampedOffset = pencilOffsetPx.clamp(0.0, lengthPx);
     return {
-      'move': rotatedLocal(0, -28),
+      // No dedicated 'move' handle -- dragging the ruler's body directly
+      // moves it instead (see `_MathsPadWidgetState._hitTestInstrumentHandles`'s
+      // body hit-test fallback), the same way a Media Embed already works.
       'rotate': rotatedLocal(halfLen + 18, 0),
       'remove': rotatedLocal(-halfLen - 18, 0),
-      'pencil': rotatedLocal(-halfLen + clampedOffset, 34),
+      'pencil': rotatedLocal(-halfLen + clampedOffset, -28),
     };
   }
 }
@@ -129,8 +131,10 @@ class ProtractorState extends InstrumentState {
   @override
   Map<String, Offset> handleWorldPositions() {
     return {
+      // No dedicated 'move' handle -- dragging the protractor's body
+      // directly moves it instead (see the canvas's body hit-test
+      // fallback), the same way a Media Embed already works.
       'pencil': rotatedLocal(radius * cos(pencilAngle), radius * sin(pencilAngle)),
-      'move': rotatedLocal(0, 26),
       'rotate': rotatedLocal(radius + 18, 0),
       'resize': rotatedLocal(-radius - 18, 0),
     };

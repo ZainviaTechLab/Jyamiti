@@ -1,3 +1,4 @@
+import 'dart:math' show pi;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'instrument_handle.dart';
@@ -42,7 +43,6 @@ class RulerWidget extends StatelessWidget {
                   logoImage: logoImage,
                 ),
               ),
-              _visualHandle(handles['move']!, InstrumentHandleRole.move),
               _visualHandle(handles['rotate']!, InstrumentHandleRole.rotate),
               _visualPencil(handles['pencil']!, state.pencilArmed),
             ],
@@ -61,15 +61,32 @@ class RulerWidget extends StatelessWidget {
     );
   }
 
+  // `Icons.edit_rounded`'s glyph rests tip-pointing up-right, not down-left
+  // as first guessed (confirmed backwards -- flipped 180° from the
+  // original `3*pi/4` estimate) -- same correction constant as
+  // `ProtractorWidget`'s pencil (same icon).
+  static const double _pencilIconTipAngle = -pi / 4;
+
+  /// Rotates the pencil to point toward the ruler's drawing edge -- like a
+  /// pencil actually braced against the ruler, tip touching the edge,
+  /// shaft perpendicular to it -- instead of always sitting upright
+  /// regardless of the ruler's own rotation. Fixed relative to the ruler
+  /// (only changes when the whole ruler is rotated via its rotate handle),
+  /// unlike the Protractor's pencil, whose angle also varies as it's
+  /// dragged around the arc.
   Widget _visualPencil(Offset worldPos, bool armed) {
     const r = InstrumentHandle.size / 2;
+    final double pointAngle = state.rotation - pi / 2;
     return Positioned(
       left: worldPos.dx - r,
       top: worldPos.dy - r,
-      child: InstrumentHandle(
-        role: InstrumentHandleRole.pencil,
-        tooltip: '',
-        armed: armed,
+      child: Transform.rotate(
+        angle: pointAngle - _pencilIconTipAngle,
+        child: InstrumentHandle(
+          role: InstrumentHandleRole.pencil,
+          tooltip: '',
+          armed: armed,
+        ),
       ),
     );
   }
@@ -109,27 +126,32 @@ class _RulerPainter extends CustomPainter {
     canvas.drawRect(bodyRect, bodyPaint);
     canvas.drawRect(bodyRect, borderPaint);
 
-    // Tick marks: minor every 0.5cm, major (taller) every whole cm --
-    // every whole-cm mark is labeled (1, 2, 3, ...) along the full length.
+    // Tick marks, matching a real ruler's three tiers: every mm (shortest),
+    // every half-cm/5mm (medium), every whole cm (tallest) -- only the
+    // whole-cm marks are labeled (1, 2, 3, ...) along the full length.
+    // Stepped in whole mm (not `cm += 0.1`) so float accumulation error
+    // can't ever make a tick land just off a clean 5mm/10mm boundary.
     final tickPaint = Paint()
       ..color = const Color(0xFF3B0764)
       ..strokeWidth = 1;
     final textPainter = TextPainter(textDirection: TextDirection.ltr);
 
     final totalCm = state.lengthCm;
-    for (double cm = 0; cm <= totalCm; cm += 0.5) {
+    final int totalMm = (totalCm * 10).round();
+    for (int mm = 0; mm <= totalMm; mm++) {
+      final double cm = mm / 10;
       final x = -halfLen + cm * kPxPerCm;
-      final isMajor = cm % 1 == 0;
-      final isLabeled = isMajor;
-      final tickHeight = isLabeled ? 20.0 : 8.0;
+      final bool isWholeCm = mm % 10 == 0;
+      final bool isHalfCm = mm % 5 == 0;
+      final double tickHeight = isWholeCm ? 20.0 : (isHalfCm ? 13.0 : 7.0);
       canvas.drawLine(
         Offset(x, -height / 2),
         Offset(x, -height / 2 + tickHeight),
         tickPaint,
       );
-      if (isLabeled) {
+      if (isWholeCm) {
         textPainter.text = TextSpan(
-          text: cm.toInt().toString(),
+          text: (mm ~/ 10).toString(),
           style: const TextStyle(
             color: Color(0xFF3B0764),
             fontSize: 11,

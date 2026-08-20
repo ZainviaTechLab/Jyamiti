@@ -337,15 +337,17 @@ class MathPadRecordingService extends ChangeNotifier {
           // (bigger file, zero real quality gain) and risks an audible
           // channel imbalance on drivers that don't upmix cleanly.
           numChannels: 1,
-          // Device-level noise suppression/auto-gain (where the input
-          // device actually supports it) -- complements, rather than
-          // replaces, the `loudnorm` normalization already applied at
-          // encode time below. `echoCancel` deliberately left off: it
-          // exists for two-way calls with a live speaker output feeding
-          // back into the mic, not a solo narration recording, and
-          // enabling it with nothing to cancel can only cost fidelity.
-          autoGain: true,
-          noiseSuppress: true,
+          // autoGain and noiseSuppress deliberately off: on Windows these
+          // activate the OS APO (Audio Processing Objects) pipeline which
+          // applies heavy-handed noise suppression/AGC that distorts clean
+          // mic narration into artifacts/muffled noise when there is
+          // nothing real for it to cancel. Volume normalisation is handled
+          // cleanly at encode time via dynaudnorm (see below) without any
+          // signal quality cost. echoCancel also left off for the same
+          // reason -- it exists for two-way call scenarios with live
+          // speaker feedback, not a solo narration recording.
+          autoGain: false,
+          noiseSuppress: false,
         ),
         path: p.join(sessionDir.path, 'audio.wav'),
       );
@@ -736,13 +738,14 @@ class MathPadRecordingService extends ChangeNotifier {
         '-preset', fastEncode ? 'ultrafast' : 'veryfast',
         '-crf', fastEncode ? '28' : '20',
         if (audioPath != null) ...[
-          // Raw mic input volume varies a lot by device/distance/OS input
-          // gain -- loudnorm brings it up to a consistent, clearly audible
-          // loudness (EBU R128 standard target for spoken content) instead
-          // of just passing through whatever level the mic happened to
-          // capture, without a fixed gain multiplier risking clipping on
-          // recordings that were already loud enough.
-          '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+          // dynaudnorm smoothly normalises the mic volume without the
+          // heavy two-pass EBU analysis that loudnorm runs -- it adapts
+          // frame-by-frame so quiet narration is brought up and loud
+          // passages are gently levelled without the pumping/distortion
+          // artefacts loudnorm can introduce on a signal that was already
+          // slightly noisy coming off the mic. framelen=500ms keeps the
+          // adaptation smooth for natural-paced speech.
+          '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
           '-c:a', 'aac',
           '-b:a', '192k',
           '-shortest',

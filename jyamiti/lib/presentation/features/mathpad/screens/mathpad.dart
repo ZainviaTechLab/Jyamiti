@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show File;
+import 'dart:io' show File, Platform;
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint, setEquals;
@@ -790,7 +790,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // (which would incorrectly include the toolbar's height).
   Size _canvasSize = const Size(800, 600);
   Offset? _snappedEdgeStart;
-  Offset? _snappedEdgeVector;
 
   // Angle Tool: draw a line, then a second line from either of its ends,
   // showing the live angle between them; releasing fixes it permanently.
@@ -3105,13 +3104,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return a + ab * tc;
   }
 
-  Offset _projectPointOntoInfiniteLine(Offset p, Offset origin, Offset dir) {
-    final lenSq = dir.dx * dir.dx + dir.dy * dir.dy;
-    if (lenSq == 0) return origin;
-    final t = (((p - origin).dx * dir.dx) + ((p - origin).dy * dir.dy)) / lenSq;
-    return origin + dir * t;
-  }
-
   /// Adds a new instrument, or -- if one matching [isSameTool] already
   /// exists -- just re-centers that existing one instead of piling up a
   /// duplicate. Only one of each tool (Ruler, Protractor, Compass, and each
@@ -3944,6 +3936,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return mid + normal * offset;
   }
 
+  /// The Ruler's live measurement badge text while its pencil is being
+  /// dragged: always the pencil's own position along the ruled edge --
+  /// i.e. the actual ruler reading under the pencil, matching what a real
+  /// ruler shows regardless of whether you're mid-stroke -- never the
+  /// drawn line's own length.
+  String _rulerLiveLengthText(RulerState ruler) {
+    final double cm = ruler.pencilOffsetPx / kPxPerCm;
+    return '${cm.toStringAsFixed(1)} cm';
+  }
+
   /// All angle arcs to paint this frame: every fixed one, plus the live one
   /// currently being dragged (if any) for whichever angle tool is active.
   List<_AngleArcSpec> _currentAngleArcs() {
@@ -4020,6 +4022,26 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // itself has swept (relative to pivot) since the drag started, applied
   // on top of this starting angle.
   double? _instrumentDragStartArmAngle;
+
+  // Ruler/Set Square pencil drag: the pencil's own `pencilOffsetPx` at the
+  // moment the drag started, plus where THAT SAME initial touch projected
+  // onto the ruled edge -- together these let the update handler apply
+  // only the DELTA the touch has moved since, the same pattern the 'move'
+  // handle already uses (`_instrumentDragStartPivot` + delta). Without
+  // this, the pencil used to jump straight to wherever the touch currently
+  // is on every drag, which is only the same place the icon started if you
+  // happened to touch down on its exact center pixel -- anywhere else
+  // within the handle's (deliberately generous) hit-test tolerance made it
+  // visibly snap the instant the drag began.
+  double? _instrumentDragStartPencilOffsetPx;
+  double? _instrumentDragStartPencilProjectedPx;
+
+  // Protractor pencil drag: same delta-preserving idea as the two fields
+  // above, but for `pencilAngle` -- the pencil's starting angle, plus the
+  // initial touch's own computed local angle.
+  double? _instrumentDragStartPencilAngle;
+  double? _instrumentDragStartPencilTouchAngle;
+
   Offset? _lastCompassTracePoint;
   // Tracks the compass's arc sweep as a continuously-unwrapped angle (not
   // the wrapped -pi..pi `Offset.direction` sample) so points can be
@@ -4103,6 +4125,30 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         final local = inst.worldToLocal(worldPos);
         if (local.dx.abs() <= inst.worldWidth / 2 &&
             local.dy.abs() <= inst.worldHeight / 2) {
+          return (inst, 'move');
+        }
+      }
+      // No dedicated 'move' handle for the Ruler/Protractor -- tapping
+      // anywhere on the instrument's own body drags it directly, the same
+      // "pick it up like a sticker" pattern the Media Embed above already
+      // uses. Only reached if the tap missed every handle above, so the
+      // rotate/resize/remove/pencil handles (outside the body) still take
+      // priority.
+      if (inst is RulerState) {
+        final local = inst.worldToLocal(worldPos);
+        final double halfLen = inst.lengthPx / 2;
+        if (local.dx.abs() <= halfLen && local.dy.abs() <= kRulerHalfHeight) {
+          return (inst, 'move');
+        }
+      }
+      if (inst is ProtractorState) {
+        final local = inst.worldToLocal(worldPos);
+        // Matches the drawn semicircle: bulges toward local -y, flat edge
+        // along local y = 0 -- so only the upper half of the full circle
+        // counts as "on the body".
+        if (local.dy <= 0 &&
+            local.dx * local.dx + local.dy * local.dy <=
+                inst.radius * inst.radius) {
           return (inst, 'move');
         }
       }
@@ -4333,6 +4379,36 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         setState(() => _selectedMediaEmbed = inst);
       }
     }
+    _instrumentDragStartPencilOffsetPx = null;
+    _instrumentDragStartPencilProjectedPx = null;
+    _instrumentDragStartPencilAngle = null;
+    _instrumentDragStartPencilTouchAngle = null;
+    if (handle == 'pencil') {
+      if (inst is RulerState || inst is SetSquareState) {
+        final edge = _resolvePencilEdge(inst, worldPos);
+        if (edge != null) {
+          final onSegment = _projectPointOntoSegment(
+            worldPos,
+            edge.$1,
+            edge.$2,
+          );
+          _instrumentDragStartPencilProjectedPx =
+              (onSegment - edge.$1).distance;
+          _instrumentDragStartPencilOffsetPx = inst is RulerState
+              ? inst.pencilOffsetPx
+              : (inst as SetSquareState).pencilOffsetPx;
+        }
+      } else if (inst is ProtractorState) {
+        final delta0 = worldPos - inst.pivot;
+        final cosR0 = cos(-inst.rotation);
+        final sinR0 = sin(-inst.rotation);
+        _instrumentDragStartPencilTouchAngle = atan2(
+          delta0.dx * sinR0 + delta0.dy * cosR0,
+          delta0.dx * cosR0 - delta0.dy * sinR0,
+        );
+        _instrumentDragStartPencilAngle = inst.pencilAngle;
+      }
+    }
     if (inst is CompassState) _instrumentDragStartArmAngle = inst.armAngle;
     if (inst is CompassState &&
         (handle == 'tip' || handle == 'hinge') &&
@@ -4479,12 +4555,34 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           final sinR = sin(-inst.rotation);
           final localX = delta.dx * cosR - delta.dy * sinR;
           final localY = delta.dx * sinR + delta.dy * cosR;
+          final double currentTouchAngle = atan2(localY, localX);
 
-          // Constrain to the upper semicircle (y <= 0), which is angle from 0 to -pi
-          double angle = atan2(localY, localX);
-          if (angle > 0) {
-            angle = (localX >= 0) ? 0 : -pi;
+          // Applies only the DELTA the touch's own angle has swept since
+          // the drag started, on top of wherever the pencil actually was --
+          // not the touch's raw current angle directly, which snapped the
+          // pencil straight to the touch position the instant a drag began
+          // unless you happened to grab its exact center pixel.
+          double angle;
+          if (_instrumentDragStartPencilTouchAngle != null &&
+              _instrumentDragStartPencilAngle != null) {
+            final double angleDelta = _shortestAngleDelta(
+              _instrumentDragStartPencilTouchAngle!,
+              currentTouchAngle,
+            );
+            angle = _instrumentDragStartPencilAngle! + angleDelta;
+          } else {
+            angle = currentTouchAngle;
           }
+          // Constrain to the upper semicircle (y <= 0), i.e. 0 to -pi.
+          angle = angle.clamp(-pi, 0.0);
+          // Snaps to whole-degree marks -- the same integer ticks printed
+          // on the protractor's own face (see `_ProtractorPainter`'s
+          // `for (int deg = 0; deg <= 180; deg++)` loop) -- instead of a
+          // continuous angle, so dragging the pencil lands exactly on 26°,
+          // 27°, 28°, ... like moving between the printed lines one at a
+          // time, never stopping at a fractional value in between.
+          final double snappedDeg = ((angle + pi) * 180 / pi).roundToDouble();
+          angle = (snappedDeg * pi / 180 - pi).clamp(-pi, 0.0);
           inst.pencilAngle = angle;
 
           final movedDist = (worldPos - _instrumentDragStartWorld!).distance;
@@ -4521,38 +4619,61 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         // angle.
         final edge = _resolvePencilEdge(inst, worldPos);
         if (edge != null) {
+          final Offset edgeVector = edge.$2 - edge.$1;
+          final double edgeLength = edgeVector.distance;
+          final Offset edgeUnit = edgeLength > 0
+              ? edgeVector / edgeLength
+              : const Offset(1, 0);
+
           final onSegment = _projectPointOntoSegment(
             worldPos,
             edge.$1,
             edge.$2,
           );
           final distFromEdgeStart = (onSegment - edge.$1).distance;
-          if (inst is RulerState) inst.pencilOffsetPx = distFromEdgeStart;
-          if (inst is SetSquareState) inst.pencilOffsetPx = distFromEdgeStart;
+          // Applies only the DELTA the touch has moved along the edge
+          // since the drag started, on top of wherever the pencil actually
+          // was -- not the touch's raw current projected position
+          // directly, which snapped the pencil straight there the instant
+          // a drag began unless you happened to grab its exact center
+          // pixel (the handle's own hit-test tolerance is a generous 26px,
+          // so that was the common case, not a rare one).
+          final double newOffsetPx =
+              (_instrumentDragStartPencilProjectedPx != null &&
+                  _instrumentDragStartPencilOffsetPx != null)
+              ? _instrumentDragStartPencilOffsetPx! +
+                    (distFromEdgeStart - _instrumentDragStartPencilProjectedPx!)
+              : distFromEdgeStart;
+          if (inst is RulerState) inst.pencilOffsetPx = newOffsetPx;
+          if (inst is SetSquareState) inst.pencilOffsetPx = newOffsetPx;
 
           final movedDist = (worldPos - _instrumentDragStartWorld!).distance;
           if (movedDist > 6) {
             _pencilDragMoved = true;
             if (_isPencilArmed(inst)) {
               if (_currentLine == null) {
-                final start = _projectPointOntoSegment(
-                  _instrumentDragStartWorld!,
-                  edge.$1,
-                  edge.$2,
-                );
+                // Starts exactly where the pencil itself was sitting when
+                // this drag began (its own `pencilOffsetPx` at that
+                // moment), not wherever the touch happened to land --
+                // otherwise the drawn line's start could sit visibly apart
+                // from the pencil icon whenever the touch-down wasn't
+                // exactly on its center pixel.
+                final double startOffsetPx =
+                    _instrumentDragStartPencilOffsetPx ?? distFromEdgeStart;
+                final Offset start = edge.$1 + edgeUnit * startOffsetPx;
                 _snappedEdgeStart = start;
-                _snappedEdgeVector = edge.$2 - edge.$1;
                 _currentLine = MathsPadLine(
                   points: [MathsPadStrokePoint(start)],
                   color: _selectedColor,
                   strokeWidth: _penWidth,
                 );
               }
-              final end = _projectPointOntoInfiniteLine(
-                worldPos,
-                _snappedEdgeStart!,
-                _snappedEdgeVector!,
-              );
+              // Ends exactly at the pencil's current rendered position --
+              // the same `newOffsetPx` the icon itself is drawn at -- so
+              // the drawn line always tracks/follows the visible pencil,
+              // instead of the raw touch position which can now differ
+              // from it (see `newOffsetPx`'s own doc comment above).
+              final Offset end = edge.$1 + edgeUnit * newOffsetPx;
               _currentLine!.points
                 ..clear()
                 ..add(MathsPadStrokePoint(_snappedEdgeStart!))
@@ -4618,8 +4739,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _lastCompassRawAngle = null;
       _compassCumulativeAngle = 0;
       _snappedEdgeStart = null;
-      _snappedEdgeVector = null;
       _pencilDragMoved = false;
+      _instrumentDragStartPencilOffsetPx = null;
+      _instrumentDragStartPencilProjectedPx = null;
+      _instrumentDragStartPencilAngle = null;
+      _instrumentDragStartPencilTouchAngle = null;
     });
   }
 
@@ -4958,7 +5082,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // Arm the long-press-to-paste timer for a single-finger press. If a
     // second pointer joins (2-finger pan) or the finger moves too far
     // before the timer fires, it gets cancelled in _onPointerMove below.
-    if (_activePointers.length == 1) {
+    // Android only -- every other platform either has a real keyboard
+    // (Ctrl+V) or, on iOS, its own native text/long-press paste affordance
+    // that this would just duplicate/conflict with.
+    if (!kIsWeb && Platform.isAndroid && _activePointers.length == 1) {
       _longPressPasteDownScreenPos = event.localPosition;
       _longPressPasteTimer?.cancel();
       _longPressPasteTimer = Timer(const Duration(milliseconds: 500), () {
@@ -6147,7 +6274,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       }
     }
     _snappedEdgeStart = null;
-    _snappedEdgeVector = null;
   }
 
   void _handleEraserButtonTap() {
@@ -8956,6 +9082,118 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               );
             },
           ),
+
+          // Ruler/Protractor: a magnified loupe near the pencil while it's
+          // being dragged -- shows a real zoomed view of the canvas right
+          // at the pencil's exact position (which the finger/stylus
+          // touching it usually obscures), with the live length/angle
+          // overlaid in the loupe's own bottom-right corner. Built with the
+          // framework's own `RawMagnifier` (the same widget that powers
+          // text-selection loupes) via `BackdropFilter`, so it's a genuine
+          // magnification of whatever's actually composited on screen --
+          // not a hand-drawn approximation -- and correctly tracks the
+          // canvas's own pan/zoom for free. Deliberately placed OUTSIDE the
+          // canvas's pan/zoom `Transform` above (in screen space) so the
+          // loupe itself stays a constant on-screen size regardless of
+          // canvas zoom level, same reasoning as the selection handles.
+          if ((_draggedInstrument is RulerState ||
+                  _draggedInstrument is ProtractorState) &&
+              _draggedHandle == 'pencil')
+            Builder(
+              builder: (context) {
+                final InstrumentState inst = _draggedInstrument!;
+                final Offset pencilWorldPos =
+                    inst.handleWorldPositions()['pencil']!;
+                final Offset pencilScreenPos =
+                    pencilWorldPos * _scale + _panOffset;
+
+                // Larger loupe + lower magnificationScale = same apparent
+                // field-of-view but each screen pixel in the loupe covers a
+                // smaller area of the source, giving noticeably sharper
+                // content (especially on hi-DPI displays). 200px at 1.8x is
+                // visually equivalent to 150px at 2.2x but much crisper.
+                const double magnifierSize = 200;
+                // Floats the loupe up and to the side of the pencil (along
+                // the instrument's own perpendicular) so the hand/stylus
+                // actually touching the pencil doesn't cover the loupe
+                // showing it.
+                final Offset dir = inst.rotatedLocal(1, 0) - inst.pivot;
+                final double dirLen = dir.distance;
+                final Offset normal = dirLen > 0
+                    ? Offset(-dir.dy, dir.dx) / dirLen
+                    : const Offset(0, -1);
+                final Offset loupeCenterScreen =
+                    pencilScreenPos + normal * -130;
+
+                // Whole degrees only, matching the pencil's own snapped
+                // movement (see `_updateInstrumentDrag`'s pencil branch) --
+                // it's always already an integer, so no decimal point.
+                final String measurementText = inst is RulerState
+                    ? _rulerLiveLengthText(inst)
+                    : '${(-(inst as ProtractorState).pencilAngle * 180 / pi).round()}°';
+
+                return Positioned(
+                  left: loupeCenterScreen.dx - magnifierSize / 2,
+                  top: loupeCenterScreen.dy - magnifierSize / 2,
+                  child: IgnorePointer(
+                    child: RawMagnifier(
+                      size: const Size(magnifierSize, magnifierSize),
+                      // 1.8x at 200px ≈ 2.2x at 150px in field-of-view, but
+                      // sharper: less upscaling per source pixel.
+                      magnificationScale: 1.8,
+                      // Tells the loupe to show the content AT the pencil's
+                      // screen position even though the loupe itself is
+                      // rendered offset away from it -- see the field's own
+                      // doc comment for the exact formula.
+                      focalPointOffset: pencilScreenPos - loupeCenterScreen,
+                      decoration: MagnifierDecoration(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: const BorderSide(
+                            color: Color(0xFF2563EB),
+                            width: 2.5,
+                          ),
+                        ),
+                        shadows: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.35),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      // antiAlias gives smooth rounded corners at any DPI,
+                      // hardEdge was aliased/jagged on hi-DPI displays.
+                      clipBehavior: Clip.antiAlias,
+                      child: Align(
+                        alignment: Alignment.bottomRight,
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2563EB),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              measurementText,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
 
           // Floating Active Stylus Barrel Eraser Alert
           if (_isStylusBarrelPressed)
