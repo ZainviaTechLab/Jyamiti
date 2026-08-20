@@ -1308,7 +1308,20 @@ class MathPadRecordingService extends ChangeNotifier {
 
         final StringBuffer segManifest = StringBuffer('ffconcat version 1.0\n');
         for (final seg in allSegments) {
-          final String safeSeg = seg.replaceAll(r'\', '/').replaceAll("'", r"\'");
+          // Inside an ffconcat `'...'`-quoted token, ffmpeg's own quoting
+          // rules ("ffmpeg-utils" -> Quoting and escaping) take everything
+          // between the quotes completely literally -- backslash is NOT an
+          // escape character there, so a Windows path's backslashes need
+          // no handling at all (converting them to `/` first is harmless
+          // but not required). The ONE character that can't appear inside
+          // `'...'` is `'` itself -- `\'` does NOT escape it (backslash
+          // means nothing in quoted mode), it just ends the quoted token
+          // early and corrupts the rest of the manifest line. The correct
+          // escape is the POSIX-shell-style close/escape/reopen trick:
+          // `'\''`.
+          final String safeSeg = seg
+              .replaceAll(r'\', '/')
+              .replaceAll("'", "'\\''");
           segManifest.writeln("file '$safeSeg'");
         }
         final File segManifestFile = File(
@@ -1531,7 +1544,14 @@ class MathPadRecordingService extends ChangeNotifier {
     while (_segmentSealInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
     }
-    await _audioRecorder.stop();
+    // `cancel()` can be reached from `waitingForEncodeChoice` too (after
+    // `stopCapture()` already stopped the mic), where the recorder plugin
+    // may throw on a redundant `.stop()` call -- caught here, matching
+    // `stopCapture()`'s own handling, so that can never leave `_state`
+    // stuck instead of settling back to `idle` below.
+    try {
+      await _audioRecorder.stop();
+    } catch (_) {}
     await _stopCameraCapture();
     _cameraEnabled = false;
     final Directory? sessionDir = _sessionDir;
