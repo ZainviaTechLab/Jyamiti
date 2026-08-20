@@ -49,6 +49,49 @@ enum SegmentSealMode {
   hybrid,
 }
 
+/// How many frames per second get *captured* (how finely a moving pen
+/// stroke is timestamped/deduped while recording) versus how many end up
+/// in the *final encoded video* (`-r`/`fps=` at encode time) -- these are
+/// two genuinely separate concerns that don't have to share one number.
+/// A long whiteboard recording is mostly static holds punctuated by short
+/// bursts of actual drawing; since [MathPadRecordingService._captureFrame]
+/// already collapses an unchanged board into one growing `duration` value
+/// instead of real duplicate frames, encoding still re-expands every
+/// second of that duration into real frames at whatever the *encode* rate
+/// is -- so the encode rate, not the capture rate, is what actually drives
+/// final file size and encode time. The tutor's choice is persisted
+/// locally (see [MathPadRecordingService.loadFrameRateMode]/
+/// `setFrameRateMode`) so it survives across sessions.
+enum RecordingFrameRateMode {
+  /// 60fps capture AND 60fps final video.
+  /// Benefit: the smoothest possible motion for a fast-moving pen stroke,
+  /// at both the sampling and playback stage.
+  /// Cost: the largest files and slowest encode of the three -- a mostly-
+  /// static 3-minute recording still gets ~10,800 real video frames baked
+  /// in, most of them near-duplicates of the frame before.
+  smooth60,
+
+  /// 30fps capture AND 30fps final video.
+  /// Benefit: roughly halves both file size and encode time versus
+  /// [smooth60] -- fewer frames captured, fewer frames encoded.
+  /// Cost: the only option where a fast stroke is also *sampled* coarser
+  /// (33ms between capture attempts instead of 16.7ms), not just played
+  /// back at a lower rate -- the small extra loss [balanced] avoids.
+  compact30,
+
+  /// 60fps capture, but only 30fps in the final encoded video.
+  /// Benefit: the same file-size/encode-time win as [compact30] (final
+  /// size is driven by the *encode* rate, not the capture rate), with
+  /// none of its downside -- a fast stroke is still sampled at the full
+  /// 60fps, ffmpeg just picks/downsamples from that finer source data
+  /// when producing the 30fps output, instead of never having captured
+  /// the in-between positions at all.
+  /// Cost: essentially none for this kind of content -- 24-30fps is the
+  /// normal rate for screen-recorded tutorials generally; 60fps video
+  /// was headroom this content never needed. The recommended default.
+  balanced,
+}
+
 class MathPadRecordingException implements Exception {
   final String message;
   MathPadRecordingException(this.message);
@@ -247,6 +290,7 @@ class MathPadRecordingService extends ChangeNotifier {
     // `hybrid` default for that one recording -- never worth blocking
     // construction over.
     unawaited(loadSegmentSealMode());
+    unawaited(loadFrameRateMode());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -283,14 +327,83 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [frameRateMode] from local storage, if any
+  /// was ever saved -- falls back to (and leaves unchanged) whatever
+  /// [frameRateMode] already is on any error or missing value.
+  Future<void> loadFrameRateMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kFrameRateModePrefKey);
+      if (saved == null) return;
+      frameRateMode = RecordingFrameRateMode.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => frameRateMode,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `frameRateMode` already was.
+    }
+  }
+
+  /// Changes [frameRateMode] and persists the choice locally so it's still
+  /// in effect the next time the app opens. The actual capture/encode fps
+  /// values for a given recording are snapshotted once, in `start()` --
+  /// changing this mid-recording (the settings UI disables that anyway)
+  /// wouldn't retroactively apply to one already running.
+  Future<void> setFrameRateMode(RecordingFrameRateMode mode) async {
+    frameRateMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kFrameRateModePrefKey, mode.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
   // elapsed time even on hardware that can't quite sustain a genuine
   // 60 unique captures/sec on a particularly busy board -- worst case it
   // holds a frame for an extra tick rather than falling behind or
-  // desyncing from the audio track.
-  static const int fps = 60;
+  // desyncing from the audio track. This is the CEILING -- the actual
+  // per-recording capture/encode rates are chosen from [frameRateMode]
+  // (see `_activeCaptureFps`/`_activeEncodeFps`, set in `start()`), not a
+  // single fixed constant any more.
+  static const int _kMaxFps = 60;
+  static const int _kCompactFps = 30;
+
+  /// The tutor's chosen frame-rate strategy -- defaults to
+  /// [RecordingFrameRateMode.balanced] until [loadFrameRateMode] (fired
+  /// from the constructor, best-effort) resolves whatever was actually
+  /// saved locally.
+  RecordingFrameRateMode frameRateMode = RecordingFrameRateMode.balanced;
+  static const String _kFrameRateModePrefKey = 'mathpad_recording_framerate_mode';
+
+  int _captureFpsFor(RecordingFrameRateMode mode) => switch (mode) {
+    RecordingFrameRateMode.smooth60 => _kMaxFps,
+    RecordingFrameRateMode.compact30 => _kCompactFps,
+    RecordingFrameRateMode.balanced => _kMaxFps,
+  };
+
+  int _encodeFpsFor(RecordingFrameRateMode mode) => switch (mode) {
+    RecordingFrameRateMode.smooth60 => _kMaxFps,
+    RecordingFrameRateMode.compact30 => _kCompactFps,
+    RecordingFrameRateMode.balanced => _kCompactFps,
+  };
+
+  // Snapshotted once in `start()` from `frameRateMode` -- capture cadence
+  // (`_activeCaptureFps`) and the final encoded video's frame rate
+  // (`_activeEncodeFps`, carried through to `_capturedEncodeFps` for the
+  // deferred `encode()` step) deliberately don't have to match; see
+  // `RecordingFrameRateMode`'s doc comment for why. Default to
+  // `balanced`'s values until a real recording sets them.
+  int _activeCaptureFps = _kMaxFps;
+  int _activeEncodeFps = _kCompactFps;
+  int _capturedEncodeFps = _kCompactFps;
+
   // Never capture at a higher resolution than this on the long edge --
   // recording at the full raw devicePixelRatio (2x-3x+ on many modern
   // Windows displays) roughly quadruples PNG-encode/disk-write time per
@@ -650,6 +763,13 @@ class MathPadRecordingService extends ChangeNotifier {
       DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
     );
 
+    // Snapshotted once here from `frameRateMode` -- see
+    // `RecordingFrameRateMode`'s doc comment. Fixed for this recording's
+    // whole duration even if the tutor changes the setting afterward
+    // (the settings UI disables the picker while a recording is active).
+    _activeCaptureFps = _captureFpsFor(frameRateMode);
+    _activeEncodeFps = _encodeFpsFor(frameRateMode);
+
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
     _frameCount = 0;
@@ -758,7 +878,7 @@ class MathPadRecordingService extends ChangeNotifier {
     // fire during that stretch, and the video would desync from the
     // real-time-length audio track.
     _frameTimer = Timer.periodic(
-      const Duration(milliseconds: 1000 ~/ fps),
+      Duration(milliseconds: 1000 ~/ _activeCaptureFps),
       (_) => _captureFrame(),
     );
 
@@ -776,7 +896,9 @@ class MathPadRecordingService extends ChangeNotifier {
 
   int _targetFrameCountNow() {
     if (_startedAt == null) return 0;
-    return (DateTime.now().difference(_startedAt!).inMilliseconds * fps / 1000)
+    return (DateTime.now().difference(_startedAt!).inMilliseconds *
+                _activeCaptureFps /
+                1000)
         .floor();
   }
 
@@ -845,7 +967,7 @@ class MathPadRecordingService extends ChangeNotifier {
           // genuinely different frame gets written and starts a new entry.
           final int fillTo = max(_targetFrameCountNow(), _frameCount + 1);
           final int slotsElapsed = fillTo - _frameCount;
-          final double durationSeconds = slotsElapsed / fps;
+          final double durationSeconds = slotsElapsed / _activeCaptureFps;
 
           final bool sameAsLast =
               _lastFrameBytes != null && _bytesEqual(_lastFrameBytes!, pngBytes);
@@ -873,7 +995,7 @@ class MathPadRecordingService extends ChangeNotifier {
         final int fillTo = max(_targetFrameCountNow(), _frameCount + 1);
         final int slotsElapsed = fillTo - _frameCount;
         if (slotsElapsed > 0) {
-          final double durationSeconds = slotsElapsed / fps;
+          final double durationSeconds = slotsElapsed / _activeCaptureFps;
           _concatEntries.last.durationSeconds += durationSeconds;
           _frameCount = fillTo;
         }
@@ -903,6 +1025,7 @@ class MathPadRecordingService extends ChangeNotifier {
     required String outPath,
     required String preset,
     required String crf,
+    required int encodeFps,
   }) async {
     if (entries.isEmpty) return false;
     try {
@@ -925,7 +1048,7 @@ class MathPadRecordingService extends ChangeNotifier {
         '-f', 'concat',
         '-safe', '0',
         '-i', manifestFile.path,
-        '-r', '$fps',
+        '-r', '$encodeFps',
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-c:v', 'libx264',
         '-pix_fmt', 'yuv420p',
@@ -1002,13 +1125,14 @@ class MathPadRecordingService extends ChangeNotifier {
       // single-pass path both use -- every segment in a recording (sealed
       // in the background or the leftover tail encoded once stopped) is
       // encoded identically, so there's nothing to reconcile at `encode()`
-      // time.
+      // time. `_activeEncodeFps` -- this runs live, mid-recording.
       final bool ok = await _encodeSegment(
         sessionDir: dir,
         entries: toSeal,
         outPath: segmentPath,
         preset: 'veryfast',
         crf: '20',
+        encodeFps: _activeEncodeFps,
       );
       if (ok) {
         _sealedSegmentPaths.add(segmentPath);
@@ -1085,6 +1209,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedCameraStartOffsetSeconds = _cameraStartOffsetSeconds;
     _capturedSealedSegmentPaths = List.of(_sealedSegmentPaths);
     _capturedSealedConcatEntryCount = _sealedConcatEntryCount;
+    _capturedEncodeFps = _activeEncodeFps;
 
     _canvasKey = null;
     _sessionDir = null;
@@ -1211,6 +1336,7 @@ class MathPadRecordingService extends ChangeNotifier {
     final String? audioPath = _capturedAudioPath;
     final double audioStartOffsetSeconds = _capturedAudioStartOffsetSeconds;
     final double cameraStartOffsetSeconds = _capturedCameraStartOffsetSeconds;
+    final int encodeFps = _capturedEncodeFps;
 
     _state = MathPadRecordingState.encoding;
     _emit();
@@ -1302,6 +1428,7 @@ class MathPadRecordingService extends ChangeNotifier {
             outPath: tailPath,
             preset: 'veryfast',
             crf: '20',
+            encodeFps: encodeFps,
           );
           if (tailOk) allSegments.add(tailPath);
         }
@@ -1392,7 +1519,7 @@ class MathPadRecordingService extends ChangeNotifier {
             // duplication at encode time), unlike materializing those
             // same duplicate frames as files up front the way this used
             // to work.
-            '-r', '$fps',
+            '-r', '$encodeFps',
             // yuv420p (4:2:0 chroma subsampling) requires both dimensions
             // to be even -- the captured canvas size is whatever the
             // window happens to be, which is very often NOT even in both
@@ -1469,7 +1596,7 @@ class MathPadRecordingService extends ChangeNotifier {
         // its last frame if the camera feed happens to be a touch shorter
         // than the canvas video, rather than cutting the output short.
         final String filterComplex =
-            '[0:v]fps=$fps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
+            '[0:v]fps=$encodeFps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
             '[$cameraInputIndex:v]crop=ih:ih,scale=w=240:h=240,'
             'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
             '[base][cam]overlay=x=main_w-overlay_w-24:y=24[outv]';
@@ -1679,8 +1806,8 @@ class MathPadRecordingService extends ChangeNotifier {
   // compared at whole-second resolution -- see that method's doc comment.
   Duration _lastEmittedElapsed = Duration.zero;
 
-  /// `_captureFrame` calls this (not `_emit`) on every tick -- up to `fps`
-  /// (60) times/sec, from both the persistent-frame-callback and the
+  /// `_captureFrame` calls this (not `_emit`) on every tick -- up to
+  /// `_activeCaptureFps` times/sec, from both the persistent-frame-callback and the
   /// `Timer.periodic` backstop -- purely to keep `elapsed` bookkeeping
   /// current. Broadcasting a `notifyListeners()` on every one of those
   /// ticks forces `mathpad.dart`'s listener to `setState()` the entire

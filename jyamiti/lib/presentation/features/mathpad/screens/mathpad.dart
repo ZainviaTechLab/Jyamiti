@@ -10754,6 +10754,46 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       ],
                     ),
                     const SizedBox(width: 8),
+                    // Capture vs. final-video frame rate (see
+                    // `RecordingFrameRateMode`) -- also locked while a
+                    // recording is in progress, same reasoning as above.
+                    PopupMenuButton<RecordingFrameRateMode>(
+                      tooltip: 'Recording: frame rate',
+                      enabled: _recordingState == MathPadRecordingState.idle,
+                      icon: Icon(
+                        Icons.video_settings_rounded,
+                        size: 20,
+                        color: _recordingState == MathPadRecordingState.idle
+                            ? _textColor
+                            : _textColor60,
+                      ),
+                      color: isDark ? _darkPanelColor : Colors.white,
+                      onSelected: (mode) {
+                        setState(() {
+                          unawaited(_recordingService.setFrameRateMode(mode));
+                        });
+                      },
+                      itemBuilder: (ctx) => [
+                        _frameRateModeMenuItem(
+                          RecordingFrameRateMode.balanced,
+                          'Balanced (Recommended)',
+                          '60fps sampling, 30fps video -- smaller files, same '
+                              'smoothness as 60/60',
+                        ),
+                        _frameRateModeMenuItem(
+                          RecordingFrameRateMode.smooth60,
+                          '60 fps',
+                          'Smoothest motion, largest files -- full 60fps sampling and video',
+                        ),
+                        _frameRateModeMenuItem(
+                          RecordingFrameRateMode.compact30,
+                          '30 fps',
+                          'Smallest files -- 30fps sampling and video, slightly '
+                              'coarser on fast strokes',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
                     if (_recordingState == MathPadRecordingState.recording)
                       IconButton(
                         icon: const Icon(
@@ -10908,6 +10948,55 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   ) {
     final bool selected = _recordingService.segmentSealMode == mode;
     return PopupMenuItem<SegmentSealMode>(
+      value: mode,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            selected
+                ? Icons.radio_button_checked_rounded
+                : Icons.radio_button_unchecked_rounded,
+            size: 18,
+            color: selected ? const Color(0xFF6366F1) : _textColor60,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: _textColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  description,
+                  style: TextStyle(color: _textColor60, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One row in the recording-frame-rate popup (see
+  /// `RecordingFrameRateMode`'s own doc comment for the full benefit/cost
+  /// breakdown of each option) -- same label/description/radio-dot layout
+  /// as `_segmentSealModeMenuItem` above.
+  PopupMenuItem<RecordingFrameRateMode> _frameRateModeMenuItem(
+    RecordingFrameRateMode mode,
+    String label,
+    String description,
+  ) {
+    final bool selected = _recordingService.frameRateMode == mode;
+    return PopupMenuItem<RecordingFrameRateMode>(
       value: mode,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
