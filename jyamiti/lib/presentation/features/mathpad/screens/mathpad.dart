@@ -1507,11 +1507,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // 0..1 while `_recordingState == encoding` -- drives the neon progress
   // bar under the top bar, see `_buildEncodingProgressBar`.
   double _encodingProgress = 0.0;
-  // Shown in the encoding badge -- swaps to "Adding camera…" for the
-  // second overlay pass of a camera-enabled recording (see
-  // `MathPadRecordingService.onEncodingPhaseChanged`); stays "Encoding…"
-  // the whole time for a plain recording, so that badge text is
-  // completely unchanged from before this field existed.
+  // Shown in the encoding badge -- a camera-enabled recording is baked
+  // into the same single ffmpeg pass as everything else now (see
+  // `MathPadRecordingService.encode`), so this just stays "Encoding…" the
+  // whole time.
   String _encodingPhaseLabel = 'Encoding…';
   // Opt-in toggle next to the record button -- OFF by default, so a
   // recording behaves exactly as it always has unless the tutor
