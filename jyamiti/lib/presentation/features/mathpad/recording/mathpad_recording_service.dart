@@ -17,7 +17,14 @@ import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:win32/win32.dart' as win32;
 
-enum MathPadRecordingState { idle, recording, waitingForEncodeChoice, encoding }
+/// Purely about whether a *capture* is in progress -- `idle` means a new
+/// recording can be started, `recording` means one already is. Encoding
+/// (what happens after a recording is stopped) is deliberately NOT part of
+/// this state any more -- it runs as an independent background job (see
+/// [MathPadRecordingService.isEncoding]/`onEncodeSaved`/`onEncodeFailed`),
+/// so the tutor can start the next recording immediately after stopping
+/// one instead of waiting for it to finish encoding.
+enum MathPadRecordingState { idle, recording }
 
 /// How `_evaluateSegmentSeal` decides when to fold captured frames into a
 /// background-encoded segment during a recording -- see the "Real-time
@@ -126,20 +133,24 @@ class MathPadRecordingException implements Exception {
 /// the tutor talks, or a slow capture falling behind) is just added as
 /// extra hold-duration on that existing frame, tracked in `_concatEntries`.
 /// This keeps both disk I/O during a long recording and ffmpeg's work at
-/// `stop()` proportional to how much actually changed on the board, not to
-/// how long the recording ran. [stop] hands that frame set (as a concat
-/// manifest -- see `stop()`) + the recorded WAV audio to a bundled
-/// `ffmpeg.exe` (installed next to the app exe by the Windows build, see
-/// `windows/CMakeLists.txt`) to mux/encode into the final video.
+/// encode time proportional to how much actually changed on the board, not
+/// to how long the recording ran. [stopCapture] hands that frame set (as a
+/// concat manifest) + the recorded WAV audio off to a background encode
+/// queue, which uses a bundled `ffmpeg.exe` (installed next to the app exe
+/// by the Windows build, see `windows/CMakeLists.txt`) to mux/encode into
+/// the final video -- [stopCapture] itself returns as soon as the capture
+/// side is done, well before that encode finishes, so a new recording can
+/// start immediately; see the "Background encoding queue" fields' doc
+/// comment for how that's kept safe.
 ///
 /// For a recording longer than one `_kSegmentSealInterval`, most of that
 /// final encode has actually already happened WHILE recording was still
 /// running: `_maybeSealSegment` periodically folds everything captured so
 /// far into a small, already-finished video segment in the background (see
-/// its own doc comment), so `encode()` only has real encoding work left to
-/// do for the last short leftover tail -- everything sealed before that
-/// gets joined in with a fast stream-copy concat instead of being decoded
-/// and re-encoded from scratch. A short recording (under one seal
+/// its own doc comment), so `_runEncodeJob` only has real encoding work
+/// left to do for the last short leftover tail -- everything sealed before
+/// that gets joined in with a fast stream-copy concat instead of being
+/// decoded and re-encoded from scratch. A short recording (under one seal
 /// interval) never has anything sealed, and transparently falls back to
 /// the original single full-encode pass with no behaviour change.
 // ─── Windows Job Object: kill-on-close safety net for spawned ffmpeg
@@ -396,13 +407,12 @@ class MathPadRecordingService extends ChangeNotifier {
 
   // Snapshotted once in `start()` from `frameRateMode` -- capture cadence
   // (`_activeCaptureFps`) and the final encoded video's frame rate
-  // (`_activeEncodeFps`, carried through to `_capturedEncodeFps` for the
-  // deferred `encode()` step) deliberately don't have to match; see
-  // `RecordingFrameRateMode`'s doc comment for why. Default to
-  // `balanced`'s values until a real recording sets them.
+  // (`_activeEncodeFps`, carried into each recording's own
+  // `_CapturedRecording.encodeFps` at `stopCapture()` time) deliberately
+  // don't have to match; see `RecordingFrameRateMode`'s doc comment for
+  // why. Default to `balanced`'s values until a real recording sets them.
   int _activeCaptureFps = _kMaxFps;
   int _activeEncodeFps = _kCompactFps;
-  int _capturedEncodeFps = _kCompactFps;
 
   // Never capture at a higher resolution than this on the long edge --
   // recording at the full raw devicePixelRatio (2x-3x+ on many modern
@@ -434,14 +444,6 @@ class MathPadRecordingService extends ChangeNotifier {
   // in `start()` for what each one actually bounds.
   double _audioStartOffsetSeconds = 0.0;
   double _cameraStartOffsetSeconds = 0.0;
-
-  // Intermediate state for delayed encode choice
-  List<_ConcatEntry>? _capturedConcatEntries;
-  Directory? _capturedSessionDir;
-  bool _capturedCameraWasEnabled = false;
-  String? _capturedAudioPath;
-  double _capturedAudioStartOffsetSeconds = 0.0;
-  double _capturedCameraStartOffsetSeconds = 0.0;
 
   // Byte-for-byte content of the most recently *written* frame, so an
   // unchanged board (the tutor pausing to talk, or a slow capture falling
@@ -502,8 +504,6 @@ class MathPadRecordingService extends ChangeNotifier {
   // board stays unchanged, so sealing it while it might still be growing
   // would permanently drop whatever hold-time arrives after the seal.
   int _sealedConcatEntryCount = 0;
-  List<String>? _capturedSealedSegmentPaths;
-  int _capturedSealedConcatEntryCount = 0;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -516,8 +516,30 @@ class MathPadRecordingService extends ChangeNotifier {
   MathPadRecordingState get state => _state;
   Duration elapsed = Duration.zero;
 
-  /// 0..1 once encoding starts producing real output -- parsed from
-  /// ffmpeg's own `-progress` stream in `stop()`, not estimated.
+  // ─── Background encoding queue ──────────────────────────────────────────
+  // Deliberately independent of `_state` -- `stopCapture()` resets `_state`
+  // to `idle` immediately (see its doc comment) and hands the captured
+  // recording off to this queue, so the tutor can hit Record again right
+  // away instead of watching a disabled button until encoding finishes.
+  // Jobs run one at a time, chained through `_encodeChainTail`, rather than
+  // fully in parallel -- ffmpeg encoding is CPU-heavy, and letting two jobs
+  // (or a job and a live recording's own background segment seals) fight
+  // over the same cores at once would just make everything slower, not
+  // faster. A backlog of stopped-but-not-yet-encoded recordings simply
+  // works through the queue in the order they were stopped.
+  int _pendingEncodeCount = 0;
+
+  /// Whether any recording is currently queued or actively being encoded
+  /// in the background -- independent of [state], which only reflects
+  /// whether a new recording could be *started* right now.
+  bool get isEncoding => _pendingEncodeCount > 0;
+
+  Future<void> _encodeChainTail = Future<void>.value();
+
+  /// 0..1 for whichever encode job is currently actively processing --
+  /// parsed from ffmpeg's own `-progress` stream, not estimated. If more
+  /// than one job is queued, this reflects only the one presently running;
+  /// queued-but-not-yet-started jobs don't have a progress value yet.
   double encodingProgress = 0.0;
 
   /// Current human-readable encoding status (e.g. "Encoding…", "Adding camera…")
@@ -528,9 +550,22 @@ class MathPadRecordingService extends ChangeNotifier {
   void Function(MathPadRecordingState state, Duration elapsed)? onUpdate;
 
   /// Called (throttled to a few times a second) with `encodingProgress`
-  /// while `state == encoding`, so the UI can show a real percentage
+  /// while [isEncoding] is true, so the UI can show a real percentage
   /// instead of an indeterminate spinner.
   void Function(double progress)? onEncodingProgress;
+
+  /// Fired when a background encode job finishes successfully, with the
+  /// path the video was saved to. May fire well after the recording that
+  /// produced it was stopped, and possibly while a newer recording is
+  /// already in progress -- the UI shouldn't assume this refers to
+  /// "whatever I most recently stopped."
+  void Function(String path)? onEncodeSaved;
+
+  /// Fired when a background encode job fails outright (as opposed to a
+  /// camera-only problem, which stays on [onCameraWarning] and still
+  /// produces a usable camera-less video) -- e.g. nothing was captured, or
+  /// ffmpeg itself failed. The recording is unrecoverable at that point.
+  void Function(String message)? onEncodeFailed;
 
   /// Fired if a `start(includeCamera: true)` recording's camera couldn't
   /// be captured or added to the final video, for any reason (no webcam,
@@ -539,14 +574,6 @@ class MathPadRecordingService extends ChangeNotifier {
   /// the tutor the actual recording (which is already saved by the time
   /// any camera-overlay failure could happen).
   void Function(String message)? onCameraWarning;
-
-  /// Fired only during a camera-enabled recording's `stop()`, right as
-  /// encoding moves from the normal canvas pass into the second
-  /// camera-overlay pass -- lets the UI swap "Encoding…" for something
-  /// like "Adding camera…" instead of the progress bar silently
-  /// restarting from 0% with no explanation. Never fired at all for a
-  /// plain recording, so existing (no-camera) UI text is unaffected.
-  void Function(String label)? onEncodingPhaseChanged;
 
   /// Windows-only feature -- no bundled ffmpeg exists for other platforms,
   /// and mobile/web would need an entirely different capture mechanism.
@@ -1171,6 +1198,14 @@ class MathPadRecordingService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Stops the current capture and hands it off to the background encode
+  /// queue -- returns as soon as the *capture* side is done, well before
+  /// the video is actually encoded. [state] is back to `idle` by the time
+  /// this returns, so the tutor can hit Record again immediately; the
+  /// outcome of the encode itself arrives later via [onEncodeSaved] /
+  /// [onEncodeFailed] (and, for a camera recording, possibly
+  /// [onCameraWarning] too), whenever the background job actually gets to
+  /// it and finishes.
   Future<void> stopCapture() async {
     if (_state != MathPadRecordingState.recording) {
       throw MathPadRecordingException('Not currently recording.');
@@ -1188,7 +1223,7 @@ class MathPadRecordingService extends ChangeNotifier {
     // instant `_frameTimer` above is cancelled (no more frame slots get
     // timed after this). If the mic kept recording through that wait
     // before being told to stop, the audio file would end up measurably
-    // longer than the video, and `encode()`'s `-shortest` mux flag would
+    // longer than the video, and the encode's `-shortest` mux flag would
     // then silently truncate that extra tail off the *audio* to match the
     // now-shorter video -- clipping exactly the last moment of narration
     // right as the tutor says whatever they were saying when they hit
@@ -1202,25 +1237,31 @@ class MathPadRecordingService extends ChangeNotifier {
     }
 
     // Let any in-flight frame capture -- and any in-flight background
-    // segment seal -- finish before we freeze state, so `encode()` always
-    // sees a fully consistent `_sealedSegmentPaths`/`_sealedConcatEntryCount`
-    // pair (a seal that's still mid-flight when this runs could otherwise
-    // finish afterward and mutate state nobody's looking at anymore).
+    // segment seal -- finish before we snapshot state below, so the
+    // captured data always reflects a fully consistent
+    // `sealedSegmentPaths`/`sealedConcatEntryCount` pair (a seal that's
+    // still mid-flight when this runs could otherwise finish afterward and
+    // mutate state nobody's looking at anymore).
     while (_captureInFlight || _segmentSealInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
     }
 
     await _stopCameraCapture();
 
-    _capturedConcatEntries = List.of(_concatEntries);
-    _capturedSessionDir = _sessionDir;
-    _capturedCameraWasEnabled = _cameraEnabled;
-    _capturedAudioPath = audioPath;
-    _capturedAudioStartOffsetSeconds = _audioStartOffsetSeconds;
-    _capturedCameraStartOffsetSeconds = _cameraStartOffsetSeconds;
-    _capturedSealedSegmentPaths = List.of(_sealedSegmentPaths);
-    _capturedSealedConcatEntryCount = _sealedConcatEntryCount;
-    _capturedEncodeFps = _activeEncodeFps;
+    // A self-contained snapshot -- NOT stored on `this` -- see
+    // `_CapturedRecording`'s doc comment for why that distinction is what
+    // actually makes concurrent recording+encoding safe.
+    final _CapturedRecording captured = _CapturedRecording(
+      concatEntries: List.of(_concatEntries),
+      sessionDir: _sessionDir!,
+      cameraWasEnabled: _cameraEnabled,
+      audioPath: audioPath,
+      audioStartOffsetSeconds: _audioStartOffsetSeconds,
+      cameraStartOffsetSeconds: _cameraStartOffsetSeconds,
+      sealedSegmentPaths: List.of(_sealedSegmentPaths),
+      sealedConcatEntryCount: _sealedConcatEntryCount,
+      encodeFps: _activeEncodeFps,
+    );
 
     _canvasKey = null;
     _sessionDir = null;
@@ -1238,8 +1279,42 @@ class MathPadRecordingService extends ChangeNotifier {
     _audioStartOffsetSeconds = 0.0;
     _cameraStartOffsetSeconds = 0.0;
 
-    _state = MathPadRecordingState.waitingForEncodeChoice;
+    // Back to `idle` right away -- a new recording can start this instant,
+    // regardless of whether anything is still encoding in the background.
+    _state = MathPadRecordingState.idle;
     _emit();
+
+    if (captured.concatEntries.isEmpty) {
+      // Nothing to encode -- report it the same way a real encode failure
+      // would, rather than leaving the tutor with no feedback at all.
+      if (await captured.sessionDir.exists()) {
+        await captured.sessionDir.delete(recursive: true);
+      }
+      onEncodeFailed?.call(
+        'Nothing was captured -- the recording was too short.',
+      );
+      return;
+    }
+
+    unawaited(_enqueueEncode(captured));
+  }
+
+  /// Chains [job] onto the background encode queue so it starts only once
+  /// every previously-enqueued job has finished -- see the "Background
+  /// encoding queue" fields' doc comment above for why this is serialized
+  /// rather than fully parallel.
+  Future<void> _enqueueEncode(_CapturedRecording job) {
+    _pendingEncodeCount++;
+    notifyListeners();
+    final Future<void> runThis = _encodeChainTail.then(
+      (_) => _runEncodeJob(job),
+    );
+    // `_runEncodeJob` already catches and reports its own failures via
+    // `onEncodeFailed` -- this is just a last-resort safety net so a truly
+    // unexpected exception can never break the chain for jobs queued after
+    // it.
+    _encodeChainTail = runThis.catchError((_) {});
+    return runThis;
   }
 
   /// Runs ffmpeg with [args], parsing its `-progress pipe:1` stdout stream
@@ -1324,47 +1399,37 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
-  /// Encodes the captured frames and audio into an .mp4 via the bundled
-  /// ffmpeg. If a camera was recorded, it's overlaid as part of this same
-  /// ffmpeg pass (one `filter_complex` graph) rather than as a second,
-  /// separate re-encode of an already-finished canvas video -- overlaying
-  /// requires decoding either way (a filter graph can't run on a `-c:v
-  /// copy` compressed stream), so doing it in one pass here means paying
-  /// that decode+encode cost exactly once, instead of once for a
-  /// camera-less canvas video and then again to decode that back and stamp
-  /// the camera on top of it. If the combined pass fails for any reason,
-  /// this falls back to a plain camera-less encode so the tutor still gets
-  /// a usable recording (see the `catch` around `encodeCanvasWithCamera`
-  /// below).
-  Future<String> encode() async {
-    if (_state != MathPadRecordingState.waitingForEncodeChoice) {
-      throw MathPadRecordingException('Not waiting for encode.');
-    }
+  /// Encodes one already-stopped recording's captured frames and audio
+  /// into an .mp4 via the bundled ffmpeg -- called only from the
+  /// background queue (`_enqueueEncode`), never directly; a caller wanting
+  /// to record and be told the outcome should go through `stopCapture()`
+  /// and [onEncodeSaved]/[onEncodeFailed] instead. If a camera was
+  /// recorded, it's overlaid as part of this same ffmpeg pass (one
+  /// `filter_complex` graph) rather than as a second, separate re-encode
+  /// of an already-finished canvas video -- overlaying requires decoding
+  /// either way (a filter graph can't run on a `-c:v copy` compressed
+  /// stream), so doing it in one pass here means paying that decode+encode
+  /// cost exactly once, instead of once for a camera-less canvas video and
+  /// then again to decode that back and stamp the camera on top of it. If
+  /// the combined pass fails for any reason, this falls back to a plain
+  /// camera-less encode so the tutor still gets a usable recording (see
+  /// the `catch` around `encodeCanvasWithCamera` below).
+  Future<void> _runEncodeJob(_CapturedRecording data) async {
+    final List<_ConcatEntry> concatEntries = data.concatEntries;
+    final Directory sessionDir = data.sessionDir;
+    final bool cameraWasEnabled = data.cameraWasEnabled;
+    final String? audioPath = data.audioPath;
+    final double audioStartOffsetSeconds = data.audioStartOffsetSeconds;
+    final double cameraStartOffsetSeconds = data.cameraStartOffsetSeconds;
+    final int encodeFps = data.encodeFps;
 
-    final List<_ConcatEntry> concatEntries = _capturedConcatEntries ?? [];
-    final Directory sessionDir = _capturedSessionDir!;
-    final bool cameraWasEnabled = _capturedCameraWasEnabled;
-    final String? audioPath = _capturedAudioPath;
-    final double audioStartOffsetSeconds = _capturedAudioStartOffsetSeconds;
-    final double cameraStartOffsetSeconds = _capturedCameraStartOffsetSeconds;
-    final int encodeFps = _capturedEncodeFps;
-
-    _state = MathPadRecordingState.encoding;
-    _emit();
+    encodingProgress = 0.0;
+    notifyListeners();
 
     Future<void> cleanup() async {
       if (await sessionDir.exists()) {
         await sessionDir.delete(recursive: true);
       }
-    }
-
-    if (concatEntries.isEmpty) {
-      await cleanup();
-      _state = MathPadRecordingState.idle;
-      _emit();
-      throw MathPadRecordingException(
-        'Nothing was captured -- the recording was too short.',
-      );
     }
 
     try {
@@ -1406,15 +1471,15 @@ class MathPadRecordingService extends ChangeNotifier {
         (sum, e) => sum + e.durationSeconds,
       );
 
-      final List<String> sealedSegments = _capturedSealedSegmentPaths ?? const [];
+      final List<String> sealedSegments = data.sealedSegmentPaths;
       // The unsealed leftover tail -- everything captured after the last
       // background seal (see `_sealedConcatEntryCount`'s doc comment). When
       // nothing was ever sealed (a short recording, under one seal
       // interval), this is simply every captured entry, and the raw-stills
       // branch below handles it exactly as it always has.
       final List<_ConcatEntry> tailEntries =
-          concatEntries.length > _capturedSealedConcatEntryCount
-          ? concatEntries.sublist(_capturedSealedConcatEntryCount)
+          concatEntries.length > data.sealedConcatEntryCount
+          ? concatEntries.sublist(data.sealedConcatEntryCount)
           : const [];
 
       // The canvas source, as an ffmpeg concat-demuxer manifest -- either
@@ -1657,21 +1722,26 @@ class MathPadRecordingService extends ChangeNotifier {
       }
 
       await _generateThumbnail(outPath);
-      return outPath;
+      onEncodeSaved?.call(outPath);
+    } on MathPadRecordingException catch (e) {
+      onEncodeFailed?.call(e.message);
+    } catch (e) {
+      onEncodeFailed?.call('Encoding failed: $e');
     } finally {
       encodingProgress = 0.0;
       await cleanup();
-      _state = MathPadRecordingState.idle;
-      _emit();
+      _pendingEncodeCount--;
+      notifyListeners();
     }
   }
 
-  /// Discards an in-progress recording without encoding anything.
+  /// Discards a currently-*live* recording without encoding anything --
+  /// does not touch any recording that's already been stopped and handed
+  /// off to the background encode queue (there's no longer a transitional
+  /// window where one sits unencoded waiting on the caller; `stopCapture()`
+  /// enqueues it immediately). To cancel while still recording only.
   Future<void> cancel() async {
-    if (_state != MathPadRecordingState.recording &&
-        _state != MathPadRecordingState.waitingForEncodeChoice) {
-      return;
-    }
+    if (_state != MathPadRecordingState.recording) return;
     _frameTimer?.cancel();
     _frameTimer = null;
     _segmentSealTimer?.cancel();
@@ -1682,22 +1752,13 @@ class MathPadRecordingService extends ChangeNotifier {
     while (_segmentSealInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
     }
-    // `cancel()` can be reached from `waitingForEncodeChoice` too (after
-    // `stopCapture()` already stopped the mic), where the recorder plugin
-    // may throw on a redundant `.stop()` call -- caught here, matching
-    // `stopCapture()`'s own handling, so that can never leave `_state`
-    // stuck instead of settling back to `idle` below.
     try {
       await _audioRecorder.stop();
     } catch (_) {}
     await _stopCameraCapture();
     _cameraEnabled = false;
     final Directory? sessionDir = _sessionDir;
-    final Directory? capturedSessionDir = _capturedSessionDir;
     _sessionDir = null;
-    _capturedSessionDir = null;
-    _capturedConcatEntries = null;
-    _capturedSealedSegmentPaths = null;
     _canvasKey = null;
     _lastFrameBytes = null;
     _concatEntries.clear();
@@ -1710,19 +1771,16 @@ class MathPadRecordingService extends ChangeNotifier {
     if (sessionDir != null && await sessionDir.exists()) {
       await sessionDir.delete(recursive: true);
     }
-    if (capturedSessionDir != null && await capturedSessionDir.exists()) {
-      await capturedSessionDir.delete(recursive: true);
-    }
     _state = MathPadRecordingState.idle;
     _emit();
   }
 
   /// Purely cosmetic and strictly best-effort -- by the time this runs, the
   /// actual recording is already safely saved at [videoPath], so nothing in
-  /// here is allowed to throw back out to `encode()`'s caller. A missing
+  /// here is allowed to throw back out to `_runEncodeJob`. A missing
   /// thumbnail just means the library falls back to a placeholder icon; it
-  /// must never turn an otherwise-successful "recording saved" result into
-  /// a reported failure.
+  /// must never turn an otherwise-successful [onEncodeSaved] into an
+  /// [onEncodeFailed] instead.
   Future<void> _generateThumbnail(String videoPath) async {
     try {
       final String ffmpegPath = _resolveFfmpegPath();
@@ -1852,6 +1910,39 @@ class _ConcatEntry {
   final String fileName;
   double durationSeconds;
   _ConcatEntry(this.fileName, this.durationSeconds);
+}
+
+/// Everything `_runEncodeJob` needs, snapshotted once by `stopCapture` as a
+/// plain, self-contained, immutable value -- NOT stored on the service
+/// instance the way it used to be. That's what actually lets a new
+/// recording `start()` immediately after `stopCapture()`: the old
+/// single-shared-fields design (`_capturedConcatEntries`, etc.) would have
+/// been overwritten by the next recording's own `stopCapture()` before a
+/// slow background encode job got a chance to read them. Each job now
+/// carries its own copy, so any number of them can be queued/in flight
+/// with zero risk of one clobbering another's data.
+class _CapturedRecording {
+  final List<_ConcatEntry> concatEntries;
+  final Directory sessionDir;
+  final bool cameraWasEnabled;
+  final String? audioPath;
+  final double audioStartOffsetSeconds;
+  final double cameraStartOffsetSeconds;
+  final List<String> sealedSegmentPaths;
+  final int sealedConcatEntryCount;
+  final int encodeFps;
+
+  _CapturedRecording({
+    required this.concatEntries,
+    required this.sessionDir,
+    required this.cameraWasEnabled,
+    required this.audioPath,
+    required this.audioStartOffsetSeconds,
+    required this.cameraStartOffsetSeconds,
+    required this.sealedSegmentPaths,
+    required this.sealedConcatEntryCount,
+    required this.encodeFps,
+  });
 }
 
 /// Manual length-then-contents comparison (early-exits on the first

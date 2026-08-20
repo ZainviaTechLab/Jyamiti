@@ -1089,8 +1089,7 @@ class _TutorRecordingsScreenState extends State<TutorRecordingsScreen> {
 
     return Consumer<MathPadRecordingService>(
       builder: (context, recordingService, _) {
-        final bool isEncoding =
-            recordingService.state == MathPadRecordingState.encoding;
+        final bool isEncoding = recordingService.isEncoding;
 
         return Scaffold(
           backgroundColor: Colors.transparent,
