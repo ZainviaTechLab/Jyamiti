@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:ffi/ffi.dart' as ffi2;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -13,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:win32/win32.dart' as win32;
 
 enum MathPadRecordingState { idle, recording, waitingForEncodeChoice, encoding }
 
@@ -96,6 +99,146 @@ class MathPadRecordingException implements Exception {
 /// and re-encoded from scratch. A short recording (under one seal
 /// interval) never has anything sealed, and transparently falls back to
 /// the original single full-encode pass with no behaviour change.
+// ─── Windows Job Object: kill-on-close safety net for spawned ffmpeg
+// processes ──────────────────────────────────────────────────────────────
+// `Process.start` on Windows does not tie a child process's lifetime to
+// this app's -- if `jyamiti.exe` is hard-killed (Task Manager "End Task",
+// a crash, a forced restart) instead of exiting normally, any ffmpeg child
+// still running keeps right on running as an orphan. That matters most for
+// `_cameraProcess`: it holds an exclusive DirectShow handle on the webcam
+// for as long as it's alive, so an orphaned copy leaves the webcam locked
+// system-wide -- unusable in any other app -- until it's manually killed
+// in Task Manager or the machine reboots.
+//
+// A Windows Job Object created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+// fixes this at the OS level: every process assigned to it is
+// automatically terminated the instant the job's last handle closes --
+// which Windows itself does when this process exits, for ANY reason,
+// crash included, with no Dart code needing to run for it to take effect.
+// `package:win32` wraps the handful of plain functions this needs
+// (`CreateJobObject`/`SetInformationJobObject`/`AssignProcessToJobObject`)
+// but not the specific limit-information struct or constant, so those are
+// defined here directly via `dart:ffi`, matching the real Win32 struct
+// layout (`JOBOBJECT_EXTENDED_LIMIT_INFORMATION`) field-for-field.
+
+const int _kJobObjectExtendedLimitInformation = 9;
+const int _kJobObjectLimitKillOnJobClose = 0x00002000;
+const int _kProcessSetQuota = 0x0100;
+const int _kProcessTerminate = 0x0001;
+
+base class _IoCounters extends ffi.Struct {
+  @ffi.Uint64()
+  external int readOperationCount;
+  @ffi.Uint64()
+  external int writeOperationCount;
+  @ffi.Uint64()
+  external int otherOperationCount;
+  @ffi.Uint64()
+  external int readTransferCount;
+  @ffi.Uint64()
+  external int writeTransferCount;
+  @ffi.Uint64()
+  external int otherTransferCount;
+}
+
+base class _JobObjectBasicLimitInformation extends ffi.Struct {
+  @ffi.Int64()
+  external int perProcessUserTimeLimit;
+  @ffi.Int64()
+  external int perJobUserTimeLimit;
+  @ffi.Uint32()
+  external int limitFlags;
+  @ffi.Uint64()
+  external int minimumWorkingSetSize;
+  @ffi.Uint64()
+  external int maximumWorkingSetSize;
+  @ffi.Uint32()
+  external int activeProcessLimit;
+  @ffi.Uint64()
+  external int affinity;
+  @ffi.Uint32()
+  external int priorityClass;
+  @ffi.Uint32()
+  external int schedulingClass;
+}
+
+base class _JobObjectExtendedLimitInformation extends ffi.Struct {
+  external _JobObjectBasicLimitInformation basicLimitInformation;
+  external _IoCounters ioInfo;
+  @ffi.Uint64()
+  external int processMemoryLimit;
+  @ffi.Uint64()
+  external int jobMemoryLimit;
+  @ffi.Uint64()
+  external int peakProcessMemoryUsed;
+  @ffi.Uint64()
+  external int peakJobMemoryUsed;
+}
+
+/// Created lazily, once per app run -- every process ever assigned to it
+/// (see `_tieProcessLifetimeToApp`) dies the moment this handle closes,
+/// which Windows does automatically on process exit for any reason.
+int? _killOnCloseJobHandle;
+
+/// Best-effort and silent on any failure (never throws) -- a spawned
+/// ffmpeg process working normally matters far more than this safety net
+/// existing at all, so nothing here is allowed to affect the actual
+/// recording if the OS call fails for some unexpected reason.
+int? _ensureKillOnCloseJob() {
+  if (_killOnCloseJobHandle != null) return _killOnCloseJobHandle;
+  if (!Platform.isWindows) return null;
+  try {
+    final int job = win32.CreateJobObject(ffi.nullptr, ffi.nullptr);
+    if (job == 0) return null;
+
+    final ffi.Pointer<_JobObjectExtendedLimitInformation> info =
+        ffi2.calloc<_JobObjectExtendedLimitInformation>();
+    try {
+      info.ref.basicLimitInformation.limitFlags =
+          _kJobObjectLimitKillOnJobClose;
+      final int ok = win32.SetInformationJobObject(
+        job,
+        _kJobObjectExtendedLimitInformation,
+        info.cast(),
+        ffi.sizeOf<_JobObjectExtendedLimitInformation>(),
+      );
+      if (ok == 0) {
+        win32.CloseHandle(job);
+        return null;
+      }
+    } finally {
+      ffi2.calloc.free(info);
+    }
+
+    _killOnCloseJobHandle = job;
+    return job;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Assigns the OS process with [pid] to the kill-on-close job so it's
+/// terminated automatically if this app's process ever is, gracefully or
+/// not -- called right after every ffmpeg `Process.start` in this file.
+void _tieProcessLifetimeToApp(int pid) {
+  if (!Platform.isWindows) return;
+  try {
+    final int? job = _ensureKillOnCloseJob();
+    if (job == null) return;
+    final int handle = win32.OpenProcess(
+      _kProcessSetQuota | _kProcessTerminate,
+      0,
+      pid,
+    );
+    if (handle == 0) return;
+    win32.AssignProcessToJobObject(job, handle);
+    win32.CloseHandle(handle);
+  } catch (_) {
+    // Un-assigned just falls back to today's behaviour (graceful stop /
+    // `dispose()`'s hard kill on a clean exit) -- never worth surfacing.
+  }
+}
+
 class MathPadRecordingService extends ChangeNotifier {
   MathPadRecordingService() {
     // Best-effort, fire-and-forget: the very first recording of a fresh
@@ -454,6 +597,7 @@ class MathPadRecordingService extends ChangeNotifier {
     // `-itsoffset`, rather than assumed away.
     _startedAt = DateTime.now();
     elapsed = Duration.zero;
+    _lastEmittedElapsed = Duration.zero;
 
     try {
       await _audioRecorder.start(
@@ -548,6 +692,10 @@ class MathPadRecordingService extends ChangeNotifier {
                   p.join(sessionDir.path, 'camera.mp4'),
                 ];
           _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
+          // See the "Windows Job Object" section above this class -- ties
+          // this process's lifetime to the app's so a hard-kill can't
+          // orphan it holding the webcam locked.
+          _tieProcessLifetimeToApp(_cameraProcess!.pid);
           // Best-effort start-offset estimate, same idea as
           // `_audioStartOffsetSeconds` -- a LOWER bound, not exact: this
           // only measures how long spawning the OS process itself took,
@@ -639,14 +787,14 @@ class MathPadRecordingService extends ChangeNotifier {
     elapsed = DateTime.now().difference(_startedAt!);
 
     if (_captureInFlight) {
-      _emit();
+      _emitElapsedTick();
       return;
     }
     
     // Nothing new due yet -- capturing again right now would just be a
     // needless duplicate of the last frame, but we still emitted the latest elapsed time.
     if (_targetFrameCountNow() <= _frameCount) {
-      _emit();
+      _emitElapsedTick();
       return;
     }
 
@@ -655,7 +803,9 @@ class MathPadRecordingService extends ChangeNotifier {
       final RenderObject? renderObject = _canvasKey
           ?.currentContext
           ?.findRenderObject();
-      if (renderObject is RenderRepaintBoundary) {
+      if (renderObject is RenderRepaintBoundary &&
+          renderObject.attached &&
+          !renderObject.debugNeedsPaint) {
         final double pixelRatio = min(
           ui.PlatformDispatcher.instance.views.first.devicePixelRatio,
           _maxCapturePixelRatio,
@@ -736,7 +886,7 @@ class MathPadRecordingService extends ChangeNotifier {
     if (_startedAt != null) {
       elapsed = DateTime.now().difference(_startedAt!);
     }
-    _emit();
+    _emitElapsedTick();
   }
 
   /// Builds a concat-demuxer manifest for exactly [entries] and encodes it
@@ -895,6 +1045,27 @@ class MathPadRecordingService extends ChangeNotifier {
     _segmentSealTimer?.cancel();
     _segmentSealTimer = null;
 
+    // Stopped here, immediately alongside the video timers above, rather
+    // than after the "wait for in-flight work" block below -- that wait
+    // can genuinely take a while (a segment seal in flight spawns a real
+    // ffmpeg encode of up to `_kSegmentSealInterval` worth of frames), and
+    // the video's own cumulative duration is effectively frozen the
+    // instant `_frameTimer` above is cancelled (no more frame slots get
+    // timed after this). If the mic kept recording through that wait
+    // before being told to stop, the audio file would end up measurably
+    // longer than the video, and `encode()`'s `-shortest` mux flag would
+    // then silently truncate that extra tail off the *audio* to match the
+    // now-shorter video -- clipping exactly the last moment of narration
+    // right as the tutor says whatever they were saying when they hit
+    // stop. Stopping both here, back to back, keeps them ending at
+    // essentially the same real-world instant instead.
+    String? audioPath;
+    try {
+      audioPath = await _audioRecorder.stop();
+    } catch (e) {
+      audioPath = null;
+    }
+
     // Let any in-flight frame capture -- and any in-flight background
     // segment seal -- finish before we freeze state, so `encode()` always
     // sees a fully consistent `_sealedSegmentPaths`/`_sealedConcatEntryCount`
@@ -902,13 +1073,6 @@ class MathPadRecordingService extends ChangeNotifier {
     // finish afterward and mutate state nobody's looking at anymore).
     while (_captureInFlight || _segmentSealInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
-    }
-
-    String? audioPath;
-    try {
-      audioPath = await _audioRecorder.stop();
-    } catch (e) {
-      audioPath = null;
     }
 
     await _stopCameraCapture();
@@ -960,6 +1124,8 @@ class MathPadRecordingService extends ChangeNotifier {
     } on ProcessException catch (e) {
       throw MathPadRecordingException('Could not run ffmpeg: ${e.message}');
     }
+    // See the "Windows Job Object" section above this class.
+    _tieProcessLifetimeToApp(process.pid);
 
     final StringBuffer stderrBuffer = StringBuffer();
     DateTime lastProgressEmit = DateTime.fromMillisecondsSinceEpoch(0);
@@ -1142,7 +1308,8 @@ class MathPadRecordingService extends ChangeNotifier {
 
         final StringBuffer segManifest = StringBuffer('ffconcat version 1.0\n');
         for (final seg in allSegments) {
-          segManifest.writeln("file '${seg.replaceAll("'", "'\\''")}'");
+          final String safeSeg = seg.replaceAll(r'\', '/').replaceAll("'", r"\'");
+          segManifest.writeln("file '$safeSeg'");
         }
         final File segManifestFile = File(
           p.join(sessionDir.path, 'segments.ffconcat'),
@@ -1350,7 +1517,10 @@ class MathPadRecordingService extends ChangeNotifier {
 
   /// Discards an in-progress recording without encoding anything.
   Future<void> cancel() async {
-    if (_state != MathPadRecordingState.recording) return;
+    if (_state != MathPadRecordingState.recording &&
+        _state != MathPadRecordingState.waitingForEncodeChoice) {
+      return;
+    }
     _frameTimer?.cancel();
     _frameTimer = null;
     _segmentSealTimer?.cancel();
@@ -1365,7 +1535,11 @@ class MathPadRecordingService extends ChangeNotifier {
     await _stopCameraCapture();
     _cameraEnabled = false;
     final Directory? sessionDir = _sessionDir;
+    final Directory? capturedSessionDir = _capturedSessionDir;
     _sessionDir = null;
+    _capturedSessionDir = null;
+    _capturedConcatEntries = null;
+    _capturedSealedSegmentPaths = null;
     _canvasKey = null;
     _lastFrameBytes = null;
     _concatEntries.clear();
@@ -1378,23 +1552,38 @@ class MathPadRecordingService extends ChangeNotifier {
     if (sessionDir != null && await sessionDir.exists()) {
       await sessionDir.delete(recursive: true);
     }
+    if (capturedSessionDir != null && await capturedSessionDir.exists()) {
+      await capturedSessionDir.delete(recursive: true);
+    }
     _state = MathPadRecordingState.idle;
     _emit();
   }
 
+  /// Purely cosmetic and strictly best-effort -- by the time this runs, the
+  /// actual recording is already safely saved at [videoPath], so nothing in
+  /// here is allowed to throw back out to `encode()`'s caller. A missing
+  /// thumbnail just means the library falls back to a placeholder icon; it
+  /// must never turn an otherwise-successful "recording saved" result into
+  /// a reported failure.
   Future<void> _generateThumbnail(String videoPath) async {
-    final String ffmpegPath = _resolveFfmpegPath();
-    final String baseName = p.basenameWithoutExtension(videoPath);
-    final String parentDir = File(videoPath).parent.path;
-    
-    final Directory thumbnailDir = Directory(p.join(parentDir, '.thumbnails'));
-    if (!await thumbnailDir.exists()) {
-      await thumbnailDir.create();
-    }
-    
-    final String thumbnailPath = p.join(thumbnailDir.path, '$baseName.png');
-    
     try {
+      final String ffmpegPath = _resolveFfmpegPath();
+      final String baseName = p.basenameWithoutExtension(videoPath);
+      final String parentDir = File(videoPath).parent.path;
+
+      final Directory thumbnailDir = Directory(p.join(parentDir, '.thumbnails'));
+      if (!await thumbnailDir.exists()) {
+        // `recursive: true` even though `parentDir` (the recordings dir)
+        // is already guaranteed to exist by `getRecordingsDir()` at this
+        // point -- cheap insurance against ever throwing here if that
+        // ever stops being true, since the try/catch around this whole
+        // method exists precisely so a thumbnail problem can never fail
+        // the recording save itself.
+        await thumbnailDir.create(recursive: true);
+      }
+
+      final String thumbnailPath = p.join(thumbnailDir.path, '$baseName.png');
+
       await Process.run(ffmpegPath, [
         '-y',
         '-i', videoPath,
@@ -1464,6 +1653,30 @@ class MathPadRecordingService extends ChangeNotifier {
   void _emit() {
     onUpdate?.call(_state, elapsed);
     notifyListeners();
+  }
+
+  // The last `elapsed` value actually broadcast by `_emitElapsedTick`,
+  // compared at whole-second resolution -- see that method's doc comment.
+  Duration _lastEmittedElapsed = Duration.zero;
+
+  /// `_captureFrame` calls this (not `_emit`) on every tick -- up to `fps`
+  /// (60) times/sec, from both the persistent-frame-callback and the
+  /// `Timer.periodic` backstop -- purely to keep `elapsed` bookkeeping
+  /// current. Broadcasting a `notifyListeners()` on every one of those
+  /// ticks forces `mathpad.dart`'s listener to `setState()` the entire
+  /// page (canvas, toolbar, every overlay) up to 60-140+ times/sec just to
+  /// update a "REC 00:15" badge that only ever displays whole seconds --
+  /// that full-tree rebuild storm competing with pointer/stylus event
+  /// handling on the same UI isolate is what actually caused the drawing
+  /// stutter while recording, not the capture work itself. Only notifying
+  /// when the displayed second actually changes cuts that from ~60-140/sec
+  /// down to 1/sec, with zero visible difference to the badge.
+  void _emitElapsedTick() {
+    onUpdate?.call(_state, elapsed);
+    if (elapsed.inSeconds != _lastEmittedElapsed.inSeconds) {
+      _lastEmittedElapsed = elapsed;
+      notifyListeners();
+    }
   }
 
   Future<void> dispose() async {

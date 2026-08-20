@@ -1502,16 +1502,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // the canvas below, not the toolbar or anything outside this widget.
   final GlobalKey _canvasCaptureKey = GlobalKey();
   late MathPadRecordingService _recordingService;
+  // Only tracks which of the handful of *structural* states recording is
+  // in (idle/recording/waitingForEncodeChoice/encoding) -- used to gate
+  // things elsewhere in the tree (button enabled state, `canPop`, whether
+  // the badge/progress-bar widgets are even mounted). Kept in sync by
+  // `_onRecordingServiceChanged`, which only `setState`s when this actual
+  // value changes. Frequently-changing display values (elapsed time,
+  // encoding progress/phase) deliberately do NOT live here any more --
+  // `_buildRecordingBadge`/`_buildEncodingProgressBar` read those straight
+  // off `_recordingService` themselves via `ListenableBuilder`, so a
+  // once-a-second elapsed tick only rebuilds that small badge, not this
+  // whole page. See `MathPadRecordingService._emitElapsedTick`'s doc
+  // comment for why that distinction is what actually fixed recording-time
+  // drawing stutter.
   MathPadRecordingState _recordingState = MathPadRecordingState.idle;
-  Duration _recordingElapsed = Duration.zero;
-  // 0..1 while `_recordingState == encoding` -- drives the neon progress
-  // bar under the top bar, see `_buildEncodingProgressBar`.
-  double _encodingProgress = 0.0;
-  // Shown in the encoding badge -- a camera-enabled recording is baked
-  // into the same single ffmpeg pass as everything else now (see
-  // `MathPadRecordingService.encode`), so this just stays "Encoding…" the
-  // whole time.
-  String _encodingPhaseLabel = 'Encoding…';
   // Opt-in toggle next to the record button -- OFF by default, so a
   // recording behaves exactly as it always has unless the tutor
   // explicitly turns this on before hitting Record. See
@@ -1827,9 +1831,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
 
     _recordingState = _recordingService.state;
-    _recordingElapsed = _recordingService.elapsed;
-    _encodingProgress = _recordingService.encodingProgress;
-    _encodingPhaseLabel = _recordingService.encodingPhaseLabel;
     if (_recordingState == MathPadRecordingState.recording) {
       _recordingService.updateCanvasKey(_canvasCaptureKey);
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1873,11 +1874,17 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   void _onRecordingServiceChanged() {
     if (!mounted) return;
+    // `MathPadRecordingService` now also notifies on a throttled once/sec
+    // elapsed-time tick while recording (see `_emitElapsedTick`), which
+    // this page has nothing to do with -- only an actual state transition
+    // (idle -> recording -> ... ) needs the rest of the page (toolbar
+    // enabled states, `canPop`, etc.) to rebuild. Skipping the no-op
+    // `setState` on every other notification is what keeps a live
+    // recording's timer ticks from touching the canvas/toolbar tree at
+    // all.
+    if (_recordingService.state == _recordingState) return;
     setState(() {
       _recordingState = _recordingService.state;
-      _recordingElapsed = _recordingService.elapsed;
-      _encodingProgress = _recordingService.encodingProgress;
-      _encodingPhaseLabel = _recordingService.encodingPhaseLabel;
     });
   }
 
@@ -7753,43 +7760,53 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       top: 0,
       left: 0,
       right: 0,
-      child: IgnorePointer(
-        child: ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-          child: SizedBox(
-            height: 4,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final double fraction = _encodingProgress.clamp(0.0, 1.0);
-                return Stack(
-                  children: [
-                    Container(color: Colors.black.withValues(alpha: 0.35)),
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeOut,
-                      width: constraints.maxWidth * fraction,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [
-                            Color(0xFF00F5FF), // cyan
-                            Color(0xFF6366F1), // brand indigo
-                            Color(0xFFFF00E5), // magenta
+      // Listens to `_recordingService` directly instead of going through
+      // this page's own `setState` -- `encodingProgress` updates several
+      // times a second while encoding, and this way that only ever
+      // rebuilds this thin bar, not the whole page.
+      child: ListenableBuilder(
+        listenable: _recordingService,
+        builder: (context, _) => IgnorePointer(
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(18),
+            ),
+            child: SizedBox(
+              height: 4,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final double fraction = _recordingService.encodingProgress
+                      .clamp(0.0, 1.0);
+                  return Stack(
+                    children: [
+                      Container(color: Colors.black.withValues(alpha: 0.35)),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeOut,
+                        width: constraints.maxWidth * fraction,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [
+                              Color(0xFF00F5FF), // cyan
+                              Color(0xFF6366F1), // brand indigo
+                              Color(0xFFFF00E5), // magenta
+                            ],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(
+                                0xFF6366F1,
+                              ).withValues(alpha: 0.9),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            ),
                           ],
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(
-                              0xFF6366F1,
-                            ).withValues(alpha: 0.9),
-                            blurRadius: 10,
-                            spreadRadius: 1,
-                          ),
-                        ],
                       ),
-                    ),
-                  ],
-                );
-              },
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -8365,70 +8382,87 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Widget _buildRecordingBadge(BuildContext context) {
-    // `waitingForEncodeChoice` is now just a brief transitional tick between
-    // `stopCapture()` returning and `encode()` starting -- there's no
-    // decision to wait on any more, so it shares the same spinner treatment
-    // as `encoding` rather than getting its own badge state.
-    final bool busy =
-        _recordingState == MathPadRecordingState.encoding ||
-        _recordingState == MathPadRecordingState.waitingForEncodeChoice;
+    // Listens to `_recordingService` directly instead of reading this
+    // page's own state -- the elapsed-time text below changes once a
+    // second for the entire length of a recording, and routing that
+    // through this page's `setState` (as it used to) meant a full
+    // canvas/toolbar rebuild every single second, competing with pointer/
+    // stylus handling on the same UI isolate. Scoping the listener to just
+    // this small badge keeps that once/sec update from touching anything
+    // else.
+    return ListenableBuilder(
+      listenable: _recordingService,
+      builder: (context, _) {
+        final MathPadRecordingState state = _recordingService.state;
+        final double encodingProgress = _recordingService.encodingProgress;
+        // `waitingForEncodeChoice` is just a brief transitional tick
+        // between `stopCapture()` returning and `encode()` starting --
+        // there's no decision to wait on any more, so it shares the same
+        // spinner treatment as `encoding` rather than getting its own
+        // badge state.
+        final bool busy =
+            state == MathPadRecordingState.encoding ||
+            state == MathPadRecordingState.waitingForEncodeChoice;
 
-    final Widget badgeContent = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (busy)
-          SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: Colors.white,
-              value: _encodingProgress > 0 ? _encodingProgress : null,
-            ),
-          )
-        else
-          const Icon(
-            Icons.fiber_manual_record_rounded,
-            size: 14,
-            color: Colors.redAccent,
-          ),
-        const SizedBox(width: 8),
-        Text(
-          busy
-              ? (_encodingProgress > 0
-                    ? '$_encodingPhaseLabel ${(_encodingProgress * 100).clamp(0, 100).toStringAsFixed(0)}%'
-                    : _encodingPhaseLabel)
-              : 'REC ${_formatRecordingElapsed(_recordingElapsed)}',
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-          ),
-        ),
-      ],
-    );
-
-    return Positioned(
-      top: 16,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.75),
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+        final Widget badgeContent = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (busy)
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                  value: encodingProgress > 0 ? encodingProgress : null,
+                ),
+              )
+            else
+              const Icon(
+                Icons.fiber_manual_record_rounded,
+                size: 14,
+                color: Colors.redAccent,
               ),
-            ],
+            const SizedBox(width: 8),
+            Text(
+              busy
+                  ? (encodingProgress > 0
+                        ? '${_recordingService.encodingPhaseLabel} '
+                              '${(encodingProgress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                        : _recordingService.encodingPhaseLabel)
+                  : 'REC ${_formatRecordingElapsed(_recordingService.elapsed)}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        );
+
+        return Positioned(
+          top: 16,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.75),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.3),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: badgeContent,
+            ),
           ),
-          child: badgeContent,
-        ),
-      ),
+        );
+      },
     );
   }
 

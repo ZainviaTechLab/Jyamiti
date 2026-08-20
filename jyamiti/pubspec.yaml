@@ -79,6 +79,8 @@ dependencies:
   googleapis_auth: ^2.3.3
   flutter_displaymode: ^0.7.0
   perfect_freehand: ^2.5.2+1
+  win32: ^5.15.0
+  ffi: ^2.2.0
 
 
 dev_dependencies:
