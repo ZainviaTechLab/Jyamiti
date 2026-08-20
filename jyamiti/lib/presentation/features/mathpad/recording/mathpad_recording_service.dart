@@ -925,9 +925,20 @@ class MathPadRecordingService extends ChangeNotifier {
       final RenderObject? renderObject = _canvasKey
           ?.currentContext
           ?.findRenderObject();
-      if (renderObject is RenderRepaintBoundary &&
-          renderObject.attached &&
-          !renderObject.debugNeedsPaint) {
+      // NOTE: deliberately NOT also checking `renderObject.debugNeedsPaint`
+      // here (a prior version of this condition did) -- per its own doc
+      // comment in the Flutter framework source, that getter "is only set
+      // in debug mode... In release builds, this throws." It's implemented
+      // as a `late` variable only ever assigned inside an `assert(...)`,
+      // which release builds strip entirely -- so reading it in release
+      // unconditionally throws `LateInitializationError`, every single
+      // capture attempt, silently swallowed by the `catch` below. That
+      // meant recording was completely broken in release builds (nothing
+      // ever got past this `if`, so `_concatEntries` stayed empty for the
+      // whole recording and `encode()` always failed with "Nothing was
+      // captured") while looking totally fine in a debug run, where
+      // asserts DO execute.
+      if (renderObject is RenderRepaintBoundary && renderObject.attached) {
         final double pixelRatio = min(
           ui.PlatformDispatcher.instance.views.first.devicePixelRatio,
           _maxCapturePixelRatio,
