@@ -1518,7 +1518,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // explicitly turns this on before hitting Record. See
   // `MathPadRecordingService.start`'s `includeCamera`.
   bool _recordWithCamera = false;
-  Completer<bool>? _fastEncodeCompleter;
 
   // A small pixel ratio, not the device's real one -- this is only ever
   // displayed at ~120px tall in the Math Pad Library's pages sidebar, so a
@@ -1918,22 +1917,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_recordingState == MathPadRecordingState.recording) {
       try {
         await _recordingService.stopCapture();
-
-        _fastEncodeCompleter = Completer<bool>();
-        // Wait up to 3 seconds for the user to make a choice
-        Timer(const Duration(seconds: 3), () {
-          if (_fastEncodeCompleter != null &&
-              !_fastEncodeCompleter!.isCompleted) {
-            _fastEncodeCompleter!.complete(false); // Default to standard encode
-          }
-        });
-
-        final bool fastEncode = await _fastEncodeCompleter!.future;
-        _fastEncodeCompleter = null;
-
-        final String path = await _recordingService.encode(
-          fastEncode: fastEncode,
-        );
+        final String path = await _recordingService.encode();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -8373,71 +8357,48 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Widget _buildRecordingBadge(BuildContext context) {
-    final bool encoding = _recordingState == MathPadRecordingState.encoding;
-    final bool waitingChoice =
+    // `waitingForEncodeChoice` is now just a brief transitional tick between
+    // `stopCapture()` returning and `encode()` starting -- there's no
+    // decision to wait on any more, so it shares the same spinner treatment
+    // as `encoding` rather than getting its own badge state.
+    final bool busy =
+        _recordingState == MathPadRecordingState.encoding ||
         _recordingState == MathPadRecordingState.waitingForEncodeChoice;
 
-    Widget badgeContent;
-    if (waitingChoice) {
-      badgeContent = GestureDetector(
-        onTap: () {
-          if (_fastEncodeCompleter != null &&
-              !_fastEncodeCompleter!.isCompleted) {
-            _fastEncodeCompleter!.complete(true);
-          }
-        },
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.bolt, size: 16, color: Colors.amber),
-            SizedBox(width: 6),
-            Text(
-              'FAST ENCODE (Click!)',
-              style: TextStyle(
-                color: Colors.amber,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      );
-    } else {
-      badgeContent = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (encoding)
-            SizedBox(
-              width: 12,
-              height: 12,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
-                value: _encodingProgress > 0 ? _encodingProgress : null,
-              ),
-            )
-          else
-            const Icon(
-              Icons.fiber_manual_record_rounded,
-              size: 14,
-              color: Colors.redAccent,
-            ),
-          const SizedBox(width: 8),
-          Text(
-            encoding
-                ? (_encodingProgress > 0
-                      ? '$_encodingPhaseLabel ${(_encodingProgress * 100).clamp(0, 100).toStringAsFixed(0)}%'
-                      : _encodingPhaseLabel)
-                : 'REC ${_formatRecordingElapsed(_recordingElapsed)}',
-            style: const TextStyle(
+    final Widget badgeContent = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (busy)
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
               color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
+              value: _encodingProgress > 0 ? _encodingProgress : null,
             ),
+          )
+        else
+          const Icon(
+            Icons.fiber_manual_record_rounded,
+            size: 14,
+            color: Colors.redAccent,
           ),
-        ],
-      );
-    }
+        const SizedBox(width: 8),
+        Text(
+          busy
+              ? (_encodingProgress > 0
+                    ? '$_encodingPhaseLabel ${(_encodingProgress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                    : _encodingPhaseLabel)
+              : 'REC ${_formatRecordingElapsed(_recordingElapsed)}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
 
     return Positioned(
       top: 16,
@@ -10756,6 +10717,46 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                           : 'Add a small camera box to the exported video -- tap to turn on',
                     ),
                     const SizedBox(width: 8),
+                    // Real-time background segment sealing strategy (see
+                    // `SegmentSealMode`) -- locked while a recording is
+                    // actually in progress, since changing it mid-recording
+                    // would apply inconsistently to what's already been
+                    // captured vs. what's still to come.
+                    PopupMenuButton<SegmentSealMode>(
+                      tooltip: 'Recording: background encoding strategy',
+                      enabled: _recordingState == MathPadRecordingState.idle,
+                      icon: Icon(
+                        Icons.settings_suggest_rounded,
+                        size: 20,
+                        color: _recordingState == MathPadRecordingState.idle
+                            ? _textColor
+                            : _textColor60,
+                      ),
+                      color: isDark ? _darkPanelColor : Colors.white,
+                      onSelected: (mode) {
+                        setState(() {
+                          unawaited(_recordingService.setSegmentSealMode(mode));
+                        });
+                      },
+                      itemBuilder: (ctx) => [
+                        _segmentSealModeMenuItem(
+                          SegmentSealMode.hybrid,
+                          'Hybrid (Recommended)',
+                          'Seals on a pause, or every 20s -- whichever comes first',
+                        ),
+                        _segmentSealModeMenuItem(
+                          SegmentSealMode.idleOnly,
+                          'Idle only',
+                          'Seals only during a natural pause (tutor talking, not drawing)',
+                        ),
+                        _segmentSealModeMenuItem(
+                          SegmentSealMode.fixedInterval,
+                          'Fixed interval',
+                          'Seals every 20s, regardless of activity',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
                     IconButton(
                       icon: Icon(
                         _recordingState == MathPadRecordingState.recording
@@ -10830,6 +10831,55 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               child: widget.trailingToolbarAction!,
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// One row in the recording-segment-sealing-strategy popup (see
+  /// `SegmentSealMode`'s own doc comment for what each option actually
+  /// does) -- a label, a one-line plain-language description, and a radio
+  /// dot showing whether it's the currently active choice.
+  PopupMenuItem<SegmentSealMode> _segmentSealModeMenuItem(
+    SegmentSealMode mode,
+    String label,
+    String description,
+  ) {
+    final bool selected = _recordingService.segmentSealMode == mode;
+    return PopupMenuItem<SegmentSealMode>(
+      value: mode,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            selected
+                ? Icons.radio_button_checked_rounded
+                : Icons.radio_button_unchecked_rounded,
+            size: 18,
+            color: selected ? const Color(0xFF6366F1) : _textColor60,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: _textColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  description,
+                  style: TextStyle(color: _textColor60, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

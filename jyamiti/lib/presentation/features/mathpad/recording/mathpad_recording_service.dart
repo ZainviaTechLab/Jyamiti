@@ -12,8 +12,39 @@ import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 enum MathPadRecordingState { idle, recording, waitingForEncodeChoice, encoding }
+
+/// How `_evaluateSegmentSeal` decides when to fold captured frames into a
+/// background-encoded segment during a recording -- see the "Real-time
+/// (background) segment encoding" section's doc comment below for what
+/// sealing actually does. The tutor's choice is persisted locally (see
+/// [MathPadRecordingService.loadSegmentSealMode]/`setSegmentSealMode`) so
+/// it survives across sessions.
+enum SegmentSealMode {
+  /// Seals on a fixed timer only, every `_kSegmentSealInterval`, no matter
+  /// what's happening on the board -- simple and predictable, but the
+  /// background encode can land in the middle of an actively busy/fast-
+  /// changing board and compete with capture for CPU right when that
+  /// matters most.
+  fixedInterval,
+
+  /// Seals only during a natural pause -- the board hasn't produced a new
+  /// distinct frame for `_kIdleSealThreshold` (the tutor is talking, not
+  /// drawing) -- so the background encode never competes with an actively
+  /// busy board. The tradeoff: a recording with no pauses at all
+  /// (continuous, uninterrupted drawing) never seals until it stops, so a
+  /// long uninterrupted stretch gets none of this feature's benefit.
+  idleOnly,
+
+  /// Seals on whichever comes first: a natural idle pause, or the fixed
+  /// timer ceiling. Gets [idleOnly]'s CPU-contention win for the common
+  /// "draw a bit, talk, draw a bit" pattern, with no regression for
+  /// continuous drawing -- that case just falls back to behaving like
+  /// [fixedInterval]. The recommended default.
+  hybrid,
+}
 
 class MathPadRecordingException implements Exception {
   final String message;
@@ -54,8 +85,60 @@ class MathPadRecordingException implements Exception {
 /// manifest -- see `stop()`) + the recorded WAV audio to a bundled
 /// `ffmpeg.exe` (installed next to the app exe by the Windows build, see
 /// `windows/CMakeLists.txt`) to mux/encode into the final video.
+///
+/// For a recording longer than one `_kSegmentSealInterval`, most of that
+/// final encode has actually already happened WHILE recording was still
+/// running: `_maybeSealSegment` periodically folds everything captured so
+/// far into a small, already-finished video segment in the background (see
+/// its own doc comment), so `encode()` only has real encoding work left to
+/// do for the last short leftover tail -- everything sealed before that
+/// gets joined in with a fast stream-copy concat instead of being decoded
+/// and re-encoded from scratch. A short recording (under one seal
+/// interval) never has anything sealed, and transparently falls back to
+/// the original single full-encode pass with no behaviour change.
 class MathPadRecordingService extends ChangeNotifier {
-  MathPadRecordingService();
+  MathPadRecordingService() {
+    // Best-effort, fire-and-forget: the very first recording of a fresh
+    // app launch could in theory start before this resolves (a plain
+    // local-disk read, normally fast), in which case it just uses the
+    // `hybrid` default for that one recording -- never worth blocking
+    // construction over.
+    unawaited(loadSegmentSealMode());
+  }
+
+  /// Loads the tutor's saved [segmentSealMode] from local storage, if any
+  /// was ever saved -- falls back to (and leaves unchanged) whatever
+  /// [segmentSealMode] already is on any error or missing value.
+  Future<void> loadSegmentSealMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kSegmentSealModePrefKey);
+      if (saved == null) return;
+      segmentSealMode = SegmentSealMode.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => segmentSealMode,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `segmentSealMode` already was.
+    }
+  }
+
+  /// Changes [segmentSealMode] and persists the choice locally so it's
+  /// still in effect the next time the app opens. Safe to call mid-
+  /// recording -- `_evaluateSegmentSeal` reads `segmentSealMode` fresh on
+  /// every tick, so a change takes effect on its very next check.
+  Future<void> setSegmentSealMode(SegmentSealMode mode) async {
+    segmentSealMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kSegmentSealModePrefKey, mode.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
 
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
@@ -115,6 +198,56 @@ class MathPadRecordingService extends ChangeNotifier {
   Uint8List? _lastFrameBytes;
   int _writtenFrameIndex = 0;
   final List<_ConcatEntry> _concatEntries = [];
+
+  // ─── Real-time (background) segment encoding ───────────────────────────
+  // Periodically folds the frames captured so far into a small, already-
+  // finished video segment WHILE recording is still running, so `encode()`
+  // at the end only has real encoding work left to do for the last
+  // (usually short) leftover tail -- everything sealed before that gets
+  // joined in with a fast stream-copy concat instead of being decoded and
+  // re-encoded from scratch. Each sealed segment is also a real,
+  // independently valid file the moment it's written (unlike one
+  // continuous live-piped encode into a single growing file), so a crash
+  // mid-recording only ever loses the current unsealed tail's PNGs, never
+  // any already-sealed portion.
+  static const Duration _kSegmentSealInterval = Duration(seconds: 20);
+  // How long the board must sit unchanged before [SegmentSealMode.idleOnly]
+  // / [SegmentSealMode.hybrid] treat it as "a natural pause" worth sealing
+  // on -- long enough that a normal beat between strokes doesn't trigger
+  // it, short enough that a tutor pausing to talk gets sealed promptly.
+  static const Duration _kIdleSealThreshold = Duration(seconds: 4);
+  // How often `_evaluateSegmentSeal` actually checks the two thresholds
+  // above -- just a polling granularity, not a seal trigger itself.
+  static const Duration _kSegmentSealCheckInterval = Duration(seconds: 2);
+  static const String _kSegmentSealModePrefKey = 'mathpad_segment_seal_mode';
+
+  /// The tutor's chosen sealing strategy -- defaults to [SegmentSealMode.hybrid]
+  /// until [loadSegmentSealMode] (fired from the constructor, best-effort)
+  /// resolves whatever was actually saved locally.
+  SegmentSealMode segmentSealMode = SegmentSealMode.hybrid;
+
+  Timer? _segmentSealTimer;
+  bool _segmentSealInFlight = false;
+  // When the fixed-interval ceiling was last reset -- either at recording
+  // start, or the moment a seal (of EITHER kind) was last attempted, so
+  // "every `_kSegmentSealInterval`" means "since the last seal", not "on
+  // this wall-clock cadence regardless of what already happened".
+  DateTime? _lastSealCheckpoint;
+  // When the most recent genuinely NEW (non-duplicate) frame was written --
+  // updated in `_captureFrame`'s new-entry branch, never its dedup-extend
+  // branch. `null` means nothing's been captured yet this recording.
+  DateTime? _lastDistinctFrameAt;
+  final List<String> _sealedSegmentPaths = [];
+  // How many of `_concatEntries` (from the front) have already been folded
+  // into a sealed segment -- entries from this index onward are still
+  // pending/unsealed. Deliberately never includes the very LAST entry in
+  // `_concatEntries` at seal time: the frame-dedup logic in `_captureFrame`
+  // keeps extending that entry's `durationSeconds` for as long as the
+  // board stays unchanged, so sealing it while it might still be growing
+  // would permanently drop whatever hold-time arrives after the seal.
+  int _sealedConcatEntryCount = 0;
+  List<String>? _capturedSealedSegmentPaths;
+  int _capturedSealedConcatEntryCount = 0;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -376,6 +509,8 @@ class MathPadRecordingService extends ChangeNotifier {
     _lastFrameBytes = null;
     _writtenFrameIndex = 0;
     _concatEntries.clear();
+    _sealedSegmentPaths.clear();
+    _sealedConcatEntryCount = 0;
     encodingProgress = 0.0;
 
     // Camera is best-effort and starts AFTER the canvas/mic side is
@@ -475,6 +610,17 @@ class MathPadRecordingService extends ChangeNotifier {
       const Duration(milliseconds: 1000 ~/ fps),
       (_) => _captureFrame(),
     );
+
+    // Real-time background segment encoding -- see the "Real-time
+    // (background) segment encoding" fields' doc comment above, and
+    // `_evaluateSegmentSeal` for how `segmentSealMode` picks when to
+    // actually trigger one.
+    _lastSealCheckpoint = _startedAt;
+    _lastDistinctFrameAt = null;
+    _segmentSealTimer = Timer.periodic(
+      _kSegmentSealCheckInterval,
+      (_) => _evaluateSegmentSeal(),
+    );
   }
 
   int _targetFrameCountNow() {
@@ -548,6 +694,9 @@ class MathPadRecordingService extends ChangeNotifier {
             await file.writeAsBytes(pngBytes);
             _concatEntries.add(_ConcatEntry(fileName, durationSeconds));
             _lastFrameBytes = pngBytes;
+            // A genuinely new frame -- resets the idle clock
+            // `_evaluateSegmentSeal` watches for `idleOnly`/`hybrid`.
+            _lastDistinctFrameAt = DateTime.now();
           }
           _frameCount = fillTo;
         }
@@ -563,6 +712,146 @@ class MathPadRecordingService extends ChangeNotifier {
     _emit();
   }
 
+  /// Builds a concat-demuxer manifest for exactly [entries] and encodes it
+  /// with the bundled ffmpeg into one MPEG-TS segment at [outPath] --
+  /// shared by the periodic background seal below and by `encode()`'s
+  /// final leftover-tail segment, so both produce segments in exactly the
+  /// same format (required for the fast `-c copy` concat that joins them
+  /// all together afterward). Returns false (never throws) on any
+  /// failure, so a failed segment just means more work happens at the
+  /// final encode instead -- never worth losing the recording over.
+  Future<bool> _encodeSegment({
+    required Directory sessionDir,
+    required List<_ConcatEntry> entries,
+    required String outPath,
+    required String preset,
+    required String crf,
+  }) async {
+    if (entries.isEmpty) return false;
+    try {
+      final String ffmpegPath = _resolveFfmpegPath();
+      if (!await File(ffmpegPath).exists()) return false;
+
+      final StringBuffer manifest = StringBuffer('ffconcat version 1.0\n');
+      for (final entry in entries) {
+        manifest.writeln("file '${entry.fileName}'");
+        manifest.writeln('duration ${entry.durationSeconds.toStringAsFixed(6)}');
+      }
+      manifest.writeln("file '${entries.last.fileName}'");
+      final File manifestFile = File(
+        p.join(sessionDir.path, '${p.basenameWithoutExtension(outPath)}.ffconcat'),
+      );
+      await manifestFile.writeAsString(manifest.toString());
+
+      final ProcessResult result = await Process.run(ffmpegPath, [
+        '-y',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', manifestFile.path,
+        '-r', '$fps',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-preset', preset,
+        '-crf', crf,
+        '-f', 'mpegts',
+        outPath,
+      ]);
+      try {
+        await manifestFile.delete();
+      } catch (_) {}
+      return result.exitCode == 0 && await File(outPath).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Runs on every `_segmentSealTimer` tick (a short, fixed poll interval,
+  /// `_kSegmentSealCheckInterval` -- not a seal trigger itself) and decides,
+  /// based on `segmentSealMode`, whether NOW is actually a moment to seal:
+  ///
+  /// - [SegmentSealMode.fixedInterval]: only once `_kSegmentSealInterval`
+  ///   has passed since the last seal attempt, regardless of activity.
+  /// - [SegmentSealMode.idleOnly]: only once the board has sat unchanged
+  ///   for `_kIdleSealThreshold` (a natural pause).
+  /// - [SegmentSealMode.hybrid]: whichever of the above comes first.
+  ///
+  /// `_maybeSealSegment` itself is a no-op if there's nothing new to seal,
+  /// so triggering it here is safe even if this fires more often than
+  /// there's actually new content.
+  void _evaluateSegmentSeal() {
+    final DateTime now = DateTime.now();
+    final bool fixedDue =
+        _lastSealCheckpoint != null &&
+        now.difference(_lastSealCheckpoint!) >= _kSegmentSealInterval;
+    final bool idleDue =
+        _lastDistinctFrameAt != null &&
+        now.difference(_lastDistinctFrameAt!) >= _kIdleSealThreshold;
+
+    final bool shouldSeal = switch (segmentSealMode) {
+      SegmentSealMode.fixedInterval => fixedDue,
+      SegmentSealMode.idleOnly => idleDue,
+      SegmentSealMode.hybrid => fixedDue || idleDue,
+    };
+    if (!shouldSeal) return;
+
+    _lastSealCheckpoint = now;
+    unawaited(_maybeSealSegment());
+  }
+
+  /// Folds every not-yet-sealed frame (except the very last entry -- see
+  /// `_sealedConcatEntryCount`'s doc comment) into one more sealed segment,
+  /// in the background, while recording continues uninterrupted. Triggered
+  /// by `_evaluateSegmentSeal` above; guarded by `_segmentSealInFlight` so
+  /// a slow seal can never overlap with the next one.
+  Future<void> _maybeSealSegment() async {
+    if (_segmentSealInFlight || _sessionDir == null) return;
+    final int sealableCount =
+        _concatEntries.length - 1 - _sealedConcatEntryCount;
+    if (sealableCount <= 0) return;
+
+    _segmentSealInFlight = true;
+    try {
+      final Directory dir = _sessionDir!;
+      final List<_ConcatEntry> toSeal = _concatEntries.sublist(
+        _sealedConcatEntryCount,
+        _concatEntries.length - 1,
+      );
+      final String segmentPath = p.join(
+        dir.path,
+        'segment_${_sealedSegmentPaths.length}.ts',
+      );
+      // Same fixed "normal quality" preset the tail segment and the
+      // single-pass path both use -- every segment in a recording (sealed
+      // in the background or the leftover tail encoded once stopped) is
+      // encoded identically, so there's nothing to reconcile at `encode()`
+      // time.
+      final bool ok = await _encodeSegment(
+        sessionDir: dir,
+        entries: toSeal,
+        outPath: segmentPath,
+        preset: 'veryfast',
+        crf: '20',
+      );
+      if (ok) {
+        _sealedSegmentPaths.add(segmentPath);
+        _sealedConcatEntryCount += toSeal.length;
+        // Already fully baked into `segmentPath` -- delete the source
+        // PNGs to reclaim disk space, same spirit as the frame dedup in
+        // `_captureFrame`.
+        for (final entry in toSeal) {
+          try {
+            await File(p.join(dir.path, entry.fileName)).delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      // A failed seal just means more work happens at the final encode.
+    } finally {
+      _segmentSealInFlight = false;
+    }
+  }
+
   /// Stops capturing, halts all inputs, and moves to a waiting state.
   /// Call `encode()` immediately after to process the captured data.
   void updateCanvasKey(GlobalKey canvasKey) {
@@ -575,9 +864,15 @@ class MathPadRecordingService extends ChangeNotifier {
     }
     _frameTimer?.cancel();
     _frameTimer = null;
-    
-    // Let any in-flight frame capture finish before we freeze state
-    while (_captureInFlight) {
+    _segmentSealTimer?.cancel();
+    _segmentSealTimer = null;
+
+    // Let any in-flight frame capture -- and any in-flight background
+    // segment seal -- finish before we freeze state, so `encode()` always
+    // sees a fully consistent `_sealedSegmentPaths`/`_sealedConcatEntryCount`
+    // pair (a seal that's still mid-flight when this runs could otherwise
+    // finish afterward and mutate state nobody's looking at anymore).
+    while (_captureInFlight || _segmentSealInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
     }
 
@@ -596,6 +891,8 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedAudioPath = audioPath;
     _capturedAudioStartOffsetSeconds = _audioStartOffsetSeconds;
     _capturedCameraStartOffsetSeconds = _cameraStartOffsetSeconds;
+    _capturedSealedSegmentPaths = List.of(_sealedSegmentPaths);
+    _capturedSealedConcatEntryCount = _sealedConcatEntryCount;
 
     _canvasKey = null;
     _sessionDir = null;
@@ -606,6 +903,10 @@ class MathPadRecordingService extends ChangeNotifier {
     _writtenFrameIndex = 0;
     _lastFrameBytes = null;
     _concatEntries.clear();
+    _sealedSegmentPaths.clear();
+    _sealedConcatEntryCount = 0;
+    _lastSealCheckpoint = null;
+    _lastDistinctFrameAt = null;
     _audioStartOffsetSeconds = 0.0;
     _cameraStartOffsetSeconds = 0.0;
 
@@ -613,9 +914,90 @@ class MathPadRecordingService extends ChangeNotifier {
     _emit();
   }
 
+  /// Runs ffmpeg with [args], parsing its `-progress pipe:1` stdout stream
+  /// to keep `encodingProgress`/`onEncodingProgress` reporting real numbers
+  /// (against [totalDurationSeconds], the output timeline length this run
+  /// is expected to produce) instead of an indeterminate spinner. Shared by
+  /// `encode()`'s two paths (single-pass and real-time-segments) and by
+  /// `_overlayCamera` -- they only differ in `args` and which output file
+  /// the caller expects to exist afterward. Throws on a non-zero exit,
+  /// surfacing ffmpeg's own stderr tail so a failure is diagnosable from
+  /// the error message alone.
+  Future<void> _runFfmpegWithProgress(
+    String ffmpegPath,
+    List<String> args,
+    double totalDurationSeconds,
+  ) async {
+    final Process process;
+    try {
+      process = await Process.start(ffmpegPath, args);
+    } on ProcessException catch (e) {
+      throw MathPadRecordingException('Could not run ffmpeg: ${e.message}');
+    }
+
+    final StringBuffer stderrBuffer = StringBuffer();
+    DateTime lastProgressEmit = DateTime.fromMillisecondsSinceEpoch(0);
+
+    final StreamSubscription<String> stdoutSub = process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) {
+          // Each `-progress` block repeats several `key=value` lines --
+          // `out_time_us` (microseconds of output encoded so far) is the
+          // only one this needs. Throttled to a few updates/sec so a fast
+          // encode can't flood `setState` calls on the UI side.
+          if (line.startsWith('out_time_us=') && totalDurationSeconds > 0) {
+            final int? outTimeUs = int.tryParse(
+              line.substring('out_time_us='.length),
+            );
+            if (outTimeUs != null) {
+              encodingProgress = ((outTimeUs / 1000000) / totalDurationSeconds)
+                  .clamp(0.0, 1.0);
+              final DateTime now = DateTime.now();
+              if (now.difference(lastProgressEmit) >
+                  const Duration(milliseconds: 150)) {
+                lastProgressEmit = now;
+                onEncodingProgress?.call(encodingProgress);
+                notifyListeners();
+              }
+            }
+          } else if (line == 'progress=end') {
+            encodingProgress = 1.0;
+            onEncodingProgress?.call(1.0);
+            notifyListeners();
+          }
+        });
+    final StreamSubscription<List<int>> stderrSub = process.stderr.listen(
+      (chunk) => stderrBuffer.write(utf8.decode(chunk, allowMalformed: true)),
+    );
+
+    final int exitCode = await process.exitCode;
+    await stdoutSub.cancel();
+    await stderrSub.cancel();
+
+    if (exitCode != 0) {
+      // Surface ffmpeg's own stderr (its actual reason) instead of just
+      // the exit code, so a failure like this is diagnosable from the
+      // error message alone next time instead of needing to reproduce it.
+      final String stderrText = stderrBuffer.toString();
+      final String tail = stderrText.trim().isEmpty
+          ? '(no stderr output)'
+          : stderrText
+                .trim()
+                .split('\n')
+                .reversed
+                .take(5)
+                .toList()
+                .reversed
+                .join('\n');
+      throw MathPadRecordingException(
+        'Encoding failed (ffmpeg exit $exitCode):\n$tail',
+      );
+    }
+  }
+
   /// Encodes the captured frames and audio into an .mp4 via the bundled ffmpeg.
-  /// If [fastEncode] is true, uses much faster compression presets.
-  Future<String> encode({bool fastEncode = false}) async {
+  Future<String> encode() async {
     if (_state != MathPadRecordingState.waitingForEncodeChoice) {
       throw MathPadRecordingException('Not waiting for encode.');
     }
@@ -658,25 +1040,6 @@ class MathPadRecordingService extends ChangeNotifier {
       final String outPath =
           p.join(outDir.path, 'MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4');
 
-      // A concat-demuxer manifest instead of a plain numbered-frame glob:
-      // each entry says how long (in seconds) to hold one physical PNG,
-      // so a long static stretch (nothing drawn -- see `_captureFrame`'s
-      // dedup above) costs ffmpeg one small `duration` line instead of
-      // thousands of identical files to open, decode and re-encode. The
-      // concat demuxer only applies a `duration` line to the file that
-      // immediately precedes it, and ignores one trailing a final file
-      // with nothing after it -- so the last file is deliberately
-      // repeated once more with no duration line to make its hold time
-      // stick (a documented quirk of the format, not a bug here).
-      final StringBuffer manifest = StringBuffer('ffconcat version 1.0\n');
-      for (final entry in concatEntries) {
-        manifest.writeln("file '${entry.fileName}'");
-        manifest.writeln('duration ${entry.durationSeconds.toStringAsFixed(6)}');
-      }
-      manifest.writeln("file '${concatEntries.last.fileName}'");
-      final File manifestFile = File(p.join(sessionDir.path, 'frames.ffconcat'));
-      await manifestFile.writeAsString(manifest.toString());
-
       // Total captured timeline length -- the denominator for turning
       // ffmpeg's `-progress` output (which reports elapsed *output* time,
       // not a percentage) into the 0..1 fraction the UI's progress bar
@@ -687,137 +1050,162 @@ class MathPadRecordingService extends ChangeNotifier {
         (sum, e) => sum + e.durationSeconds,
       );
 
-      // The board is mostly flat colour/line art with long static
-      // stretches (talking, thinking) rather than the high-motion,
-      // fine-grain-detail video `medium`/low-crf is tuned for -- `veryfast`
-      // plus a slightly relaxed crf trades a little bitrate efficiency for
-      // dramatically less CPU time per frame, which matters much more once
-      // a real lecture-length recording is feeding it thousands of frames.
-      final List<String> args = [
-        '-y',
-        // Machine-readable `key=value` progress lines on stdout (ending
-        // each block with `progress=continue`/`end`) instead of guessing
-        // at completion from an indeterminate spinner -- paired with
-        // `-nostats` so ffmpeg's normal human-readable stats lines don't
-        // also clutter stderr redundantly.
-        '-progress', 'pipe:1',
-        '-nostats',
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', manifestFile.path,
-        if (audioPath != null) ...[
-          // Shifts the audio input later in the output timeline by
-          // however much it actually started after the video's own t=0
-          // (measured in `start()`, see `_audioStartOffsetSeconds`'s doc
-          // comment) -- without this, the mic's recorded WAV -- which
-          // always began capturing at least a little later than the
-          // video's zero point once the mic was genuinely ready -- gets
-          // muxed as if it started at the exact same instant, permanently
-          // offsetting narration relative to the picture by that amount
-          // for the whole recording.
-          if (audioStartOffsetSeconds > 0.0005)
-            ...['-itsoffset', audioStartOffsetSeconds.toStringAsFixed(6)],
-          '-i', audioPath,
-        ],
-        // Normalizes the concat demuxer's variable-duration input frames
-        // into a proper constant-frame-rate output stream -- cheap for
-        // ffmpeg to do internally (it's just frame duplication at encode
-        // time), unlike materializing those same duplicate frames as
-        // files up front the way this used to work.
-        '-r', '$fps',
-        // yuv420p (4:2:0 chroma subsampling) requires both dimensions to
-        // be even -- the captured canvas size is whatever the window
-        // happens to be, which is very often NOT even in both directions,
-        // and libx264 flatly refuses (rather than rounding) an odd
-        // width/height. Trimming at most 1px off the right/bottom is
-        // imperceptible; the alternative (padding) would add a visible
-        // border instead.
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
-        '-preset', fastEncode ? 'ultrafast' : 'veryfast',
-        '-crf', fastEncode ? '28' : '20',
-        if (audioPath != null) ...[
-          // dynaudnorm smoothly normalises the mic volume without the
-          // heavy two-pass EBU analysis that loudnorm runs -- it adapts
-          // frame-by-frame so quiet narration is brought up and loud
-          // passages are gently levelled without the pumping/distortion
-          // artefacts loudnorm can introduce on a signal that was already
-          // slightly noisy coming off the mic. framelen=500ms keeps the
-          // adaptation smooth for natural-paced speech.
-          '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
-          '-c:a', 'aac',
-          '-b:a', '192k',
-          '-shortest',
-        ],
-        outPath,
-      ];
+      final List<String> sealedSegments = _capturedSealedSegmentPaths ?? const [];
+      // The unsealed leftover tail -- everything captured after the last
+      // background seal (see `_sealedConcatEntryCount`'s doc comment). When
+      // nothing was ever sealed (a short recording, under one seal
+      // interval), this is simply every captured entry, and the real-time
+      // fast path below never runs -- the original single-pass encode
+      // handles it exactly as it always has, unchanged.
+      final List<_ConcatEntry> tailEntries =
+          concatEntries.length > _capturedSealedConcatEntryCount
+          ? concatEntries.sublist(_capturedSealedConcatEntryCount)
+          : const [];
 
-      final Process process;
-      try {
-        process = await Process.start(ffmpegPath, args);
-      } on ProcessException catch (e) {
-        throw MathPadRecordingException('Could not run ffmpeg: ${e.message}');
-      }
+      if (sealedSegments.isNotEmpty) {
+        // ─── Real-time fast path ──────────────────────────────────────
+        // Most of the video is already encoded (sealed periodically in
+        // the background throughout the recording -- see
+        // `_maybeSealSegment`). Only the small leftover tail needs a real
+        // encode here; everything already sealed just gets stream-copied
+        // together with it (`-c:v copy` below -- no re-encoding, just
+        // repackaging), instead of decoding and re-encoding the entire
+        // recording from scratch the way the single-pass path below does.
+        final List<String> allSegments = List.of(sealedSegments);
+        if (tailEntries.isNotEmpty) {
+          final String tailPath = p.join(sessionDir.path, 'segment_tail.ts');
+          final bool tailOk = await _encodeSegment(
+            sessionDir: sessionDir,
+            entries: tailEntries,
+            outPath: tailPath,
+            preset: 'veryfast',
+            crf: '20',
+          );
+          if (tailOk) allSegments.add(tailPath);
+        }
 
-      final StringBuffer stderrBuffer = StringBuffer();
-      DateTime lastProgressEmit = DateTime.fromMillisecondsSinceEpoch(0);
-
-      final StreamSubscription<String> stdoutSub = process.stdout
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen((line) {
-            // Each `-progress` block repeats several `key=value` lines --
-            // `out_time_us` (microseconds of output encoded so far) is the
-            // only one this needs. Throttled to a few updates/sec so a
-            // fast encode can't flood `setState` calls on the UI side.
-            if (line.startsWith('out_time_us=') && totalDurationSeconds > 0) {
-              final int? outTimeUs = int.tryParse(
-                line.substring('out_time_us='.length),
-              );
-              if (outTimeUs != null) {
-                encodingProgress = ((outTimeUs / 1000000) / totalDurationSeconds)
-                    .clamp(0.0, 1.0);
-                final DateTime now = DateTime.now();
-                if (now.difference(lastProgressEmit) >
-                    const Duration(milliseconds: 150)) {
-                  lastProgressEmit = now;
-                  onEncodingProgress?.call(encodingProgress);
-                  notifyListeners();
-                }
-              }
-            } else if (line == 'progress=end') {
-              encodingProgress = 1.0;
-              onEncodingProgress?.call(1.0);
-              notifyListeners();
-            }
-          });
-      final StreamSubscription<List<int>> stderrSub = process.stderr.listen(
-        (chunk) => stderrBuffer.write(utf8.decode(chunk, allowMalformed: true)),
-      );
-
-      final int exitCode = await process.exitCode;
-      await stdoutSub.cancel();
-      await stderrSub.cancel();
-
-      if (exitCode != 0) {
-        // Surface ffmpeg's own stderr (its actual reason) instead of just
-        // the exit code, so a failure like this is diagnosable from the
-        // error message alone next time instead of needing to reproduce it.
-        final String stderrText = stderrBuffer.toString();
-        final String tail = stderrText.trim().isEmpty
-            ? '(no stderr output)'
-            : stderrText
-                  .trim()
-                  .split('\n')
-                  .reversed
-                  .take(5)
-                  .toList()
-                  .reversed
-                  .join('\n');
-        throw MathPadRecordingException(
-          'Encoding failed (ffmpeg exit $exitCode):\n$tail',
+        final StringBuffer segManifest = StringBuffer('ffconcat version 1.0\n');
+        for (final seg in allSegments) {
+          segManifest.writeln("file '${seg.replaceAll("'", "'\\''")}'");
+        }
+        final File segManifestFile = File(
+          p.join(sessionDir.path, 'segments.ffconcat'),
         );
+        await segManifestFile.writeAsString(segManifest.toString());
+
+        await _runFfmpegWithProgress(ffmpegPath, [
+          '-y',
+          '-progress', 'pipe:1',
+          '-nostats',
+          '-f', 'concat',
+          '-safe', '0',
+          '-i', segManifestFile.path,
+          if (audioPath != null) ...[
+            // See the single-pass path below for why this offset exists.
+            if (audioStartOffsetSeconds > 0.0005)
+              ...['-itsoffset', audioStartOffsetSeconds.toStringAsFixed(6)],
+            '-i', audioPath,
+          ],
+          // Every sealed segment (and the tail) is already correctly
+          // encoded H.264/yuv420p at the target framerate -- just
+          // container-copy them together instead of re-encoding a second
+          // time, which is the entire point of sealing in the background.
+          '-c:v', 'copy',
+          if (audioPath != null) ...[
+            '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',
+          ],
+          outPath,
+        ], totalDurationSeconds);
+      } else {
+        // ─── Original single-pass path ────────────────────────────────
+        // A concat-demuxer manifest instead of a plain numbered-frame glob:
+        // each entry says how long (in seconds) to hold one physical PNG,
+        // so a long static stretch (nothing drawn -- see `_captureFrame`'s
+        // dedup above) costs ffmpeg one small `duration` line instead of
+        // thousands of identical files to open, decode and re-encode. The
+        // concat demuxer only applies a `duration` line to the file that
+        // immediately precedes it, and ignores one trailing a final file
+        // with nothing after it -- so the last file is deliberately
+        // repeated once more with no duration line to make its hold time
+        // stick (a documented quirk of the format, not a bug here).
+        final StringBuffer manifest = StringBuffer('ffconcat version 1.0\n');
+        for (final entry in concatEntries) {
+          manifest.writeln("file '${entry.fileName}'");
+          manifest.writeln('duration ${entry.durationSeconds.toStringAsFixed(6)}');
+        }
+        manifest.writeln("file '${concatEntries.last.fileName}'");
+        final File manifestFile = File(p.join(sessionDir.path, 'frames.ffconcat'));
+        await manifestFile.writeAsString(manifest.toString());
+
+        // The board is mostly flat colour/line art with long static
+        // stretches (talking, thinking) rather than the high-motion,
+        // fine-grain-detail video `medium`/low-crf is tuned for --
+        // `veryfast` plus a slightly relaxed crf trades a little bitrate
+        // efficiency for dramatically less CPU time per frame, which
+        // matters much more once a real lecture-length recording is
+        // feeding it thousands of frames.
+        await _runFfmpegWithProgress(ffmpegPath, [
+          '-y',
+          // Machine-readable `key=value` progress lines on stdout (ending
+          // each block with `progress=continue`/`end`) instead of guessing
+          // at completion from an indeterminate spinner -- paired with
+          // `-nostats` so ffmpeg's normal human-readable stats lines don't
+          // also clutter stderr redundantly.
+          '-progress', 'pipe:1',
+          '-nostats',
+          '-f', 'concat',
+          '-safe', '0',
+          '-i', manifestFile.path,
+          if (audioPath != null) ...[
+            // Shifts the audio input later in the output timeline by
+            // however much it actually started after the video's own t=0
+            // (measured in `start()`, see `_audioStartOffsetSeconds`'s doc
+            // comment) -- without this, the mic's recorded WAV -- which
+            // always began capturing at least a little later than the
+            // video's zero point once the mic was genuinely ready -- gets
+            // muxed as if it started at the exact same instant, permanently
+            // offsetting narration relative to the picture by that amount
+            // for the whole recording.
+            if (audioStartOffsetSeconds > 0.0005)
+              ...['-itsoffset', audioStartOffsetSeconds.toStringAsFixed(6)],
+            '-i', audioPath,
+          ],
+          // Normalizes the concat demuxer's variable-duration input frames
+          // into a proper constant-frame-rate output stream -- cheap for
+          // ffmpeg to do internally (it's just frame duplication at encode
+          // time), unlike materializing those same duplicate frames as
+          // files up front the way this used to work.
+          '-r', '$fps',
+          // yuv420p (4:2:0 chroma subsampling) requires both dimensions to
+          // be even -- the captured canvas size is whatever the window
+          // happens to be, which is very often NOT even in both directions,
+          // and libx264 flatly refuses (rather than rounding) an odd
+          // width/height. Trimming at most 1px off the right/bottom is
+          // imperceptible; the alternative (padding) would add a visible
+          // border instead.
+          '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          '-preset', 'veryfast',
+          '-crf', '20',
+          if (audioPath != null) ...[
+            // dynaudnorm smoothly normalises the mic volume without the
+            // heavy two-pass EBU analysis that loudnorm runs -- it adapts
+            // frame-by-frame so quiet narration is brought up and loud
+            // passages are gently levelled without the pumping/distortion
+            // artefacts loudnorm can introduce on a signal that was already
+            // slightly noisy coming off the mic. framelen=500ms keeps the
+            // adaptation smooth for natural-paced speech.
+            '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',
+          ],
+          outPath,
+        ], totalDurationSeconds);
       }
 
       // The canvas-only video above is already complete and saved at
@@ -848,7 +1236,6 @@ class MathPadRecordingService extends ChangeNotifier {
           cameraVideoPath: cameraFile.path,
           outDir: outDir,
           totalDurationSeconds: totalDurationSeconds,
-          fastEncode: fastEncode,
           cameraStartOffsetSeconds: cameraStartOffsetSeconds,
         );
         await _generateThumbnail(finalVideoPath);
@@ -882,7 +1269,6 @@ class MathPadRecordingService extends ChangeNotifier {
     required String cameraVideoPath,
     required Directory outDir,
     required double totalDurationSeconds,
-    required bool fastEncode,
     double cameraStartOffsetSeconds = 0.0,
   }) async {
     final String finalPath =
@@ -918,8 +1304,8 @@ class MathPadRecordingService extends ChangeNotifier {
       '-map', '[outv]',
       '-map', '0:a?',
       '-c:v', 'libx264',
-      '-preset', fastEncode ? 'ultrafast' : 'veryfast',
-      '-crf', fastEncode ? '28' : '20',
+      '-preset', 'veryfast',
+      '-crf', '20',
       '-c:a', 'copy',
       finalPath,
     ];
@@ -996,6 +1382,14 @@ class MathPadRecordingService extends ChangeNotifier {
     if (_state != MathPadRecordingState.recording) return;
     _frameTimer?.cancel();
     _frameTimer = null;
+    _segmentSealTimer?.cancel();
+    _segmentSealTimer = null;
+    // A sealed-segment encode may still be running in the background --
+    // let it finish before deleting `sessionDir` out from under it, rather
+    // than risk it failing loudly (harmlessly) partway through a delete.
+    while (_segmentSealInFlight) {
+      await Future.delayed(const Duration(milliseconds: 20));
+    }
     await _audioRecorder.stop();
     await _stopCameraCapture();
     _cameraEnabled = false;
@@ -1004,6 +1398,12 @@ class MathPadRecordingService extends ChangeNotifier {
     _canvasKey = null;
     _lastFrameBytes = null;
     _concatEntries.clear();
+    // Sealed `.ts` segments live inside `sessionDir` too, so deleting it
+    // recursively already covers them -- just reset the tracking state.
+    _sealedSegmentPaths.clear();
+    _sealedConcatEntryCount = 0;
+    _lastSealCheckpoint = null;
+    _lastDistinctFrameAt = null;
     if (sessionDir != null && await sessionDir.exists()) {
       await sessionDir.delete(recursive: true);
     }
@@ -1097,6 +1497,7 @@ class MathPadRecordingService extends ChangeNotifier {
 
   Future<void> dispose() async {
     _frameTimer?.cancel();
+    _segmentSealTimer?.cancel();
     await _audioRecorder.dispose();
     _cameraProcess?.kill(ProcessSignal.sigkill);
   }

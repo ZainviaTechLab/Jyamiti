@@ -161,7 +161,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       final recordingService = Provider.of<MathPadRecordingService>(context, listen: false);
       if (recordingService.state == MathPadRecordingState.recording) {
         recordingService.stopCapture().then((_) {
-          recordingService.encode(fastEncode: true);
+          recordingService.encode();
         });
       }
     } catch (_) {
