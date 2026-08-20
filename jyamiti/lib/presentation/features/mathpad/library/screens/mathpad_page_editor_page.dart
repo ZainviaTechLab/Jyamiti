@@ -156,14 +156,13 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
     _bottomBarTimer?.cancel();
     _hoverTimer?.cancel();
     
-    // Auto-stop recording if they leave the editor entirely -- encoding
-    // itself now runs in the service's own background queue (see
-    // MathPadRecordingService.stopCapture), independent of this page, so
-    // there's nothing further to trigger here.
+    // Auto-stop recording if they leave the editor entirely
     try {
       final recordingService = Provider.of<MathPadRecordingService>(context, listen: false);
       if (recordingService.state == MathPadRecordingState.recording) {
-        recordingService.stopCapture();
+        recordingService.stopCapture().then((_) {
+          recordingService.encode();
+        });
       }
     } catch (_) {
       // Ignore if Provider can't be read during dispose

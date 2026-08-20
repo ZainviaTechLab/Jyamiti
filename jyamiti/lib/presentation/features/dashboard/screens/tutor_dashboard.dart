@@ -1309,7 +1309,9 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
                         Consumer<MathPadRecordingService>(
                           builder: (context, recordingService, child) {
-                            final bool isEncoding = recordingService.isEncoding;
+                            final bool isEncoding =
+                                recordingService.state ==
+                                MathPadRecordingState.encoding;
                             return Stack(
                               children: [
                                 _buildSidebarItem(

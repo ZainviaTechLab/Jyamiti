@@ -1502,25 +1502,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // the canvas below, not the toolbar or anything outside this widget.
   final GlobalKey _canvasCaptureKey = GlobalKey();
   late MathPadRecordingService _recordingService;
-  // Only tracks whether a capture is currently live (idle/recording) --
-  // used to gate things elsewhere in the tree (button enabled state,
-  // `canPop`, whether the badge widget is even mounted). Kept in sync by
+  // Only tracks which of the handful of *structural* states recording is
+  // in (idle/recording/waitingForEncodeChoice/encoding) -- used to gate
+  // things elsewhere in the tree (button enabled state, `canPop`, whether
+  // the badge/progress-bar widgets are even mounted). Kept in sync by
   // `_onRecordingServiceChanged`, which only `setState`s when this actual
-  // value (or `_isEncoding` below) changes. Frequently-changing display
-  // values (elapsed time, encoding progress/phase) deliberately do NOT
-  // live here any more -- `_buildRecordingBadge`/`_buildEncodingProgressBar`
-  // read those straight off `_recordingService` themselves via
-  // `ListenableBuilder`, so a once-a-second elapsed tick only rebuilds
-  // that small badge, not this whole page. See
-  // `MathPadRecordingService._emitElapsedTick`'s doc comment for why that
-  // distinction is what actually fixed recording-time drawing stutter.
+  // value changes. Frequently-changing display values (elapsed time,
+  // encoding progress/phase) deliberately do NOT live here any more --
+  // `_buildRecordingBadge`/`_buildEncodingProgressBar` read those straight
+  // off `_recordingService` themselves via `ListenableBuilder`, so a
+  // once-a-second elapsed tick only rebuilds that small badge, not this
+  // whole page. See `MathPadRecordingService._emitElapsedTick`'s doc
+  // comment for why that distinction is what actually fixed recording-time
+  // drawing stutter.
   MathPadRecordingState _recordingState = MathPadRecordingState.idle;
-  // Whether a background encode job is queued/running -- deliberately
-  // independent of `_recordingState`: a new recording can be started (and
-  // `_recordingState` back to `recording`) while an earlier one is still
-  // encoding. Gates whether `_buildEncodingProgressBar` is mounted and
-  // whether the recording badge shows "Encoding…" or the live REC timer.
-  bool _isEncoding = false;
   // Opt-in toggle next to the record button -- OFF by default, so a
   // recording behaves exactly as it always has unless the tutor
   // explicitly turns this on before hitting Record. See
@@ -1836,7 +1831,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
 
     _recordingState = _recordingService.state;
-    _isEncoding = _recordingService.isEncoding;
     if (_recordingState == MathPadRecordingState.recording) {
       _recordingService.updateCanvasKey(_canvasCaptureKey);
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1855,29 +1849,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           content: Text(message),
           backgroundColor: Colors.orange.shade800,
           duration: const Duration(seconds: 5),
-        ),
-      );
-    };
-    // Background encoding's eventual outcome -- may arrive well after
-    // `_stopRecording` returns, and possibly while a newer recording is
-    // already in progress. See `MathPadRecordingService.stopCapture`.
-    _recordingService.onEncodeSaved = (path) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Recording saved to $path'),
-          backgroundColor: const Color(0xFF10B981),
-          duration: const Duration(seconds: 5),
-        ),
-      );
-    };
-    _recordingService.onEncodeFailed = (message) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.redAccent,
-          duration: const Duration(seconds: 10),
         ),
       );
     };
@@ -1904,21 +1875,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void _onRecordingServiceChanged() {
     if (!mounted) return;
     // `MathPadRecordingService` now also notifies on a throttled once/sec
-    // elapsed-time tick while recording (see `_emitElapsedTick`), and on
-    // ffmpeg progress updates several times a second while encoding --
-    // this page has nothing to do with either. Only an actual `state`
-    // transition or `isEncoding` toggle (idle -> recording -> ..., or a
-    // background encode job starting/finishing) needs the rest of the
-    // page (toolbar enabled states, `canPop`, whether the progress bar is
-    // mounted, etc.) to rebuild. Skipping the no-op `setState` on every
-    // other notification is what keeps a live recording's timer ticks
-    // from touching the canvas/toolbar tree at all.
-    final MathPadRecordingState newState = _recordingService.state;
-    final bool newIsEncoding = _recordingService.isEncoding;
-    if (newState == _recordingState && newIsEncoding == _isEncoding) return;
+    // elapsed-time tick while recording (see `_emitElapsedTick`), which
+    // this page has nothing to do with -- only an actual state transition
+    // (idle -> recording -> ... ) needs the rest of the page (toolbar
+    // enabled states, `canPop`, etc.) to rebuild. Skipping the no-op
+    // `setState` on every other notification is what keeps a live
+    // recording's timer ticks from touching the canvas/toolbar tree at
+    // all.
+    if (_recordingService.state == _recordingState) return;
     setState(() {
-      _recordingState = newState;
-      _isEncoding = newIsEncoding;
+      _recordingState = _recordingService.state;
     });
   }
 
@@ -1947,10 +1913,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Future<void> _startRecording({required bool includeCamera}) async {
-    // Only blocks on an already-*live* recording -- a background encode
-    // job from a previous recording (see `MathPadRecordingService`'s
-    // "Background encoding queue") never stops a new one from starting.
-    if (_recordingState == MathPadRecordingState.recording) return;
+    if (_recordingState != MathPadRecordingState.idle) return;
     if (includeCamera) {
       final hasCam = await _recordingService.hasCamera();
       if (!hasCam) {
@@ -1979,16 +1942,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
   }
 
-  // Stopping only ends the *capture* -- encoding itself now runs in the
-  // background (see `MathPadRecordingService.stopCapture`'s doc comment),
-  // so there's no `path` to wait for or show here any more. The eventual
-  // "saved"/"failed" snackbar comes from `onEncodeSaved`/`onEncodeFailed`,
-  // wired up in `initState`, whenever that background job actually
-  // finishes -- which may be well after this returns.
   Future<void> _stopRecording() async {
     if (_recordingState != MathPadRecordingState.recording) return;
     try {
       await _recordingService.stopCapture();
+      final String path = await _recordingService.encode();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Recording saved to $path'),
+          backgroundColor: const Color(0xFF10B981),
+          duration: const Duration(seconds: 5),
+        ),
+      );
     } on MathPadRecordingException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -7772,7 +7738,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
               // it keeps showing at the very top edge (the bottom of the
               // docked top bar in the normal layout) even when Full Screen
               // hides the rest of the toolbar chrome.
-              if (_isEncoding) _buildEncodingProgressBar(),
+              if (_recordingState == MathPadRecordingState.encoding)
+                _buildEncodingProgressBar(),
             ],
           ),
         ),
@@ -8407,7 +8374,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           _buildCanvasCaptureArea(context, isDark, bgColor),
           if (_recordingState == MathPadRecordingState.recording)
             _RecordingNeonBorder(showCameraIcon: _recordWithCamera),
-          if (_recordingState == MathPadRecordingState.recording || _isEncoding)
+          if (_recordingState != MathPadRecordingState.idle)
             _buildRecordingBadge(context),
         ],
       ),
@@ -8426,17 +8393,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     return ListenableBuilder(
       listenable: _recordingService,
       builder: (context, _) {
-        final bool recordingNow =
-            _recordingService.state == MathPadRecordingState.recording;
+        final MathPadRecordingState state = _recordingService.state;
         final double encodingProgress = _recordingService.encodingProgress;
-        // Shows "Encoding…" only when there's no *live* recording to show
-        // instead -- a new recording can now be started while an earlier
-        // one is still encoding in the background (see
-        // `MathPadRecordingService.isEncoding`), and when that happens the
-        // live REC timer takes priority here; `_buildEncodingProgressBar`'s
-        // thin bar at the top of the page is what indicates the
-        // background job in that case.
-        final bool busy = _recordingService.isEncoding && !recordingNow;
+        // `waitingForEncodeChoice` is just a brief transitional tick
+        // between `stopCapture()` returning and `encode()` starting --
+        // there's no decision to wait on any more, so it shares the same
+        // spinner treatment as `encoding` rather than getting its own
+        // badge state.
+        final bool busy =
+            state == MathPadRecordingState.encoding ||
+            state == MathPadRecordingState.waitingForEncodeChoice;
 
         // The live "REC 00:15" timer only needs to be on screen long
         // enough to confirm recording actually started, then it's just
@@ -8448,7 +8414,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         // with one rule. Never applies while `busy` -- encoding progress
         // is real information the tutor needs to see, not a timer peek.
         final bool timerPeek = _recordingService.elapsed.inSeconds % 3600 <= 5;
-        final bool visible = busy || (recordingNow && timerPeek);
+        final bool visible = busy || timerPeek;
 
         final Widget badgeContent = Row(
           mainAxisSize: MainAxisSize.min,
@@ -10865,18 +10831,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         onPressed: _stopRecording,
                         tooltip: 'Stop Recording',
                       )
+                    else if (_recordingState == MathPadRecordingState.encoding)
+                      IconButton(
+                        icon: Icon(
+                          Icons.fiber_manual_record_rounded,
+                          size: 20,
+                          color: _textColor60,
+                        ),
+                        onPressed: null,
+                        tooltip: 'Encoding…',
+                      )
                     else
-                      // Always available once not actively recording --
-                      // a background encode job from a previous recording
-                      // (see `MathPadRecordingService.isEncoding`) no
-                      // longer blocks starting the next one; its progress
-                      // shows via the badge/progress bar elsewhere on the
-                      // page instead of disabling this button.
                       PopupMenuButton<bool>(
-                        tooltip: _isEncoding
-                            ? 'Start Recording (a previous one is still '
-                                  'encoding in the background)'
-                            : 'Start Recording',
+                        tooltip: 'Start Recording',
                         icon: Icon(
                           Icons.fiber_manual_record_rounded,
                           size: 20,
