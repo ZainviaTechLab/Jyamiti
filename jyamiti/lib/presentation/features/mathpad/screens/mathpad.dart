@@ -8404,6 +8404,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             state == MathPadRecordingState.encoding ||
             state == MathPadRecordingState.waitingForEncodeChoice;
 
+        // The live "REC 00:15" timer only needs to be on screen long
+        // enough to confirm recording actually started, then it's just
+        // covering up board content for no reason -- so it peeks in for
+        // the first 5 seconds of every hour of elapsed time (0:00-0:05,
+        // 1:00:00-1:00:05, 2:00:00-2:00:05, ...) and stays faded out the
+        // rest of the time. `elapsed.inSeconds % 3600 <= 5` naturally
+        // covers both "the first 5 seconds" and "every later hour mark"
+        // with one rule. Never applies while `busy` -- encoding progress
+        // is real information the tutor needs to see, not a timer peek.
+        final bool timerPeek = _recordingService.elapsed.inSeconds % 3600 <= 5;
+        final bool visible = busy || timerPeek;
+
         final Widget badgeContent = Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -8444,21 +8456,36 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           top: 16,
           left: 0,
           right: 0,
-          child: Center(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.75),
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+          // Faded out (not removed from the tree) so the transition is a
+          // real fade rather than an instant pop -- and not hit-testable
+          // while faded, so an invisible badge can never swallow a touch
+          // meant for whatever's underneath it.
+          child: IgnorePointer(
+            ignoring: !visible,
+            child: AnimatedOpacity(
+              opacity: visible ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 700),
+              curve: Curves.easeInOut,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
                   ),
-                ],
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.75),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: badgeContent,
+                ),
               ),
-              child: badgeContent,
             ),
           ),
         );
