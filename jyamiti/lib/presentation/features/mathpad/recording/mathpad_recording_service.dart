@@ -525,6 +525,11 @@ class MathPadRecordingService extends ChangeNotifier {
   // happened to start close enough together. See their measurement sites
   // in `start()` for what each one actually bounds.
   double _audioStartOffsetSeconds = 0.0;
+  // Always 0 by construction now -- `start()` waits for the camera to
+  // confirm it's actually producing frames BEFORE `_startedAt` is even
+  // set, so there's no start-of-recording lag left for `encode()` to
+  // correct for here. Kept as a field (rather than deleted outright) since
+  // `encode()` still reads it generically alongside `_audioStartOffsetSeconds`.
   double _cameraStartOffsetSeconds = 0.0;
 
   // Intermediate state for delayed encode choice
@@ -791,18 +796,104 @@ class MathPadRecordingService extends ChangeNotifier {
     );
     await sessionDir.create(recursive: true);
 
-    // The video timeline's zero point -- set as the very first thing in
-    // this function's real capture-triggering work, immediately before
-    // asking the mic to start, rather than after (the old ordering set
-    // this only once audio.start() had already resolved, so the WAV file
-    // always began recording measurably before the video's own t=0,
-    // permanently offsetting the audio ahead of the picture). Every
-    // capture stream's actual start latency is measured relative to THIS
-    // instant and compensated for at mux time in `encode()` via ffmpeg's
-    // `-itsoffset`, rather than assumed away.
+    // Camera goes FIRST now, before the video timeline's zero point even
+    // exists -- it's consistently the slowest of the three capture streams
+    // to actually come online (spawning the ffmpeg process is fast, but
+    // DirectShow/AVFoundation then has to open the physical device, which
+    // can visibly take anywhere from a few hundred ms to a couple of
+    // seconds). Every earlier design here instead started everything at
+    // once and tried to measure/correct for that lag afterward (spawn-time
+    // estimates, live progress-line detection, ground-truth duration
+    // probing, even a whole segment-based re-alignment scheme) -- all of
+    // that was solving the wrong problem. Waiting HERE, before `_startedAt`
+    // exists, means there's no lag left to correct for: by the time the
+    // canvas/audio actually start, the camera is already confirmed to be
+    // producing real frames.
+    _cameraEnabled = false;
+    _cameraProcess = null;
+    if (includeCamera) {
+      try {
+        final String? device = await _detectCameraDeviceName();
+        final String ffmpegPath = _resolveFfmpegPath();
+        if (device == null) {
+          onCameraWarning?.call('No camera was found -- recording without one.');
+        } else {
+          final List<String> cameraArgs = Platform.isMacOS
+              ? [
+                  '-y',
+                  '-f', 'avfoundation',
+                  '-i', device,
+                  '-c:v', 'libx264',
+                  '-preset', 'veryfast',
+                  '-pix_fmt', 'yuv420p',
+                  p.join(sessionDir.path, 'camera.mp4'),
+                ]
+              : [
+                  '-y',
+                  '-f', 'dshow',
+                  '-i', 'video=$device',
+                  '-c:v', 'libx264',
+                  '-preset', 'veryfast',
+                  '-pix_fmt', 'yuv420p',
+                  p.join(sessionDir.path, 'camera.mp4'),
+                ];
+          _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
+          // See the "Windows Job Object" section above this class -- ties
+          // this process's lifetime to the app's so a hard-kill can't
+          // orphan it holding the webcam locked.
+          _tieProcessLifetimeToApp(_cameraProcess!.pid);
+
+          // IMPORTANT: We must consume stdout and stderr, otherwise the OS
+          // pipe buffer fills up with ffmpeg's continuous status output and
+          // causes ffmpeg to freeze permanently. This same stderr listener
+          // doubles as the readiness signal below -- ffmpeg writes a
+          // `frame=` progress line to stderr for every frame it actually
+          // encodes, so the first one appearing is real confirmation the
+          // device is open and producing frames, not a guess.
+          final Completer<void> cameraReady = Completer<void>();
+          _cameraProcess!.stdout.listen((_) {});
+          _cameraProcess!.stderr.listen((List<int> data) {
+            if (!cameraReady.isCompleted &&
+                utf8.decode(data, allowMalformed: true).contains('frame=')) {
+              cameraReady.complete();
+            }
+          });
+
+          // Bounded wait -- a camera that never opens (driver hang, device
+          // held by another app) must never block the recording from
+          // starting at all, so this falls back to proceeding anyway after
+          // a few seconds, same as every other camera failure path here
+          // only ever disabling the camera, never the recording itself.
+          try {
+            await cameraReady.future.timeout(const Duration(seconds: 5));
+          } on TimeoutException {
+            onCameraWarning?.call(
+              'Camera is taking a while to start -- continuing without waiting further.',
+            );
+          }
+
+          _cameraEnabled = true;
+        }
+      } catch (e) {
+        await _stopCameraCapture();
+        _cameraEnabled = false;
+        onCameraWarning?.call('Could not start the camera -- recording without it.');
+      }
+    }
+
+    // The video timeline's zero point -- set only now, AFTER the camera has
+    // either confirmed it's producing real frames or given up waiting.
+    // Every OTHER capture stream's actual start latency is still measured
+    // relative to THIS instant and compensated for at mux time in
+    // `encode()` via ffmpeg's `-itsoffset` -- but the camera itself no
+    // longer needs that correction (see `_cameraStartOffsetSeconds` just
+    // below), since by construction it's already running by the time this
+    // instant is captured.
     _startedAt = DateTime.now();
     elapsed = Duration.zero;
     _lastEmittedElapsed = Duration.zero;
+    // No lag left to compensate for -- see the comment above.
+    _cameraStartOffsetSeconds = 0.0;
 
     try {
       await _audioRecorder.start(
@@ -837,6 +928,7 @@ class MathPadRecordingService extends ChangeNotifier {
         path: p.join(sessionDir.path, 'audio.wav'),
       );
     } catch (e) {
+      await _stopCameraCapture();
       if (await sessionDir.exists()) {
         await sessionDir.delete(recursive: true);
       }
@@ -871,70 +963,6 @@ class MathPadRecordingService extends ChangeNotifier {
     _sealedSegmentPaths.clear();
     _sealedConcatEntryCount = 0;
     encodingProgress = 0.0;
-
-    // Camera is best-effort and starts AFTER the canvas/mic side is
-    // already fully committed above -- so any trouble here (no webcam,
-    // permission denied, ffmpeg failing to spawn) only ever disables the
-    // camera for this recording, never the recording itself.
-    _cameraEnabled = false;
-    if (includeCamera) {
-      try {
-        final String? device = await _detectCameraDeviceName();
-        final String ffmpegPath = _resolveFfmpegPath();
-        if (device == null) {
-          onCameraWarning?.call('No camera was found -- recording without one.');
-        } else {
-          final List<String> cameraArgs = Platform.isMacOS 
-              ? [
-                  '-y',
-                  '-f', 'avfoundation',
-                  '-i', device,
-                  '-c:v', 'libx264',
-                  '-preset', 'veryfast',
-                  '-pix_fmt', 'yuv420p',
-                  p.join(sessionDir.path, 'camera.mp4'),
-                ]
-              : [
-                  '-y',
-                  '-f', 'dshow',
-                  '-i', 'video=$device',
-                  '-c:v', 'libx264',
-                  '-preset', 'veryfast',
-                  '-pix_fmt', 'yuv420p',
-                  p.join(sessionDir.path, 'camera.mp4'),
-                ];
-          _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
-          // See the "Windows Job Object" section above this class -- ties
-          // this process's lifetime to the app's so a hard-kill can't
-          // orphan it holding the webcam locked.
-          _tieProcessLifetimeToApp(_cameraProcess!.pid);
-          // Best-effort start-offset estimate, same idea as
-          // `_audioStartOffsetSeconds` -- a LOWER bound, not exact: this
-          // only measures how long spawning the OS process itself took,
-          // not how much longer ffmpeg then spent actually opening the
-          // DirectShow device inside it (camera device open latency is
-          // typically the slowest of the three capture streams to
-          // actually start, and isn't observable from here without
-          // fragile stderr-message parsing). Still meaningfully better
-          // than the previous behaviour of assuming zero offset.
-          _cameraStartOffsetSeconds = max(
-            0.0,
-            DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
-          );
-          // IMPORTANT: We must consume stdout and stderr, otherwise the OS
-          // pipe buffer fills up with ffmpeg's continuous status output and
-          // causes ffmpeg to freeze permanently.
-          _cameraProcess!.stdout.listen((_) {});
-          _cameraProcess!.stderr.listen((_) {});
-
-          _cameraEnabled = true;
-        }
-      } catch (e) {
-        _cameraProcess = null;
-        _cameraEnabled = false;
-        onCameraWarning?.call('Could not start the camera -- recording without it.');
-      }
-    }
 
     _state = MathPadRecordingState.recording;
     _emit();
@@ -1675,13 +1703,12 @@ class MathPadRecordingService extends ChangeNotifier {
           inputArgs.addAll(['-i', audioPath]);
           audioInputIndex = nextInputIndex++;
         }
-        // Shifts the camera stream later to match how much after the
-        // canvas video's own t=0 it actually started (measured in
-        // `start()`, see `_cameraStartOffsetSeconds`'s doc comment) -- the
-        // DirectShow device is typically the slowest of the three capture
-        // streams to actually come online, so without this the
-        // picture-in-picture box visibly leads the canvas/audio by that
-        // same amount for the whole recording.
+        // In practice this is always 0 now -- `start()` waits for the
+        // camera to confirm it's producing real frames before the canvas
+        // timeline's t=0 is even set (see `_cameraStartOffsetSeconds`'s
+        // doc comment), so there's no lead/lag left to shift out here.
+        // The conditional stays as a defensive no-op for the rare case the
+        // wait timed out and the field wasn't reset to exactly 0.0.
         if (cameraStartOffsetSeconds > 0.0005) {
           inputArgs.addAll([
             '-itsoffset',
