@@ -10741,124 +10741,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
                   if (!kIsWeb &&
                       MathPadRecordingService.isSupportedPlatform) ...[
-                    // Real-time background segment sealing strategy (see
-                    // `SegmentSealMode`) -- locked while a recording is
-                    // actually in progress, since changing it mid-recording
-                    // would apply inconsistently to what's already been
-                    // captured vs. what's still to come.
-                    PopupMenuButton<SegmentSealMode>(
-                      tooltip: 'Recording: background encoding strategy',
-                      enabled: _recordingState == MathPadRecordingState.idle,
-                      icon: Icon(
-                        Icons.settings_suggest_rounded,
-                        size: 20,
-                        color: _recordingState == MathPadRecordingState.idle
-                            ? _textColor
-                            : _textColor60,
-                      ),
-                      color: isDark ? _darkPanelColor : Colors.white,
-                      onSelected: (mode) {
-                        setState(() {
-                          unawaited(_recordingService.setSegmentSealMode(mode));
-                        });
-                      },
-                      itemBuilder: (ctx) => [
-                        _segmentSealModeMenuItem(
-                          SegmentSealMode.hybrid,
-                          'Hybrid (Recommended)',
-                          'Seals on a pause, or every 20s -- whichever comes first',
-                        ),
-                        _segmentSealModeMenuItem(
-                          SegmentSealMode.idleOnly,
-                          'Idle only',
-                          'Seals only during a natural pause (tutor talking, not drawing)',
-                        ),
-                        _segmentSealModeMenuItem(
-                          SegmentSealMode.fixedInterval,
-                          'Fixed interval',
-                          'Seals every 20s, regardless of activity',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 8),
-                    // Capture vs. final-video frame rate (see
-                    // `RecordingFrameRateMode`) -- also locked while a
-                    // recording is in progress, same reasoning as above.
-                    PopupMenuButton<RecordingFrameRateMode>(
-                      tooltip: 'Recording: frame rate',
-                      enabled: _recordingState == MathPadRecordingState.idle,
-                      icon: Icon(
-                        Icons.video_settings_rounded,
-                        size: 20,
-                        color: _recordingState == MathPadRecordingState.idle
-                            ? _textColor
-                            : _textColor60,
-                      ),
-                      color: isDark ? _darkPanelColor : Colors.white,
-                      onSelected: (mode) {
-                        setState(() {
-                          unawaited(_recordingService.setFrameRateMode(mode));
-                        });
-                      },
-                      itemBuilder: (ctx) => [
-                        _frameRateModeMenuItem(
-                          RecordingFrameRateMode.balanced,
-                          'Balanced (Recommended)',
-                          '60fps sampling, 30fps video -- smaller files, same '
-                              'smoothness as 60/60',
-                        ),
-                        _frameRateModeMenuItem(
-                          RecordingFrameRateMode.smooth60,
-                          '60 fps',
-                          'Smoothest motion, largest files -- full 60fps sampling and video',
-                        ),
-                        _frameRateModeMenuItem(
-                          RecordingFrameRateMode.compact30,
-                          '30 fps',
-                          'Smallest files -- 30fps sampling and video, slightly '
-                              'coarser on fast strokes',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 8),
-                    // Narration audio bitrate (see `RecordingAudioBitrate`)
-                    // -- also locked while a recording is in progress, same
-                    // reasoning as the two settings above.
-                    PopupMenuButton<RecordingAudioBitrate>(
-                      tooltip: 'Recording: audio quality',
-                      enabled: _recordingState == MathPadRecordingState.idle,
-                      icon: Icon(
-                        Icons.graphic_eq_rounded,
-                        size: 20,
-                        color: _recordingState == MathPadRecordingState.idle
-                            ? _textColor
-                            : _textColor60,
-                      ),
-                      color: isDark ? _darkPanelColor : Colors.white,
-                      onSelected: (mode) {
-                        setState(() {
-                          unawaited(_recordingService.setAudioBitrateMode(mode));
-                        });
-                      },
-                      itemBuilder: (ctx) => [
-                        _audioBitrateModeMenuItem(
-                          RecordingAudioBitrate.compact,
-                          'Compact (Recommended)',
-                          '96kbps -- smallest audio, still clean for narration',
-                        ),
-                        _audioBitrateModeMenuItem(
-                          RecordingAudioBitrate.standard,
-                          'Standard',
-                          '128kbps -- a bit more headroom for a noisier room',
-                        ),
-                        _audioBitrateModeMenuItem(
-                          RecordingAudioBitrate.high,
-                          'High',
-                          '192kbps -- maximum quality margin, largest audio',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 8),
                     if (_recordingState == MathPadRecordingState.recording)
                       IconButton(
                         icon: const Icon(
@@ -10880,17 +10762,36 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         tooltip: 'Encoding…',
                       )
                     else
-                      PopupMenuButton<bool>(
-                        tooltip: 'Start Recording',
-                        icon: Icon(
-                          Icons.fiber_manual_record_rounded,
-                          size: 20,
-                          color: _textColor,
+                      // Everything about a not-yet-started recording lives
+                      // under one "Start Recording" dropdown now -- the
+                      // camera choice, then the three recording settings
+                      // each as their own cascading submenu (Windows-style
+                      // flyout, via `SubmenuButton`), rather than separate
+                      // standalone toolbar icons. This whole menu only
+                      // exists in the tree while idle-ish (this `else`
+                      // branch), so the settings inside it never need their
+                      // own separate "disabled while recording" gating --
+                      // they're simply unreachable otherwise.
+                      MenuAnchor(
+                        style: MenuStyle(
+                          backgroundColor: WidgetStatePropertyAll(
+                            isDark ? _darkPanelColor : Colors.white,
+                          ),
                         ),
-                        color: isDark ? _darkPanelColor : Colors.white,
-                        onSelected: (withCamera) =>
-                            _startRecording(includeCamera: withCamera),
-                        itemBuilder: (ctx) => [
+                        builder: (context, controller, child) {
+                          return IconButton(
+                            icon: Icon(
+                              Icons.fiber_manual_record_rounded,
+                              size: 20,
+                              color: _textColor,
+                            ),
+                            tooltip: 'Start Recording',
+                            onPressed: () => controller.isOpen
+                                ? controller.close()
+                                : controller.open(),
+                          );
+                        },
+                        menuChildren: [
                           _recordingOptionMenuItem(
                             value: false,
                             icon: Icons.videocam_off_rounded,
@@ -10904,6 +10805,108 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             iconColor: const Color(0xFF6366F1),
                             label: 'With Camera',
                             description: 'Record canvas, audio & webcam overlay PIP',
+                          ),
+                          const Divider(height: 1),
+                          _recordingSettingsSubmenu<SegmentSealMode>(
+                            isDark: isDark,
+                            icon: Icons.settings_suggest_rounded,
+                            label: 'Background Encoding',
+                            selectedValue: _recordingService.segmentSealMode,
+                            onSelected: (mode) => setState(() {
+                              unawaited(
+                                _recordingService.setSegmentSealMode(mode),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: SegmentSealMode.hybrid,
+                                label: 'Hybrid (Recommended)',
+                                description:
+                                    'Seals on a pause, or every 20s -- '
+                                    'whichever comes first',
+                              ),
+                              (
+                                value: SegmentSealMode.idleOnly,
+                                label: 'Idle only',
+                                description:
+                                    'Seals only during a natural pause '
+                                    '(tutor talking, not drawing)',
+                              ),
+                              (
+                                value: SegmentSealMode.fixedInterval,
+                                label: 'Fixed interval',
+                                description:
+                                    'Seals every 20s, regardless of activity',
+                              ),
+                            ],
+                          ),
+                          _recordingSettingsSubmenu<RecordingFrameRateMode>(
+                            isDark: isDark,
+                            icon: Icons.video_settings_rounded,
+                            label: 'Frame Rate',
+                            selectedValue: _recordingService.frameRateMode,
+                            onSelected: (mode) => setState(() {
+                              unawaited(
+                                _recordingService.setFrameRateMode(mode),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: RecordingFrameRateMode.balanced,
+                                label: 'Balanced (Recommended)',
+                                description:
+                                    '60fps sampling, 30fps video -- smaller '
+                                    'files, same smoothness as 60/60',
+                              ),
+                              (
+                                value: RecordingFrameRateMode.smooth60,
+                                label: '60 fps',
+                                description:
+                                    'Smoothest motion, largest files -- full '
+                                    '60fps sampling and video',
+                              ),
+                              (
+                                value: RecordingFrameRateMode.compact30,
+                                label: '30 fps',
+                                description:
+                                    'Smallest files -- 30fps sampling and '
+                                    'video, slightly coarser on fast strokes',
+                              ),
+                            ],
+                          ),
+                          _recordingSettingsSubmenu<RecordingAudioBitrate>(
+                            isDark: isDark,
+                            icon: Icons.graphic_eq_rounded,
+                            label: 'Audio Quality',
+                            selectedValue: _recordingService.audioBitrateMode,
+                            onSelected: (mode) => setState(() {
+                              unawaited(
+                                _recordingService.setAudioBitrateMode(mode),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: RecordingAudioBitrate.compact,
+                                label: 'Compact (Recommended)',
+                                description:
+                                    '96kbps -- smallest audio, still clean '
+                                    'for narration',
+                              ),
+                              (
+                                value: RecordingAudioBitrate.standard,
+                                label: 'Standard',
+                                description:
+                                    '128kbps -- a bit more headroom for a '
+                                    'noisier room',
+                              ),
+                              (
+                                value: RecordingAudioBitrate.high,
+                                label: 'High',
+                                description:
+                                    '192kbps -- maximum quality margin, '
+                                    'largest audio',
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -10962,76 +10965,82 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
-  PopupMenuItem<bool> _recordingOptionMenuItem({
+  MenuItemButton _recordingOptionMenuItem({
     required bool value,
     required IconData icon,
     required Color iconColor,
     required String label,
     required String description,
   }) {
-    return PopupMenuItem<bool>(
-      value: value,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 18, color: iconColor),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: _textColor,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  description,
-                  style: TextStyle(color: _textColor60, fontSize: 11),
-                ),
-              ],
+    return MenuItemButton(
+      onPressed: () => _startRecording(includeCamera: value),
+      leadingIcon: Icon(icon, size: 18, color: iconColor),
+      child: SizedBox(
+        width: 240,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: _textColor,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 2),
+            Text(
+              description,
+              style: TextStyle(color: _textColor60, fontSize: 11),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  /// One row in the recording-segment-sealing-strategy popup (see
-  /// `SegmentSealMode`'s own doc comment for what each option actually
-  /// does) -- a label, a one-line plain-language description, and a radio
-  /// dot showing whether it's the currently active choice.
-  PopupMenuItem<SegmentSealMode> _segmentSealModeMenuItem(
-    SegmentSealMode mode,
-    String label,
-    String description,
-  ) {
-    final bool selected = _recordingService.segmentSealMode == mode;
-    return PopupMenuItem<SegmentSealMode>(
-      value: mode,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
+  /// A cascading "Windows-style" flyout submenu for one of the three
+  /// recording settings (background-encoding strategy / frame rate /
+  /// audio bitrate) -- shared by all three instead of three near-
+  /// duplicate methods, since they only differ in the option type [T],
+  /// the icon/label, and where the current value lives. Each row shows a
+  /// radio dot for whether it's the currently active choice, same visual
+  /// language the old standalone popups used.
+  SubmenuButton _recordingSettingsSubmenu<T>({
+    required bool isDark,
+    required IconData icon,
+    required String label,
+    required T selectedValue,
+    required void Function(T value) onSelected,
+    required List<({T value, String label, String description})> options,
+  }) {
+    return SubmenuButton(
+      menuStyle: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(
+          isDark ? _darkPanelColor : Colors.white,
+        ),
+      ),
+      leadingIcon: Icon(icon, size: 18, color: _textColor),
+      menuChildren: options.map((opt) {
+        final bool selected = opt.value == selectedValue;
+        return MenuItemButton(
+          onPressed: () => onSelected(opt.value),
+          leadingIcon: Icon(
             selected
                 ? Icons.radio_button_checked_rounded
                 : Icons.radio_button_unchecked_rounded,
             size: 18,
             color: selected ? const Color(0xFF6366F1) : _textColor60,
           ),
-          const SizedBox(width: 8),
-          Expanded(
+          child: SizedBox(
+            width: 240,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  label,
+                  opt.label,
                   style: TextStyle(
                     color: _textColor,
                     fontWeight: FontWeight.w600,
@@ -11040,112 +11049,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  description,
+                  opt.description,
                   style: TextStyle(color: _textColor60, fontSize: 11),
                 ),
               ],
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  /// One row in the recording-frame-rate popup (see
-  /// `RecordingFrameRateMode`'s own doc comment for the full benefit/cost
-  /// breakdown of each option) -- same label/description/radio-dot layout
-  /// as `_segmentSealModeMenuItem` above.
-  PopupMenuItem<RecordingFrameRateMode> _frameRateModeMenuItem(
-    RecordingFrameRateMode mode,
-    String label,
-    String description,
-  ) {
-    final bool selected = _recordingService.frameRateMode == mode;
-    return PopupMenuItem<RecordingFrameRateMode>(
-      value: mode,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            selected
-                ? Icons.radio_button_checked_rounded
-                : Icons.radio_button_unchecked_rounded,
-            size: 18,
-            color: selected ? const Color(0xFF6366F1) : _textColor60,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: _textColor,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  description,
-                  style: TextStyle(color: _textColor60, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// One row in the recording-audio-bitrate popup (see
-  /// `RecordingAudioBitrate`'s own doc comment for the full benefit/cost
-  /// breakdown of each option) -- same label/description/radio-dot layout
-  /// as `_segmentSealModeMenuItem` above.
-  PopupMenuItem<RecordingAudioBitrate> _audioBitrateModeMenuItem(
-    RecordingAudioBitrate mode,
-    String label,
-    String description,
-  ) {
-    final bool selected = _recordingService.audioBitrateMode == mode;
-    return PopupMenuItem<RecordingAudioBitrate>(
-      value: mode,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            selected
-                ? Icons.radio_button_checked_rounded
-                : Icons.radio_button_unchecked_rounded,
-            size: 18,
-            color: selected ? const Color(0xFF6366F1) : _textColor60,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: _textColor,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  description,
-                  style: TextStyle(color: _textColor60, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        );
+      }).toList(),
+      child: Text(label, style: TextStyle(color: _textColor, fontSize: 13)),
     );
   }
 
