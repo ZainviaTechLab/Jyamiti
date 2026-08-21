@@ -818,9 +818,15 @@ class MathPadRecordingService extends ChangeNotifier {
         if (device == null) {
           onCameraWarning?.call('No camera was found -- recording without one.');
         } else {
+          // `-stats_period` tightens how often ffmpeg prints its `frame=`
+          // stderr line (default 0.5s) down to 100ms -- the readiness wait
+          // below fires on the FIRST such line, so this is what keeps that
+          // detection close to the camera's true first frame instead of up
+          // to half a second behind it.
           final List<String> cameraArgs = Platform.isMacOS
               ? [
                   '-y',
+                  '-stats_period', '0.1',
                   '-f', 'avfoundation',
                   '-i', device,
                   '-c:v', 'libx264',
@@ -830,6 +836,7 @@ class MathPadRecordingService extends ChangeNotifier {
                 ]
               : [
                   '-y',
+                  '-stats_period', '0.1',
                   '-f', 'dshow',
                   '-i', 'video=$device',
                   '-c:v', 'libx264',
