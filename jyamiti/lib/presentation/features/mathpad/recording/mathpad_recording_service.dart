@@ -736,6 +736,23 @@ class MathPadRecordingService extends ChangeNotifier {
   // that would otherwise compound, segment after segment, across a long
   // recording if left uncorrected.
   double _cameraCumulativeSealedDurationSeconds = 0.0;
+  double _capturedCameraCumulativeSealedDurationSeconds = 0.0;
+
+  // Segment 0's own camera file, kept (not deleted like every other
+  // live-sealed segment's) instead of being composited live with the
+  // imprecise provisional `_cameraStartOffsetSeconds` estimate --
+  // `_maybeSealCameraSegment` seals its canvas content plain (canvas-
+  // only, exactly like a camera-less recording would), and `encode()`
+  // composites this file onto that canvas segment separately, using the
+  // exact same ground-truth technique the leftover tail already gets
+  // (see `encode()`'s "head" section). Bounded, one-time cost (one more
+  // small overlay pass, the same size as the tail's) buys the first
+  // ~`_kSegmentSealInterval` of the recording the same accuracy as the
+  // very end already had, instead of carrying the live estimate's
+  // imprecision for its entire length with no way to correct it after
+  // the fact.
+  String? _heldCameraSegment0Path;
+  String? _capturedHeldCameraSegment0Path;
 
   MathPadRecordingState _state = MathPadRecordingState.idle;
   MathPadRecordingState get state => _state;
@@ -1136,6 +1153,7 @@ class MathPadRecordingService extends ChangeNotifier {
                 ];
           _nextCameraSegmentIndex = 0;
           _cameraCumulativeSealedDurationSeconds = 0.0;
+          _heldCameraSegment0Path = null;
           _cameraStopSignalAt = null;
           _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
           // See the "Windows Job Object" section above this class -- ties
@@ -1525,20 +1543,28 @@ class MathPadRecordingService extends ChangeNotifier {
   /// read (the segment muxer only starts a new file once the previous
   /// one is fully flushed and closed).
   ///
-  /// The camera segment's own PTS resets to 0 each time
-  /// (`-reset_timestamps 1` in `start()`), so every segment needs its own
-  /// alignment correction, not just the first -- see
-  /// `_cameraCumulativeSealedDurationSeconds`'s doc comment for why a
-  /// single fixed offset repeated unchanged for every segment would
-  /// drift over a long recording. The correction here is computed fresh
-  /// each time from exact measured totals (this segment's own real
-  /// probed duration, weighed against exactly how much canvas content is
-  /// being sealed alongside it) rather than an assumed constant, so
-  /// there's nothing to compound: `-itsoffset` delays the camera if it's
-  /// still "ahead" of where this canvas window needs it to start;
-  /// `-ss` trims the camera's own start instead if canvas has already
-  /// pulled further ahead than the camera has content to offer for --
-  /// see `_encodeCameraCompositeSegment`.
+  /// Segment 0 specifically is never composited live at all -- its
+  /// canvas content is sealed plain (canvas-only) and its camera file is
+  /// kept instead of deleted, both handled once, accurately, at
+  /// `encode()` time. See `_heldCameraSegment0Path`'s doc comment for
+  /// why: unlike every later segment, segment 0 has no earlier
+  /// measurement to compute its own alignment from -- only the
+  /// provisional `_cameraStartOffsetSeconds` estimate exists yet at that
+  /// point.
+  ///
+  /// Every segment from 1 onward: the camera segment's own PTS resets to
+  /// 0 each time (`-reset_timestamps 1` in `start()`), so each needs its
+  /// own alignment correction. See `_cameraCumulativeSealedDurationSeconds`'s
+  /// doc comment for why a single fixed offset repeated unchanged for
+  /// every segment would drift over a long recording. The correction
+  /// here is computed fresh each time from exact measured totals (this
+  /// segment's own real probed duration, weighed against exactly how
+  /// much canvas content is being sealed alongside it) rather than an
+  /// assumed constant, so there's nothing to compound: `-itsoffset`
+  /// delays the camera if it's still "ahead" of where this canvas window
+  /// needs it to start; `-ss` trims the camera's own start instead if
+  /// canvas has already pulled further ahead than the camera has content
+  /// to offer for -- see `_encodeCameraCompositeSegment`.
   Future<void> _maybeSealCameraSegment() async {
     if (_segmentSealInFlight || _sessionDir == null) return;
     final int sealableCount =
@@ -1573,33 +1599,51 @@ class MathPadRecordingService extends ChangeNotifier {
         _sealedConcatEntryCount,
         _concatEntries.length - 1,
       );
-      final double canvasCumulativeBefore = _concatEntries
-          .take(_sealedConcatEntryCount)
-          .fold(0.0, (sum, e) => sum + e.durationSeconds);
-
-      // How far (canvas-relative) this segment's own real content starts,
-      // versus how far (canvas-relative) this canvas window starts.
-      // Positive: camera hasn't started yet at this window's beginning --
-      // delay it (`-itsoffset`). Negative: canvas has already moved
-      // further ahead than the camera has content for -- trim that much
-      // off the camera's own start instead (`-ss`), since `-itsoffset`
-      // can only push a stream later, never earlier.
-      final double rawOffset =
-          (_cameraStartOffsetSeconds + _cameraCumulativeSealedDurationSeconds) -
-          canvasCumulativeBefore;
-
       final String outPath = p.join(
         dir.path,
         'segment_${_sealedSegmentPaths.length}.ts',
       );
-      final bool ok = await _encodeCameraCompositeSegment(
-        sessionDir: dir,
-        entries: toSeal,
-        cameraSegmentPath: cameraSegPath,
-        cameraOffsetSeconds: rawOffset,
-        outPath: outPath,
-        encodeFps: _activeEncodeFps,
-      );
+
+      final bool ok;
+      if (segIndex == 0) {
+        // Held back for accurate compositing at `encode()` time instead
+        // of live -- see `_heldCameraSegment0Path`'s doc comment. Sealed
+        // canvas-only here, exactly like a camera-less recording's first
+        // segment would be.
+        ok = await _encodeSegment(
+          sessionDir: dir,
+          entries: toSeal,
+          outPath: outPath,
+          preset: 'veryfast',
+          crf: '20',
+          encodeFps: _activeEncodeFps,
+        );
+        if (ok) _heldCameraSegment0Path = cameraSegPath;
+      } else {
+        final double canvasCumulativeBefore = _concatEntries
+            .take(_sealedConcatEntryCount)
+            .fold(0.0, (sum, e) => sum + e.durationSeconds);
+        // How far (canvas-relative) this segment's own real content
+        // starts, versus how far (canvas-relative) this canvas window
+        // starts. Positive: camera hasn't started yet at this window's
+        // beginning -- delay it (`-itsoffset`). Negative: canvas has
+        // already moved further ahead than the camera has content for --
+        // trim that much off the camera's own start instead (`-ss`),
+        // since `-itsoffset` can only push a stream later, never
+        // earlier.
+        final double rawOffset =
+            (_cameraStartOffsetSeconds + _cameraCumulativeSealedDurationSeconds) -
+            canvasCumulativeBefore;
+        ok = await _encodeCameraCompositeSegment(
+          sessionDir: dir,
+          entries: toSeal,
+          cameraSegmentPath: cameraSegPath,
+          cameraOffsetSeconds: rawOffset,
+          outPath: outPath,
+          encodeFps: _activeEncodeFps,
+        );
+      }
+
       if (ok) {
         _sealedSegmentPaths.add(outPath);
         _sealedConcatEntryCount += toSeal.length;
@@ -1610,9 +1654,14 @@ class MathPadRecordingService extends ChangeNotifier {
             await File(p.join(dir.path, entry.fileName)).delete();
           } catch (_) {}
         }
-        try {
-          await File(cameraSegPath).delete();
-        } catch (_) {}
+        // Segment 0's own camera file is deliberately kept (see
+        // `_heldCameraSegment0Path`) -- every other segment's is no
+        // longer needed once fully baked into `outPath`.
+        if (segIndex != 0) {
+          try {
+            await File(cameraSegPath).delete();
+          } catch (_) {}
+        }
       }
     } catch (_) {
       // A failed seal just means more work happens at the final encode.
@@ -1662,14 +1711,10 @@ class MathPadRecordingService extends ChangeNotifier {
       );
       await manifestFile.writeAsString(manifest.toString());
 
-      // Same overlay structure `encode()`'s camera pass uses: canvas as
-      // the base, camera cropped to a square, scaled to 240x240, top-right
-      // corner with a thin white border.
-      final String filterComplex =
-          '[0:v]fps=$encodeFps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
-          '[1:v]crop=ih:ih,scale=w=240:h=240,'
-          'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
-          '[base][cam]overlay=x=main_w-overlay_w-24:y=24[outv]';
+      final String filterComplex = _cameraOverlayFilterComplex(
+        cameraInputIndex: 1,
+        encodeFps: encodeFps,
+      );
 
       final ProcessResult result = await Process.run(ffmpegPath, [
         '-y',
@@ -1693,6 +1738,52 @@ class MathPadRecordingService extends ChangeNotifier {
       try {
         await manifestFile.delete();
       } catch (_) {}
+      return result.exitCode == 0 && await File(outPath).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Composites [cameraSegmentPath] onto an ALREADY-ENCODED canvas
+  /// segment file directly (unlike `_encodeCameraCompositeSegment`,
+  /// which builds a fresh concat manifest from raw frame entries) --
+  /// used only by `encode()`'s "head" handling, where segment 0's canvas
+  /// content was already sealed canvas-only during recording (see
+  /// `_heldCameraSegment0Path`'s doc comment) and just needs the camera
+  /// stamped onto it now, with the accurate offset that's only knowable
+  /// once the recording has actually stopped. Returns false (never
+  /// throws) on any failure, same contract as `_encodeSegment`.
+  Future<bool> _compositeCameraOntoEncodedSegment({
+    required String canvasSegmentPath,
+    required String cameraSegmentPath,
+    required double cameraOffsetSeconds,
+    required String outPath,
+    required int encodeFps,
+  }) async {
+    try {
+      final String ffmpegPath = _resolveFfmpegPath();
+      if (!await File(ffmpegPath).exists()) return false;
+
+      final String filterComplex = _cameraOverlayFilterComplex(
+        cameraInputIndex: 1,
+        encodeFps: encodeFps,
+      );
+
+      final ProcessResult result = await Process.run(ffmpegPath, [
+        '-y',
+        '-i', canvasSegmentPath,
+        if (cameraOffsetSeconds > 0.0005)
+          ...['-itsoffset', cameraOffsetSeconds.toStringAsFixed(6)],
+        '-i', cameraSegmentPath,
+        '-filter_complex', filterComplex,
+        '-map', '[outv]',
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-preset', 'veryfast',
+        '-crf', '20',
+        '-f', 'mpegts',
+        outPath,
+      ]);
       return result.exitCode == 0 && await File(outPath).exists();
     } catch (_) {
       return false;
@@ -1758,6 +1849,9 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedAudioBitrateKbps = _audioKbpsFor(audioBitrateMode);
     _capturedNextCameraSegmentIndex = _nextCameraSegmentIndex;
     _capturedCameraCompositingMode = _activeCameraCompositingMode;
+    _capturedCameraCumulativeSealedDurationSeconds =
+        _cameraCumulativeSealedDurationSeconds;
+    _capturedHeldCameraSegment0Path = _heldCameraSegment0Path;
     // While `_startedAt` is still valid -- see `_cameraStopSignalAt`'s doc
     // comment for what `encode()` does with this.
     _capturedElapsedToCameraStopSignalSeconds =
@@ -1782,6 +1876,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _cameraStartOffsetSeconds = 0.0;
     _nextCameraSegmentIndex = 0;
     _cameraCumulativeSealedDurationSeconds = 0.0;
+    _heldCameraSegment0Path = null;
     _cameraStopSignalAt = null;
 
     _state = MathPadRecordingState.waitingForEncodeChoice;
@@ -1906,6 +2001,10 @@ class MathPadRecordingService extends ChangeNotifier {
         _capturedCameraCompositingMode;
     final bool liveSegmentsMode =
         cameraCompositingMode == RecordingCameraCompositingMode.liveSegments;
+    final double capturedCameraCumulativeSealedDurationSeconds =
+        _capturedCameraCumulativeSealedDurationSeconds;
+    final String? capturedHeldCameraSegment0Path =
+        _capturedHeldCameraSegment0Path;
 
     _state = MathPadRecordingState.encoding;
     _emit();
@@ -1969,6 +2068,7 @@ class MathPadRecordingService extends ChangeNotifier {
       // genuinely captured nothing at all.
       String? tailCameraSourcePath;
       double tailCameraOffsetSeconds = 0.0;
+      double headCameraOffsetSeconds = 0.0;
       bool hasCamera = false;
       if (cameraWasEnabled) {
         final List<File> remainingCameraSegments = <File>[];
@@ -2015,6 +2115,7 @@ class MathPadRecordingService extends ChangeNotifier {
           }
         }
 
+        double tailCameraActualDuration = 0.0;
         if (tailCameraSourcePath != null) {
           hasCamera = true;
           // Ground truth: how far the tail camera content's real first
@@ -2028,6 +2129,7 @@ class MathPadRecordingService extends ChangeNotifier {
             tailCameraSourcePath,
           );
           if (actualDuration != null) {
+            tailCameraActualDuration = actualDuration;
             // In `finalPass` mode nothing was ever camera-composited
             // live, so this "tail" is really the WHOLE recording -- the
             // offset needs to be relative to `_startedAt` (the whole
@@ -2059,6 +2161,27 @@ class MathPadRecordingService extends ChangeNotifier {
             'Camera capture produced no video -- saved without it.',
           );
         }
+
+        // ─── Head camera content (segment 0, held back -- see
+        // `_heldCameraSegment0Path`'s doc comment) ─────────────────────
+        // Same ground-truth idea as the tail's offset above, just
+        // extended over the WHOLE camera timeline instead of the
+        // unconsumed remainder: the camera recorded continuously from
+        // its true (unknown) start to the stop signal, so subtracting
+        // everything it's known to have actually recorded (every
+        // live-sealed segment's real probed duration, plus the tail's)
+        // from the total elapsed time to the stop signal leaves exactly
+        // how late the camera's real first frame was -- the same number
+        // `-itsoffset` needed for the very first segment, now knowable
+        // exactly instead of only estimated.
+        if (liveSegmentsMode && capturedHeldCameraSegment0Path != null) {
+          headCameraOffsetSeconds = max(
+            0.0,
+            capturedElapsedToCameraStopSignalSeconds -
+                (capturedCameraCumulativeSealedDurationSeconds +
+                    tailCameraActualDuration),
+          );
+        }
       }
 
       // The canvas source, as an ffmpeg concat-demuxer manifest -- either
@@ -2078,6 +2201,39 @@ class MathPadRecordingService extends ChangeNotifier {
         // `_maybeSealSegment`/`_maybeSealCameraSegment`). Only the small
         // leftover tail needs a real encode here.
         final List<String> allSegments = List.of(sealedSegments);
+
+        // ─── Head: segment 0, held back for accurate compositing ──────
+        // `_sealedSegmentPaths.first` is always segment 0's canvas-only
+        // encode when a camera segment was ever held (see
+        // `_heldCameraSegment0Path`'s doc comment -- segment 0 is always
+        // the very first thing `_maybeSealCameraSegment` ever seals for
+        // a given recording, so there's no ambiguity about which entry
+        // this is). Composited here, once, using the offset computed
+        // above from exact ground truth -- replacing the canvas-only
+        // placeholder with the real, camera-composited version before
+        // it goes into the stream-copy assembly below.
+        if (liveSegmentsMode &&
+            hasCamera &&
+            capturedHeldCameraSegment0Path != null &&
+            allSegments.isNotEmpty) {
+          final String headPath = p.join(sessionDir.path, 'segment_head.ts');
+          final bool headOk = await _compositeCameraOntoEncodedSegment(
+            canvasSegmentPath: allSegments.first,
+            cameraSegmentPath: capturedHeldCameraSegment0Path,
+            cameraOffsetSeconds: headCameraOffsetSeconds,
+            outPath: headPath,
+            encodeFps: encodeFps,
+          );
+          if (headOk) {
+            allSegments[0] = headPath;
+          } else {
+            onCameraWarning?.call(
+              'Camera couldn\'t be added to part of the video -- saved '
+              'without it there.',
+            );
+          }
+        }
+
         if (tailEntries.isNotEmpty) {
           final String tailPath = p.join(sessionDir.path, 'segment_tail.ts');
           bool tailOk = false;
@@ -2274,17 +2430,14 @@ class MathPadRecordingService extends ChangeNotifier {
         // `fps`+`scale` here do the same job `-r`/`-vf` did for the
         // camera-less path above, just expressed inside the filter graph
         // instead of as separate output options -- `-vf` can't be mixed
-        // with an explicit `-filter_complex`/`-map`. Camera box: cropped
-        // to a square and scaled to 240x240, top-right corner, thin white
-        // border so it stays legible over any background colour.
-        // `overlay`'s default `eof_action` (repeat) freezes the box on
-        // its last frame if the camera feed happens to be a touch shorter
-        // than the canvas video, rather than cutting the output short.
-        final String filterComplex =
-            '[0:v]fps=$encodeFps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
-            '[$cameraInputIndex:v]crop=ih:ih,scale=w=240:h=240,'
-            'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
-            '[base][cam]overlay=x=main_w-overlay_w-24:y=24[outv]';
+        // with an explicit `-filter_complex`/`-map`. `overlay`'s default
+        // `eof_action` (repeat) freezes the camera box on its last frame
+        // if the camera feed happens to be a touch shorter than the
+        // canvas video, rather than cutting the output short.
+        final String filterComplex = _cameraOverlayFilterComplex(
+          cameraInputIndex: cameraInputIndex,
+          encodeFps: encodeFps,
+        );
 
         await _runFfmpegWithProgress(ffmpegPath, [
           '-y',
@@ -2395,6 +2548,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _cameraEnabled = false;
     _nextCameraSegmentIndex = 0;
     _cameraCumulativeSealedDurationSeconds = 0.0;
+    _heldCameraSegment0Path = null;
     _cameraStopSignalAt = null;
     final Directory? sessionDir = _sessionDir;
     final Directory? capturedSessionDir = _capturedSessionDir;
@@ -2548,6 +2702,23 @@ class MathPadRecordingService extends ChangeNotifier {
     _cameraProcess?.kill(ProcessSignal.sigkill);
   }
 }
+
+/// The shared camera-overlay filter graph used by every place that
+/// composites the camera onto canvas content (`_encodeCameraCompositeSegment`,
+/// `encode()`'s tail/head handling, and its whole-recording single pass) --
+/// canvas as the base, camera cropped to a square, scaled to 240x240,
+/// top-right corner with a thin white border. [cameraInputIndex] is
+/// whichever ffmpeg input index the camera stream ends up at, which
+/// varies by caller depending on whether/where an audio input is also
+/// present in that same command.
+String _cameraOverlayFilterComplex({
+  required int cameraInputIndex,
+  required int encodeFps,
+}) =>
+    '[0:v]fps=$encodeFps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
+    '[$cameraInputIndex:v]crop=ih:ih,scale=w=240:h=240,'
+    'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
+    '[base][cam]overlay=x=main_w-overlay_w-24:y=24[outv]';
 
 /// One physical frame file in the `stop()` concat manifest, plus how many
 /// seconds it should be held for (accumulated across every duplicate 1/fps
