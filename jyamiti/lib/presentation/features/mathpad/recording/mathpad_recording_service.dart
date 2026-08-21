@@ -723,6 +723,19 @@ class MathPadRecordingService extends ChangeNotifier {
   // the leftover tail instead, handled in `encode()`.
   int _nextCameraSegmentIndex = 0;
   int _capturedNextCameraSegmentIndex = 0;
+  // Sum of every already-sealed camera segment's own REAL probed
+  // duration (not an assumed `_kSegmentSealInterval` each) -- lets
+  // `_maybeSealCameraSegment` compute each new segment's alignment from
+  // exact measured cumulative totals on both sides (camera and canvas)
+  // instead of an assumed one-time offset repeated unchanged for every
+  // segment, which would drift over a long recording: detecting a camera
+  // segment's rollover always happens slightly AFTER it truly occurred
+  // (bounded by `_kSegmentSealCheckInterval`'s poll granularity), so the
+  // canvas window paired with it ends up very slightly longer than the
+  // segment's own true real-time span, every single time -- an error
+  // that would otherwise compound, segment after segment, across a long
+  // recording if left uncorrected.
+  double _cameraCumulativeSealedDurationSeconds = 0.0;
 
   MathPadRecordingState _state = MathPadRecordingState.idle;
   MathPadRecordingState get state => _state;
@@ -1122,6 +1135,7 @@ class MathPadRecordingService extends ChangeNotifier {
                   ...cameraOutputArgs,
                 ];
           _nextCameraSegmentIndex = 0;
+          _cameraCumulativeSealedDurationSeconds = 0.0;
           _cameraStopSignalAt = null;
           _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
           // See the "Windows Job Object" section above this class -- ties
@@ -1512,14 +1526,19 @@ class MathPadRecordingService extends ChangeNotifier {
   /// one is fully flushed and closed).
   ///
   /// The camera segment's own PTS resets to 0 each time
-  /// (`-reset_timestamps 1` in `start()`), so in principle each one needs
-  /// its own alignment correction the way the very first did (device-open
-  /// latency) -- but that latency is a ONE-TIME startup cost, not a
-  /// recurring one: the device stays open continuously across segments,
-  /// so only segment 0 actually needs `_cameraStartOffsetSeconds`
-  /// applied. Applying it to every segment would instead show up as a
-  /// small camera freeze/gap at the START of every single segment --
-  /// worse than the one-time startup delay it would be "fixing".
+  /// (`-reset_timestamps 1` in `start()`), so every segment needs its own
+  /// alignment correction, not just the first -- see
+  /// `_cameraCumulativeSealedDurationSeconds`'s doc comment for why a
+  /// single fixed offset repeated unchanged for every segment would
+  /// drift over a long recording. The correction here is computed fresh
+  /// each time from exact measured totals (this segment's own real
+  /// probed duration, weighed against exactly how much canvas content is
+  /// being sealed alongside it) rather than an assumed constant, so
+  /// there's nothing to compound: `-itsoffset` delays the camera if it's
+  /// still "ahead" of where this canvas window needs it to start;
+  /// `-ss` trims the camera's own start instead if canvas has already
+  /// pulled further ahead than the camera has content to offer for --
+  /// see `_encodeCameraCompositeSegment`.
   Future<void> _maybeSealCameraSegment() async {
     if (_segmentSealInFlight || _sessionDir == null) return;
     final int sealableCount =
@@ -1541,10 +1560,34 @@ class MathPadRecordingService extends ChangeNotifier {
 
     _segmentSealInFlight = true;
     try {
+      // This segment's own real duration -- needed both for the
+      // alignment math below and to keep
+      // `_cameraCumulativeSealedDurationSeconds` an exact running total,
+      // not an assumed `_kSegmentSealInterval` each.
+      final double? segmentDuration = await _probeDurationSeconds(
+        cameraSegPath,
+      );
+      if (segmentDuration == null) return;
+
       final List<_ConcatEntry> toSeal = _concatEntries.sublist(
         _sealedConcatEntryCount,
         _concatEntries.length - 1,
       );
+      final double canvasCumulativeBefore = _concatEntries
+          .take(_sealedConcatEntryCount)
+          .fold(0.0, (sum, e) => sum + e.durationSeconds);
+
+      // How far (canvas-relative) this segment's own real content starts,
+      // versus how far (canvas-relative) this canvas window starts.
+      // Positive: camera hasn't started yet at this window's beginning --
+      // delay it (`-itsoffset`). Negative: canvas has already moved
+      // further ahead than the camera has content for -- trim that much
+      // off the camera's own start instead (`-ss`), since `-itsoffset`
+      // can only push a stream later, never earlier.
+      final double rawOffset =
+          (_cameraStartOffsetSeconds + _cameraCumulativeSealedDurationSeconds) -
+          canvasCumulativeBefore;
+
       final String outPath = p.join(
         dir.path,
         'segment_${_sealedSegmentPaths.length}.ts',
@@ -1553,7 +1596,7 @@ class MathPadRecordingService extends ChangeNotifier {
         sessionDir: dir,
         entries: toSeal,
         cameraSegmentPath: cameraSegPath,
-        cameraOffsetSeconds: segIndex == 0 ? _cameraStartOffsetSeconds : 0.0,
+        cameraOffsetSeconds: rawOffset,
         outPath: outPath,
         encodeFps: _activeEncodeFps,
       );
@@ -1561,6 +1604,7 @@ class MathPadRecordingService extends ChangeNotifier {
         _sealedSegmentPaths.add(outPath);
         _sealedConcatEntryCount += toSeal.length;
         _nextCameraSegmentIndex = segIndex + 1;
+        _cameraCumulativeSealedDurationSeconds += segmentDuration;
         for (final entry in toSeal) {
           try {
             await File(p.join(dir.path, entry.fileName)).delete();
@@ -1584,6 +1628,16 @@ class MathPadRecordingService extends ChangeNotifier {
   /// recording camera pass used, just scoped to one segment's worth of
   /// canvas content instead of the entire video. Returns false (never
   /// throws) on any failure, same contract as `_encodeSegment`.
+  ///
+  /// [cameraOffsetSeconds] may be negative (only ever happens from
+  /// `_maybeSealCameraSegment` -- `encode()`'s tail always clamps to
+  /// `>= 0`): positive delays the camera stream with `-itsoffset`
+  /// (camera hasn't started yet at this window's beginning); negative
+  /// trims that much off the camera's own start with `-ss` instead,
+  /// since `-itsoffset` can only push a stream later, never earlier, and
+  /// canvas can genuinely have moved further ahead than the camera has
+  /// content to offer for once a couple of segments have gone by -- see
+  /// `_cameraCumulativeSealedDurationSeconds`'s doc comment.
   Future<bool> _encodeCameraCompositeSegment({
     required Directory sessionDir,
     required List<_ConcatEntry> entries,
@@ -1623,7 +1677,9 @@ class MathPadRecordingService extends ChangeNotifier {
         '-safe', '0',
         '-i', manifestFile.path,
         if (cameraOffsetSeconds > 0.0005)
-          ...['-itsoffset', cameraOffsetSeconds.toStringAsFixed(6)],
+          ...['-itsoffset', cameraOffsetSeconds.toStringAsFixed(6)]
+        else if (cameraOffsetSeconds < -0.0005)
+          ...['-ss', (-cameraOffsetSeconds).toStringAsFixed(6)],
         '-i', cameraSegmentPath,
         '-filter_complex', filterComplex,
         '-map', '[outv]',
@@ -1725,6 +1781,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _audioStartOffsetSeconds = 0.0;
     _cameraStartOffsetSeconds = 0.0;
     _nextCameraSegmentIndex = 0;
+    _cameraCumulativeSealedDurationSeconds = 0.0;
     _cameraStopSignalAt = null;
 
     _state = MathPadRecordingState.waitingForEncodeChoice;
@@ -2337,6 +2394,7 @@ class MathPadRecordingService extends ChangeNotifier {
     await _stopCameraCapture();
     _cameraEnabled = false;
     _nextCameraSegmentIndex = 0;
+    _cameraCumulativeSealedDurationSeconds = 0.0;
     _cameraStopSignalAt = null;
     final Directory? sessionDir = _sessionDir;
     final Directory? capturedSessionDir = _capturedSessionDir;
