@@ -738,10 +738,25 @@ class MathPadRecordingService extends ChangeNotifier {
   /// just killing it can leave `camera.mp4` without a valid trailer.
   /// Falls back to a hard kill if it doesn't exit promptly, so callers
   /// (`stop()`/`cancel()`) can never hang waiting on this.
+  ///
+  /// Also recomputes `_cameraStartOffsetSeconds` from ground truth once
+  /// the file is finalized, replacing `start()`'s provisional estimate.
+  /// Trying to catch the exact moment the camera "really started" live
+  /// (process-spawn time, or the first `-progress` line) is inherently
+  /// approximate -- spawn time misses device-open latency entirely, and
+  /// the first progress line is delayed by however long ffmpeg batches
+  /// frames before flushing progress data, which overshoots the other
+  /// way. Neither is needed: the wall-clock instant the stop signal was
+  /// sent, minus the camera file's own actual recorded duration (both
+  /// exactly measurable once the file exists), gives the real offset
+  /// directly -- no live timing race involved at all.
   Future<void> _stopCameraCapture() async {
     final Process? process = _cameraProcess;
     _cameraProcess = null;
     if (process == null) return;
+    final DateTime? startedAt = _startedAt;
+    final Directory? sessionDir = _sessionDir;
+    final DateTime stopSignalAt = DateTime.now();
     try {
       process.stdin.writeln('q');
       await process.stdin.flush();
@@ -750,6 +765,54 @@ class MathPadRecordingService extends ChangeNotifier {
       await process.exitCode.timeout(const Duration(seconds: 5));
     } catch (_) {
       process.kill(ProcessSignal.sigkill);
+    }
+
+    if (startedAt == null || sessionDir == null) return;
+    try {
+      final String cameraPath = p.join(sessionDir.path, 'camera.mp4');
+      if (!await File(cameraPath).exists()) return;
+      final double? actualDuration = await _probeDurationSeconds(cameraPath);
+      if (actualDuration == null) return;
+      final double elapsedToStopSignal =
+          stopSignalAt.difference(startedAt).inMicroseconds / 1e6;
+      _cameraStartOffsetSeconds = max(
+        0.0,
+        elapsedToStopSignal - actualDuration,
+      );
+    } catch (_) {
+      // Keep whatever provisional estimate `start()` already set.
+    }
+  }
+
+  /// Parses ffmpeg's own `Duration: HH:MM:SS.ss` line (printed to stderr
+  /// when just asked to probe a file with `-i`) into total seconds, kept
+  /// separate from the coarser, display-oriented `getVideoDuration` above
+  /// (that one only parses whole seconds and returns a formatted string
+  /// for the UI -- this needs sub-second precision to be useful for a
+  /// wall-clock offset calculation). Returns null (never throws) on
+  /// anything going wrong.
+  Future<double?> _probeDurationSeconds(String path) async {
+    final String ffmpegPath = _resolveFfmpegPath();
+    if (!await File(ffmpegPath).exists()) return null;
+    try {
+      final ProcessResult result = await Process.run(ffmpegPath, ['-i', path]);
+      final String output = result.stderr is String
+          ? result.stderr as String
+          : result.stderr.toString();
+      final match = RegExp(
+        r'Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})',
+      ).firstMatch(output);
+      if (match == null) return null;
+      final int hours = int.parse(match.group(1)!);
+      final int minutes = int.parse(match.group(2)!);
+      final int seconds = int.parse(match.group(3)!);
+      final int centiseconds = int.parse(match.group(4)!);
+      return hours * 3600 +
+          minutes * 60 +
+          seconds +
+          centiseconds / 100;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -892,8 +955,6 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
-                  '-progress', 'pipe:1',
-                  '-nostats',
                   p.join(sessionDir.path, 'camera.mp4'),
                 ]
               : [
@@ -903,8 +964,6 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
-                  '-progress', 'pipe:1',
-                  '-nostats',
                   p.join(sessionDir.path, 'camera.mp4'),
                 ];
           _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
@@ -912,46 +971,22 @@ class MathPadRecordingService extends ChangeNotifier {
           // this process's lifetime to the app's so a hard-kill can't
           // orphan it holding the webcam locked.
           _tieProcessLifetimeToApp(_cameraProcess!.pid);
-          // Provisional estimate -- a LOWER bound, not exact: this only
-          // measures how long spawning the OS process itself took, not
-          // how much longer ffmpeg then spends actually opening the
-          // DirectShow device inside it (camera device open latency is
-          // typically the slowest of the three capture streams to
-          // actually start). Overwritten below by a real measurement the
-          // moment ffmpeg confirms it's actually processing frames; this
-          // only stays in effect as a fallback if that somehow never
-          // arrives (e.g. the device fails silently with zero output).
+          // Provisional only -- this measures how long spawning the OS
+          // process itself took, nothing about how much longer ffmpeg then
+          // spends actually opening the DirectShow device inside it. Not
+          // relied on for the real offset any more (see
+          // `_stopCameraCapture`, which recomputes it from the finished
+          // file's own actual duration once the camera has stopped) --
+          // this only stays in effect as a fallback if that recomputation
+          // fails for some reason (e.g. the device produced zero output).
           _cameraStartOffsetSeconds = max(
             0.0,
             DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
           );
-          // `-progress pipe:1` above makes ffmpeg emit structured
-          // `key=value` progress lines on stdout once it's actually
-          // encoding real frames (same technique `_runFfmpegWithProgress`
-          // uses for the encode passes) -- the wall-clock moment the
-          // FIRST such line arrives is a much more accurate "the camera
-          // genuinely started" signal than merely "the OS process spawned"
-          // above, since it's downstream of the DirectShow device-open
-          // latency that made the earlier estimate an underestimate (the
-          // actual bug behind the camera landing early in the muxed
-          // video: `-itsoffset` wasn't shifting it forward far enough).
-          bool cameraProgressSeen = false;
-          _cameraProcess!.stdout
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())
-              .listen((line) {
-                if (!cameraProgressSeen && line.startsWith('frame=')) {
-                  cameraProgressSeen = true;
-                  _cameraStartOffsetSeconds = max(
-                    0.0,
-                    DateTime.now().difference(_startedAt!).inMicroseconds /
-                        1e6,
-                  );
-                }
-              });
-          // IMPORTANT: We must also consume stderr, otherwise the OS pipe
-          // buffer fills up with ffmpeg's continuous status output and
+          // IMPORTANT: We must consume stdout and stderr, otherwise the OS
+          // pipe buffer fills up with ffmpeg's continuous status output and
           // causes ffmpeg to freeze permanently.
+          _cameraProcess!.stdout.listen((_) {});
           _cameraProcess!.stderr.listen((_) {});
 
           _cameraEnabled = true;
