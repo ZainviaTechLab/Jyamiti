@@ -884,7 +884,7 @@ class MathPadRecordingService extends ChangeNotifier {
         if (device == null) {
           onCameraWarning?.call('No camera was found -- recording without one.');
         } else {
-          final List<String> cameraArgs = Platform.isMacOS 
+          final List<String> cameraArgs = Platform.isMacOS
               ? [
                   '-y',
                   '-f', 'avfoundation',
@@ -892,6 +892,8 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
+                  '-progress', 'pipe:1',
+                  '-nostats',
                   p.join(sessionDir.path, 'camera.mp4'),
                 ]
               : [
@@ -901,6 +903,8 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
+                  '-progress', 'pipe:1',
+                  '-nostats',
                   p.join(sessionDir.path, 'camera.mp4'),
                 ];
           _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
@@ -908,23 +912,46 @@ class MathPadRecordingService extends ChangeNotifier {
           // this process's lifetime to the app's so a hard-kill can't
           // orphan it holding the webcam locked.
           _tieProcessLifetimeToApp(_cameraProcess!.pid);
-          // Best-effort start-offset estimate, same idea as
-          // `_audioStartOffsetSeconds` -- a LOWER bound, not exact: this
-          // only measures how long spawning the OS process itself took,
-          // not how much longer ffmpeg then spent actually opening the
+          // Provisional estimate -- a LOWER bound, not exact: this only
+          // measures how long spawning the OS process itself took, not
+          // how much longer ffmpeg then spends actually opening the
           // DirectShow device inside it (camera device open latency is
           // typically the slowest of the three capture streams to
-          // actually start, and isn't observable from here without
-          // fragile stderr-message parsing). Still meaningfully better
-          // than the previous behaviour of assuming zero offset.
+          // actually start). Overwritten below by a real measurement the
+          // moment ffmpeg confirms it's actually processing frames; this
+          // only stays in effect as a fallback if that somehow never
+          // arrives (e.g. the device fails silently with zero output).
           _cameraStartOffsetSeconds = max(
             0.0,
             DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
           );
-          // IMPORTANT: We must consume stdout and stderr, otherwise the OS
-          // pipe buffer fills up with ffmpeg's continuous status output and
+          // `-progress pipe:1` above makes ffmpeg emit structured
+          // `key=value` progress lines on stdout once it's actually
+          // encoding real frames (same technique `_runFfmpegWithProgress`
+          // uses for the encode passes) -- the wall-clock moment the
+          // FIRST such line arrives is a much more accurate "the camera
+          // genuinely started" signal than merely "the OS process spawned"
+          // above, since it's downstream of the DirectShow device-open
+          // latency that made the earlier estimate an underestimate (the
+          // actual bug behind the camera landing early in the muxed
+          // video: `-itsoffset` wasn't shifting it forward far enough).
+          bool cameraProgressSeen = false;
+          _cameraProcess!.stdout
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+                if (!cameraProgressSeen && line.startsWith('frame=')) {
+                  cameraProgressSeen = true;
+                  _cameraStartOffsetSeconds = max(
+                    0.0,
+                    DateTime.now().difference(_startedAt!).inMicroseconds /
+                        1e6,
+                  );
+                }
+              });
+          // IMPORTANT: We must also consume stderr, otherwise the OS pipe
+          // buffer fills up with ffmpeg's continuous status output and
           // causes ffmpeg to freeze permanently.
-          _cameraProcess!.stdout.listen((_) {});
           _cameraProcess!.stderr.listen((_) {});
 
           _cameraEnabled = true;
