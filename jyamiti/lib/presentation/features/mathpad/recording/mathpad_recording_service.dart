@@ -92,6 +92,40 @@ enum RecordingFrameRateMode {
   balanced,
 }
 
+/// The narration audio's final AAC bitrate -- a single spoken voice needs
+/// nowhere near what music does, so this is one of the cheapest levers on
+/// total file size: for a 3-minute recording, the difference between the
+/// lowest and highest option here alone is roughly 2MB, on top of
+/// whatever the video track adds. The tutor's choice is persisted locally
+/// (see [MathPadRecordingService.loadAudioBitrateMode]/
+/// `setAudioBitrateMode`) so it survives across sessions.
+enum RecordingAudioBitrate {
+  /// 96kbps.
+  /// Benefit: smallest audio track -- roughly half the size of [high] for
+  /// the same recording. Clean single-speaker narration is essentially
+  /// transparent at this rate (comparable to what most podcasts/
+  /// audiobooks ship at); `dynaudnorm` is already smoothing the signal
+  /// before this bitrate is even applied.
+  /// Cost: essentially none for narration; would start to show on music
+  /// or complex/noisy audio, but that's not what this records.
+  /// Recommended default.
+  compact,
+
+  /// 128kbps.
+  /// Benefit: a bit more headroom than [compact] for a noisier room or a
+  /// mic picking up more background sound, at a modest size cost.
+  /// Cost: roughly a third larger than [compact] for the same recording.
+  standard,
+
+  /// 192kbps -- the original, unconditional rate this used before this
+  /// setting existed.
+  /// Benefit: maximum quality margin, no perceptible difference from
+  /// [standard] for narration in practice.
+  /// Cost: the largest audio track of the three, for a difference most
+  /// tutors won't be able to hear on spoken narration.
+  high,
+}
+
 class MathPadRecordingException implements Exception {
   final String message;
   MathPadRecordingException(this.message);
@@ -291,6 +325,7 @@ class MathPadRecordingService extends ChangeNotifier {
     // construction over.
     unawaited(loadSegmentSealMode());
     unawaited(loadFrameRateMode());
+    unawaited(loadAudioBitrateMode());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -362,6 +397,42 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [audioBitrateMode] from local storage, if any
+  /// was ever saved -- falls back to (and leaves unchanged) whatever
+  /// [audioBitrateMode] already is on any error or missing value.
+  Future<void> loadAudioBitrateMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kAudioBitrateModePrefKey);
+      if (saved == null) return;
+      audioBitrateMode = RecordingAudioBitrate.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => audioBitrateMode,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `audioBitrateMode` already was.
+    }
+  }
+
+  /// Changes [audioBitrateMode] and persists the choice locally so it's
+  /// still in effect the next time the app opens. Only read at `encode()`
+  /// time (see `_capturedAudioBitrateKbps`) -- capture itself always
+  /// records raw WAV regardless of this setting, so changing it never
+  /// affects an already-running recording, only how its narration gets
+  /// compressed once encoding actually happens.
+  Future<void> setAudioBitrateMode(RecordingAudioBitrate mode) async {
+    audioBitrateMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kAudioBitrateModePrefKey, mode.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
@@ -403,6 +474,27 @@ class MathPadRecordingService extends ChangeNotifier {
   int _activeCaptureFps = _kMaxFps;
   int _activeEncodeFps = _kCompactFps;
   int _capturedEncodeFps = _kCompactFps;
+
+  /// The tutor's chosen narration audio bitrate -- defaults to
+  /// [RecordingAudioBitrate.compact] until [loadAudioBitrateMode] (fired
+  /// from the constructor, best-effort) resolves whatever was actually
+  /// saved locally.
+  RecordingAudioBitrate audioBitrateMode = RecordingAudioBitrate.compact;
+  static const String _kAudioBitrateModePrefKey =
+      'mathpad_recording_audio_bitrate';
+
+  int _audioKbpsFor(RecordingAudioBitrate mode) => switch (mode) {
+    RecordingAudioBitrate.compact => 96,
+    RecordingAudioBitrate.standard => 128,
+    RecordingAudioBitrate.high => 192,
+  };
+
+  // Snapshotted in `stopCapture()` from `audioBitrateMode` -- capture
+  // itself always records raw WAV regardless of this setting (it's only
+  // ever read at `encode()` time), but frozen the same way as the other
+  // `_captured*` fields for consistency with how `encode()` sources
+  // everything else it needs.
+  int _capturedAudioBitrateKbps = 96;
 
   // Never capture at a higher resolution than this on the long edge --
   // recording at the full raw devicePixelRatio (2x-3x+ on many modern
@@ -1221,6 +1313,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedSealedSegmentPaths = List.of(_sealedSegmentPaths);
     _capturedSealedConcatEntryCount = _sealedConcatEntryCount;
     _capturedEncodeFps = _activeEncodeFps;
+    _capturedAudioBitrateKbps = _audioKbpsFor(audioBitrateMode);
 
     _canvasKey = null;
     _sessionDir = null;
@@ -1348,6 +1441,7 @@ class MathPadRecordingService extends ChangeNotifier {
     final double audioStartOffsetSeconds = _capturedAudioStartOffsetSeconds;
     final double cameraStartOffsetSeconds = _capturedCameraStartOffsetSeconds;
     final int encodeFps = _capturedEncodeFps;
+    final int audioKbps = _capturedAudioBitrateKbps;
 
     _state = MathPadRecordingState.encoding;
     _emit();
@@ -1554,7 +1648,7 @@ class MathPadRecordingService extends ChangeNotifier {
             // keeps the adaptation smooth for natural-paced speech.
             '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
             '-c:a', 'aac',
-            '-b:a', '192k',
+            '-b:a', '${audioKbps}k',
             '-shortest',
           ],
           outPath,
@@ -1627,7 +1721,7 @@ class MathPadRecordingService extends ChangeNotifier {
           if (audioInputIndex != null) ...[
             '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
             '-c:a', 'aac',
-            '-b:a', '192k',
+            '-b:a', '${audioKbps}k',
             // Only the mapped outputs ([outv] + audio) factor into
             // `-shortest` -- the camera input is consumed inside the
             // filter graph, not mapped as its own stream, so a

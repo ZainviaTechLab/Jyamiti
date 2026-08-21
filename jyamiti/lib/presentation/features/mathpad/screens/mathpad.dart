@@ -10821,6 +10821,44 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                       ],
                     ),
                     const SizedBox(width: 8),
+                    // Narration audio bitrate (see `RecordingAudioBitrate`)
+                    // -- also locked while a recording is in progress, same
+                    // reasoning as the two settings above.
+                    PopupMenuButton<RecordingAudioBitrate>(
+                      tooltip: 'Recording: audio quality',
+                      enabled: _recordingState == MathPadRecordingState.idle,
+                      icon: Icon(
+                        Icons.graphic_eq_rounded,
+                        size: 20,
+                        color: _recordingState == MathPadRecordingState.idle
+                            ? _textColor
+                            : _textColor60,
+                      ),
+                      color: isDark ? _darkPanelColor : Colors.white,
+                      onSelected: (mode) {
+                        setState(() {
+                          unawaited(_recordingService.setAudioBitrateMode(mode));
+                        });
+                      },
+                      itemBuilder: (ctx) => [
+                        _audioBitrateModeMenuItem(
+                          RecordingAudioBitrate.compact,
+                          'Compact (Recommended)',
+                          '96kbps -- smallest audio, still clean for narration',
+                        ),
+                        _audioBitrateModeMenuItem(
+                          RecordingAudioBitrate.standard,
+                          'Standard',
+                          '128kbps -- a bit more headroom for a noisier room',
+                        ),
+                        _audioBitrateModeMenuItem(
+                          RecordingAudioBitrate.high,
+                          'High',
+                          '192kbps -- maximum quality margin, largest audio',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
                     if (_recordingState == MathPadRecordingState.recording)
                       IconButton(
                         icon: const Icon(
@@ -11024,6 +11062,55 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   ) {
     final bool selected = _recordingService.frameRateMode == mode;
     return PopupMenuItem<RecordingFrameRateMode>(
+      value: mode,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            selected
+                ? Icons.radio_button_checked_rounded
+                : Icons.radio_button_unchecked_rounded,
+            size: 18,
+            color: selected ? const Color(0xFF6366F1) : _textColor60,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: _textColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  description,
+                  style: TextStyle(color: _textColor60, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One row in the recording-audio-bitrate popup (see
+  /// `RecordingAudioBitrate`'s own doc comment for the full benefit/cost
+  /// breakdown of each option) -- same label/description/radio-dot layout
+  /// as `_segmentSealModeMenuItem` above.
+  PopupMenuItem<RecordingAudioBitrate> _audioBitrateModeMenuItem(
+    RecordingAudioBitrate mode,
+    String label,
+    String description,
+  ) {
+    final bool selected = _recordingService.audioBitrateMode == mode;
+    return PopupMenuItem<RecordingAudioBitrate>(
       value: mode,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
