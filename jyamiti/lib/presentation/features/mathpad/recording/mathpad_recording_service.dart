@@ -126,6 +126,43 @@ enum RecordingAudioBitrate {
   high,
 }
 
+/// How the camera gets combined with the canvas video -- the tutor's
+/// choice is persisted locally (see
+/// [MathPadRecordingService.loadCameraCompositingMode]/
+/// `setCameraCompositingMode`) so it survives across sessions.
+enum RecordingCameraCompositingMode {
+  /// Composites the camera onto each canvas segment live, during
+  /// recording (see `_maybeSealCameraSegment`), so most of a camera-
+  /// enabled recording is already fully encoded by the time it stops --
+  /// the same speed a camera-off recording already gets from background
+  /// sealing. Only the small leftover tail needs a real decode+overlay
+  /// pass at stop time.
+  /// Benefit: encode/save time stays roughly the same whether or not the
+  /// camera was on.
+  /// Cost: everything live-sealed (most of the recording, for anything
+  /// longer than one seal interval) uses a provisional device-open-
+  /// latency estimate for the camera's alignment, applied once at the
+  /// very start, rather than a measured one -- a small, consistent
+  /// lead/lag is possible through the bulk of the video. Only the tail
+  /// gets an exactly-measured offset. Recommended default.
+  liveSegments,
+
+  /// The camera is captured as one continuous file and only ever
+  /// overlaid once, in a single decode+overlay+encode pass over the
+  /// WHOLE recording at stop time -- how this worked before live
+  /// per-segment compositing existed.
+  /// Benefit: the camera's offset is measured from ground truth (the
+  /// finished file's own real duration, weighed against the exact
+  /// wall-clock stop instant) and applied uniformly across the entire
+  /// video -- the most accurate camera sync available.
+  /// Cost: a camera-enabled recording takes as long to encode as its own
+  /// full length, same as before background sealing existed --
+  /// background sealing still speeds up the canvas/audio side in this
+  /// mode, just not the camera. Pick this if sync accuracy matters more
+  /// than how long saving takes.
+  finalPass,
+}
+
 class MathPadRecordingException implements Exception {
   final String message;
   MathPadRecordingException(this.message);
@@ -326,6 +363,7 @@ class MathPadRecordingService extends ChangeNotifier {
     unawaited(loadSegmentSealMode());
     unawaited(loadFrameRateMode());
     unawaited(loadAudioBitrateMode());
+    unawaited(loadCameraCompositingMode());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -433,6 +471,44 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [cameraCompositingMode] from local storage,
+  /// if any was ever saved -- falls back to (and leaves unchanged)
+  /// whatever [cameraCompositingMode] already is on any error or missing
+  /// value.
+  Future<void> loadCameraCompositingMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kCameraCompositingModePrefKey);
+      if (saved == null) return;
+      cameraCompositingMode = RecordingCameraCompositingMode.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => cameraCompositingMode,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `cameraCompositingMode` already was.
+    }
+  }
+
+  /// Changes [cameraCompositingMode] and persists the choice locally so
+  /// it's still in effect the next time the app opens. Snapshotted once
+  /// per recording in `start()` (`_activeCameraCompositingMode`) --
+  /// changing this mid-recording (the settings UI disables that anyway)
+  /// wouldn't retroactively apply to one already running.
+  Future<void> setCameraCompositingMode(
+    RecordingCameraCompositingMode mode,
+  ) async {
+    cameraCompositingMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCameraCompositingModePrefKey, mode.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
@@ -495,6 +571,24 @@ class MathPadRecordingService extends ChangeNotifier {
   // `_captured*` fields for consistency with how `encode()` sources
   // everything else it needs.
   int _capturedAudioBitrateKbps = 96;
+
+  /// The tutor's chosen camera-compositing strategy -- defaults to
+  /// [RecordingCameraCompositingMode.liveSegments] until
+  /// [loadCameraCompositingMode] (fired from the constructor, best-effort)
+  /// resolves whatever was actually saved locally.
+  RecordingCameraCompositingMode cameraCompositingMode =
+      RecordingCameraCompositingMode.liveSegments;
+  static const String _kCameraCompositingModePrefKey =
+      'mathpad_recording_camera_compositing_mode';
+
+  // Snapshotted once in `start()` (`_activeCameraCompositingMode`) and
+  // again for the deferred `encode()` step in `stopCapture()`
+  // (`_capturedCameraCompositingMode`) -- same reasoning as
+  // `_activeCaptureFps`/`_activeEncodeFps`.
+  RecordingCameraCompositingMode _activeCameraCompositingMode =
+      RecordingCameraCompositingMode.liveSegments;
+  RecordingCameraCompositingMode _capturedCameraCompositingMode =
+      RecordingCameraCompositingMode.liveSegments;
 
   // Never capture at a higher resolution than this on the long edge --
   // recording at the full raw devicePixelRatio (2x-3x+ on many modern
@@ -931,6 +1025,7 @@ class MathPadRecordingService extends ChangeNotifier {
     // (the settings UI disables the picker while a recording is active).
     _activeCaptureFps = _captureFpsFor(frameRateMode);
     _activeEncodeFps = _encodeFpsFor(frameRateMode);
+    _activeCameraCompositingMode = cameraCompositingMode;
 
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
@@ -954,30 +1049,59 @@ class MathPadRecordingService extends ChangeNotifier {
         if (device == null) {
           onCameraWarning?.call('No camera was found -- recording without one.');
         } else {
-          // The segment muxer (`-f segment`) writes a SEQUENCE of files
-          // (`camera_seg_00000.ts`, `camera_seg_00001.ts`, ...) from one
-          // continuous device-open session, rolling to a new file every
-          // `_kSegmentSealInterval` -- `-reset_timestamps 1` gives each
-          // segment its own PTS starting at 0, matching how the canvas
-          // side's sealed segments already work. This is what lets
-          // `_maybeSealCameraSegment` composite the camera onto each
-          // background-sealed canvas segment as recording happens, instead
-          // of only ever being able to overlay it in one pass at the very
-          // end -- see that method's doc comment.
-          final String cameraSegmentPattern = p.join(
-            sessionDir.path,
-            'camera_seg_%05d.ts',
-          );
-          // `-force_key_frames` is not optional here -- the segment muxer
-          // can only cut a new file AT an existing keyframe, and without
-          // this, libx264's own default keyframe interval (250 frames,
-          // ~8-10s at a typical webcam framerate) has no reason to land
-          // anywhere near our `_kSegmentSealInterval` boundaries. Verified
-          // empirically: without this expression, everything just piles
-          // into segment 0 forever, no matter what `-segment_time` says;
-          // with it, segments come out at exactly the requested interval.
-          final String forceKeyframes =
-              'expr:gte(t,n_forced*${_kSegmentSealInterval.inSeconds})';
+          // `encode()`'s tail-camera gathering (see its doc comment) globs
+          // for `camera_seg_*.ts` regardless of mode, so both branches
+          // below write to that naming scheme -- only whether it's ONE
+          // fixed file or a rolling SEQUENCE of them differs.
+          final bool liveSegments =
+              _activeCameraCompositingMode ==
+              RecordingCameraCompositingMode.liveSegments;
+          final List<String> cameraOutputArgs;
+          if (liveSegments) {
+            // The segment muxer (`-f segment`) writes a SEQUENCE of files
+            // (`camera_seg_00000.ts`, `camera_seg_00001.ts`, ...) from one
+            // continuous device-open session, rolling to a new file every
+            // `_kSegmentSealInterval` -- `-reset_timestamps 1` gives each
+            // segment its own PTS starting at 0, matching how the canvas
+            // side's sealed segments already work. This is what lets
+            // `_maybeSealCameraSegment` composite the camera onto each
+            // background-sealed canvas segment as recording happens,
+            // instead of only ever being able to overlay it in one pass
+            // at the very end -- see that method's doc comment.
+            //
+            // `-force_key_frames` is not optional here -- the segment
+            // muxer can only cut a new file AT an existing keyframe, and
+            // without this, libx264's own default keyframe interval (250
+            // frames, ~8-10s at a typical webcam framerate) has no reason
+            // to land anywhere near our `_kSegmentSealInterval`
+            // boundaries. Verified empirically: without this expression,
+            // everything just piles into segment 0 forever, no matter
+            // what `-segment_time` says; with it, segments come out at
+            // exactly the requested interval.
+            final String cameraSegmentPattern = p.join(
+              sessionDir.path,
+              'camera_seg_%05d.ts',
+            );
+            final String forceKeyframes =
+                'expr:gte(t,n_forced*${_kSegmentSealInterval.inSeconds})';
+            cameraOutputArgs = [
+              '-force_key_frames', forceKeyframes,
+              '-f', 'segment',
+              '-segment_time', '${_kSegmentSealInterval.inSeconds}',
+              '-reset_timestamps', '1',
+              cameraSegmentPattern,
+            ];
+          } else {
+            // [RecordingCameraCompositingMode.finalPass]: one continuous
+            // file for the whole recording, overlaid in a single pass at
+            // stop time (see `encode()`) -- named the same as
+            // live-segment 0 specifically so the SAME tail-gathering
+            // logic there finds it without needing to know which mode
+            // was active.
+            cameraOutputArgs = [
+              p.join(sessionDir.path, 'camera_seg_00000.ts'),
+            ];
+          }
           final List<String> cameraArgs = Platform.isMacOS
               ? [
                   '-y',
@@ -986,11 +1110,7 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
-                  '-force_key_frames', forceKeyframes,
-                  '-f', 'segment',
-                  '-segment_time', '${_kSegmentSealInterval.inSeconds}',
-                  '-reset_timestamps', '1',
-                  cameraSegmentPattern,
+                  ...cameraOutputArgs,
                 ]
               : [
                   '-y',
@@ -999,11 +1119,7 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
-                  '-force_key_frames', forceKeyframes,
-                  '-f', 'segment',
-                  '-segment_time', '${_kSegmentSealInterval.inSeconds}',
-                  '-reset_timestamps', '1',
-                  cameraSegmentPattern,
+                  ...cameraOutputArgs,
                 ];
           _nextCameraSegmentIndex = 0;
           _cameraStopSignalAt = null;
@@ -1271,15 +1387,19 @@ class MathPadRecordingService extends ChangeNotifier {
   /// Runs on every `_segmentSealTimer` tick (a short, fixed poll interval,
   /// `_kSegmentSealCheckInterval` -- not a seal trigger itself).
   ///
-  /// With a camera recording, sealing ALWAYS follows the camera's own
-  /// fixed `_kSegmentSealInterval` segment boundaries instead of
+  /// With a camera recording in [RecordingCameraCompositingMode.liveSegments]
+  /// mode, sealing ALWAYS follows the camera's own fixed
+  /// `_kSegmentSealInterval` segment boundaries instead of
   /// `segmentSealMode` -- `_maybeSealCameraSegment` needs a canvas window
   /// with a KNOWN, predictable camera segment to composite it against,
   /// which an idle-triggered (unpredictable timing) canvas seal can't
-  /// guarantee. `segmentSealMode` still applies exactly as documented for
-  /// a camera-less recording.
+  /// guarantee. In [RecordingCameraCompositingMode.finalPass] mode (or no
+  /// camera at all), `segmentSealMode` applies exactly as documented --
+  /// the camera, if any, only ever gets composited once, in one pass, at
+  /// `encode()` time (see that method).
   ///
-  /// Without a camera, decides based on `segmentSealMode`:
+  /// Without live-segment camera compositing, decides based on
+  /// `segmentSealMode`:
   /// - [SegmentSealMode.fixedInterval]: only once `_kSegmentSealInterval`
   ///   has passed since the last seal attempt, regardless of activity.
   /// - [SegmentSealMode.idleOnly]: only once the board has sat unchanged
@@ -1290,7 +1410,9 @@ class MathPadRecordingService extends ChangeNotifier {
   /// there's nothing new to seal, so triggering them here is safe even if
   /// this fires more often than there's actually new content.
   void _evaluateSegmentSeal() {
-    if (_cameraEnabled) {
+    if (_cameraEnabled &&
+        _activeCameraCompositingMode ==
+            RecordingCameraCompositingMode.liveSegments) {
       unawaited(_maybeSealCameraSegment());
       return;
     }
@@ -1579,6 +1701,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedEncodeFps = _activeEncodeFps;
     _capturedAudioBitrateKbps = _audioKbpsFor(audioBitrateMode);
     _capturedNextCameraSegmentIndex = _nextCameraSegmentIndex;
+    _capturedCameraCompositingMode = _activeCameraCompositingMode;
     // While `_startedAt` is still valid -- see `_cameraStopSignalAt`'s doc
     // comment for what `encode()` does with this.
     _capturedElapsedToCameraStopSignalSeconds =
@@ -1722,6 +1845,10 @@ class MathPadRecordingService extends ChangeNotifier {
     final int capturedNextCameraSegmentIndex = _capturedNextCameraSegmentIndex;
     final double capturedElapsedToCameraStopSignalSeconds =
         _capturedElapsedToCameraStopSignalSeconds;
+    final RecordingCameraCompositingMode cameraCompositingMode =
+        _capturedCameraCompositingMode;
+    final bool liveSegmentsMode =
+        cameraCompositingMode == RecordingCameraCompositingMode.liveSegments;
 
     _state = MathPadRecordingState.encoding;
     _emit();
@@ -1844,9 +1971,17 @@ class MathPadRecordingService extends ChangeNotifier {
             tailCameraSourcePath,
           );
           if (actualDuration != null) {
-            final double sealedDurationSeconds = concatEntries
-                .take(_capturedSealedConcatEntryCount)
-                .fold(0.0, (sum, e) => sum + e.durationSeconds);
+            // In `finalPass` mode nothing was ever camera-composited
+            // live, so this "tail" is really the WHOLE recording -- the
+            // offset needs to be relative to `_startedAt` (the whole
+            // timeline), not the start of some later tail window, even
+            // though canvas-only segments may still have been sealed
+            // (per `segmentSealMode`) along the way.
+            final double sealedDurationSeconds = liveSegmentsMode
+                ? concatEntries
+                      .take(_capturedSealedConcatEntryCount)
+                      .fold(0.0, (sum, e) => sum + e.durationSeconds)
+                : 0.0;
             final double elapsedTailWindowToStopSignal =
                 capturedElapsedToCameraStopSignalSeconds - sealedDurationSeconds;
             tailCameraOffsetSeconds = max(
@@ -1854,9 +1989,13 @@ class MathPadRecordingService extends ChangeNotifier {
               elapsedTailWindowToStopSignal - actualDuration,
             );
           }
-        } else if (sealedSegments.isNotEmpty) {
+        } else if (liveSegmentsMode && sealedSegments.isNotEmpty) {
           // No separate tail content, but the camera is still genuinely
           // in this recording -- already baked into the sealed segments.
+          // Only true in `liveSegments` mode -- in `finalPass` mode,
+          // sealed segments (if any) are canvas-only regardless, so no
+          // tail content here means the camera genuinely produced
+          // nothing at all.
           hasCamera = true;
         } else {
           onCameraWarning?.call(
@@ -1885,7 +2024,10 @@ class MathPadRecordingService extends ChangeNotifier {
         if (tailEntries.isNotEmpty) {
           final String tailPath = p.join(sessionDir.path, 'segment_tail.ts');
           bool tailOk = false;
-          if (hasCamera && tailCameraSourcePath != null) {
+          // Only in `liveSegments` mode -- `finalPass` never composites
+          // camera onto any individual segment/tail piece, it's applied
+          // once, over the whole assembled canvas video, further below.
+          if (liveSegmentsMode && hasCamera && tailCameraSourcePath != null) {
             tailOk = await _encodeCameraCompositeSegment(
               sessionDir: sessionDir,
               entries: tailEntries,
@@ -2115,12 +2257,34 @@ class MathPadRecordingService extends ChangeNotifier {
         ], totalDurationSeconds);
       }
 
-      if (canvasPreEncoded) {
-        // Segments (and, if applicable, the tail built above) are
-        // already camera-composited if `hasCamera` -- this is the same
-        // stream-copy assembly a camera-less recording uses either way.
+      if (!liveSegmentsMode && hasCamera && tailCameraSourcePath != null) {
+        // `finalPass` mode: nothing was ever camera-composited live
+        // (`tailCameraSourcePath` here is the WHOLE recording's camera
+        // content, not a real tail) -- always a single decode+overlay+
+        // encode pass over the entire assembled `canvasManifestPath`,
+        // whether that's raw stills or canvas-only pre-encoded segments,
+        // using the ground-truth whole-recording offset computed above.
+        try {
+          await encodeCanvasWithCamera();
+        } catch (e) {
+          onCameraWarning?.call(
+            'Camera couldn\'t be added to the video -- saved without it.',
+          );
+          encodingProgress = 0.0;
+          onEncodingProgress?.call(0.0);
+          notifyListeners();
+          await encodeCanvasOnly();
+        }
+      } else if (canvasPreEncoded) {
+        // `liveSegments` mode: segments (and, if applicable, the tail
+        // built above) are already camera-composited if `hasCamera` --
+        // this is the same stream-copy assembly a camera-less recording
+        // uses either way.
         await encodeCanvasOnly();
       } else if (hasCamera && tailCameraSourcePath != null) {
+        // `liveSegments` mode, short recording -- nothing was ever
+        // sealed, so this genuinely is the whole recording as one pass,
+        // same as `finalPass` mode's branch above.
         try {
           await encodeCanvasWithCamera();
         } catch (e) {

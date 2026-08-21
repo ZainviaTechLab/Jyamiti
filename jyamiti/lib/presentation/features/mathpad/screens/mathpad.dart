@@ -10908,6 +10908,37 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               ),
                             ],
                           ),
+                          _recordingSettingsSubmenu<RecordingCameraCompositingMode>(
+                            isDark: isDark,
+                            icon: Icons.center_focus_strong_rounded,
+                            label: 'Camera Method',
+                            selectedValue: _recordingService.cameraCompositingMode,
+                            onSelected: (mode) => setState(() {
+                              unawaited(
+                                _recordingService.setCameraCompositingMode(mode),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: RecordingCameraCompositingMode.liveSegments,
+                                label: 'Live (Recommended)',
+                                description:
+                                    'Composites the camera as recording happens -- '
+                                    'saves as fast as camera-off; the live-'
+                                    'sealed bulk may show a small, consistent '
+                                    'lead/lag',
+                              ),
+                              (
+                                value: RecordingCameraCompositingMode.finalPass,
+                                label: 'Final Pass (Most Accurate)',
+                                description:
+                                    'Overlays the camera once at the end, over '
+                                    'the whole recording -- exactly-measured '
+                                    'sync throughout, but takes as long to '
+                                    'save as the recording itself',
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                   ],
