@@ -81,6 +81,8 @@ dependencies:
   perfect_freehand: ^2.5.2+1
   win32: ^5.15.0
   ffi: ^2.2.0
+  camera: ^0.12.0+2
+  camera_windows: ^0.2.6+4
 
 
 dev_dependencies:

@@ -232,6 +232,29 @@ enum CameraEncodeMode {
   /// path already enjoys.
   /// Cost: a newer, less-tested path than [finalPass].
   liveSegmented,
+
+  /// The camera never gets captured as a separate stream at all -- a
+  /// live camera preview is rendered directly inside Math Pad's own
+  /// canvas capture area (see `mathpad.dart`'s capture-area Stack), so
+  /// every captured canvas frame already has the camera baked in by the
+  /// time it's captured. `start()` doesn't spawn any camera process or
+  /// native capture for this mode; there's no camera.mp4, no offset to
+  /// measure, and no overlay pass of any kind -- `encode()` already
+  /// takes its fast path automatically whenever no camera.mp4 exists.
+  /// Benefit: encoding finishes exactly as fast as a camera-less
+  /// recording, always -- the entire point of the other two options was
+  /// approximating this after the fact; this achieves it directly by
+  /// construction instead.
+  /// Cost: the frame-dedup optimization that skips writing a new frame
+  /// while the board sits idle (see the class doc comment) stops
+  /// helping for as long as the camera preview is live and visibly
+  /// changing -- a live camera feed is essentially never pixel-identical
+  /// frame to frame, so a paused/idle stretch with the camera on writes
+  /// many more frames to disk than the same stretch would with either
+  /// other option. A real tradeoff, not a strict improvement -- likely
+  /// the best choice for a long recording with real pauses; the fastest
+  /// possible finish either way, but at some cost during capture itself.
+  onCanvas,
 }
 
 class MathPadRecordingException implements Exception {
@@ -851,6 +874,24 @@ class MathPadRecordingService extends ChangeNotifier {
   // under two different strategies.
   CameraEncodeMode _activeCameraEncodeMode = CameraEncodeMode.finalPass;
   CameraEncodeMode _capturedActiveCameraEncodeMode = CameraEncodeMode.finalPass;
+  // Snapshotted once in `start()` from its own `includeCamera` argument
+  // -- lets [isOnCanvasCameraActive] tell whether THIS recording asked
+  // for a camera at all, since `CameraEncodeMode.onCanvas` never sets
+  // `_cameraEnabled` (there's no separate camera stream for it to
+  // enable).
+  bool _activeIncludeCamera = false;
+
+  /// True while a recording is active, asked for a camera, and
+  /// [CameraEncodeMode.onCanvas] is selected -- the UI (see
+  /// `mathpad.dart`'s capture-area Stack) watches this to know when to
+  /// show its own live camera preview inside the capture area. Nothing
+  /// in this service itself manages that preview or its `CameraController`
+  /// -- see `CameraEncodeMode.onCanvas`'s doc comment for the full split
+  /// of responsibility.
+  bool get isOnCanvasCameraActive =>
+      _state == MathPadRecordingState.recording &&
+      _activeIncludeCamera &&
+      _activeCameraEncodeMode == CameraEncodeMode.onCanvas;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -1166,13 +1207,21 @@ class MathPadRecordingService extends ChangeNotifier {
     _cameraEnabled = false;
     _cameraProcess = null;
     _nativeCamera = null;
+    // `CameraEncodeMode.onCanvas` never spawns a separate camera stream
+    // at all -- see its doc comment. The UI (via `isOnCanvasCameraActive`)
+    // handles showing a live preview inside the capture area itself
+    // instead; this whole block simply has nothing to do for that mode.
+    final bool includeSeparateCameraStream =
+        includeCamera && cameraEncodeMode != CameraEncodeMode.onCanvas;
     // Only the ffmpeg path exists on macOS -- the native module is a
     // Windows-only Media Foundation DLL (see `CameraSyncMethod`'s doc
     // comment), so macOS always behaves as if `ffmpegEstimate` were
     // chosen regardless of the saved setting.
     final bool useNativeCamera =
-        includeCamera && !Platform.isMacOS && cameraSyncMethod == CameraSyncMethod.nativePrecise;
-    if (includeCamera && useNativeCamera) {
+        includeSeparateCameraStream &&
+        !Platform.isMacOS &&
+        cameraSyncMethod == CameraSyncMethod.nativePrecise;
+    if (includeSeparateCameraStream && useNativeCamera) {
       // Native Media Foundation path -- see `CameraSyncMethod.nativePrecise`'s
       // doc comment. Unlike the ffmpeg path below, this doesn't need to
       // wait for the camera before starting anything else: its offset
@@ -1197,7 +1246,7 @@ class MathPadRecordingService extends ChangeNotifier {
         _cameraEnabled = false;
         onCameraWarning?.call('Could not start the camera -- recording without it.');
       }
-    } else if (includeCamera) {
+    } else if (includeSeparateCameraStream) {
       try {
         final String? device = await _detectCameraDeviceName();
         final String ffmpegPath = _resolveFfmpegPath();
@@ -1410,6 +1459,7 @@ class MathPadRecordingService extends ChangeNotifier {
 
     // Same snapshotting reasoning as the fps fields just above.
     _activeCameraEncodeMode = cameraEncodeMode;
+    _activeIncludeCamera = includeCamera;
 
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
