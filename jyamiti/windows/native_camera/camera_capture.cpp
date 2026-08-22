@@ -124,9 +124,11 @@ private:
         IMFMediaType* pTypeOut = nullptr;
         IMFMediaType* pTypeIn = nullptr;
         IMFSinkWriter* pSinkWriter = nullptr;
+        IMFAttributes* pSinkAttributes = nullptr;
         DWORD sinkStreamIndex = 0;
 
         auto cleanup = [&]() {
+            if (pSinkAttributes) pSinkAttributes->Release();
             if (pTypeIn) pTypeIn->Release();
             if (pTypeOut) pTypeOut->Release();
             if (pSinkWriter) pSinkWriter->Release();
@@ -207,7 +209,26 @@ private:
         hr = pReader->SetStreamSelection((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, TRUE);
         if (FAILED(hr)) { SetError(L"SetStreamSelection failed", hr); cleanup(); return; }
 
-        hr = MFCreateSinkWriterFromURL(outputPath.c_str(), nullptr, nullptr, &pSinkWriter);
+        // Fragmented mp4 -- unlike a normal one (whose index/`moov` atom
+        // is only written once, at the very end, when the file is
+        // closed), a fragmented one is valid and readable/sliceable at
+        // any point while still being written. Confirmed by direct
+        // testing; also confirmed that calling IMFSinkWriter::Flush()
+        // mid-stream on a fragmented sink can HANG indefinitely -- so
+        // this deliberately never calls Flush() anywhere, relying
+        // entirely on the muxer's own automatic fragment boundaries
+        // (also confirmed sufficient for mid-write readability).
+        // Applied unconditionally (harmless for
+        // `CameraEncodeMode.finalPass`, which never reads the file until
+        // capture stops anyway) -- this is what `liveSegmented`'s
+        // per-segment camera slicing actually reads from mid-recording.
+        hr = MFCreateAttributes(&pSinkAttributes, 1);
+        if (SUCCEEDED(hr)) {
+            hr = pSinkAttributes->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_FMPEG4);
+        }
+        if (FAILED(hr)) { SetError(L"Configuring fragmented mp4 output failed", hr); cleanup(); return; }
+
+        hr = MFCreateSinkWriterFromURL(outputPath.c_str(), nullptr, pSinkAttributes, &pSinkWriter);
         if (FAILED(hr)) { SetError(L"MFCreateSinkWriterFromURL failed", hr); cleanup(); return; }
 
         hr = MFCreateMediaType(&pTypeOut);

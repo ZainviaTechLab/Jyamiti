@@ -10963,6 +10963,34 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               ),
                             ],
                           ),
+                          _recordingSettingsSubmenu<CameraEncodeMode>(
+                            isDark: isDark,
+                            icon: Icons.speed_rounded,
+                            label: 'Camera Encoding',
+                            selectedValue: _recordingService.cameraEncodeMode,
+                            onSelected: (mode) => setState(() {
+                              unawaited(
+                                _recordingService.setCameraEncodeMode(mode),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: CameraEncodeMode.finalPass,
+                                label: 'Standard (Recommended)',
+                                description:
+                                    'Camera overlay is composited once, after '
+                                    'you stop -- slower to finish, most-tested',
+                              ),
+                              (
+                                value: CameraEncodeMode.liveSegmented,
+                                label: 'Live',
+                                description:
+                                    'Camera overlay is composited while '
+                                    'recording -- finishes almost instantly, '
+                                    'a newer path',
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                   ],

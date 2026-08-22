@@ -194,6 +194,46 @@ enum MicEnhancementMode {
   enabled,
 }
 
+/// Whether a recording WITH a camera composites the picture-in-picture
+/// overlay all at once at the very end ([finalPass]) or incrementally,
+/// segment by segment, while still recording ([liveSegmented]) -- see
+/// the class doc comment's "Real-time (background) segment encoding"
+/// section for the underlying canvas-only sealing this builds on, and
+/// the "Live segmented camera compositing" section for how the camera
+/// side reuses that same infrastructure. The tutor's choice is
+/// persisted locally (see
+/// [MathPadRecordingService.loadCameraEncodeMode]/`setCameraEncodeMode`)
+/// so it survives across sessions.
+enum CameraEncodeMode {
+  /// The camera overlay is composited in ONE pass covering the whole
+  /// recording, only once `stop()` is called.
+  /// Benefit: simplest, most-tested path -- the camera capture itself is
+  /// just one continuous file, nothing to split or reassemble.
+  /// Cost: none of a camera recording's overlay work can happen ahead of
+  /// time -- `encode()` has to decode the ENTIRE canvas timeline back to
+  /// raw frames (even portions already sealed into finished segments)
+  /// and re-encode the whole composited result from scratch, so a
+  /// recording with a camera on can take noticeably longer to finish
+  /// than the same recording without one.
+  /// Recommended default.
+  finalPass,
+
+  /// The camera overlay is composited incrementally: each time a canvas
+  /// segment seals (see `_evaluateSegmentSeal`), its matching slice of
+  /// camera footage gets composited into that segment right then, in
+  /// the background, while recording continues -- located using the
+  /// SAME single, fixed camera-start offset the tutor's chosen
+  /// `CameraSyncMethod` already measures once, so there's nothing new to
+  /// re-estimate or drift across segments the way an earlier, reverted
+  /// version of this idea did.
+  /// Benefit: `stop()`/`encode()` only has real overlay+encode work left
+  /// for the short uncommitted tail -- everything already sealed just
+  /// gets stream-copy-concatenated, the same speed win the camera-less
+  /// path already enjoys.
+  /// Cost: a newer, less-tested path than [finalPass].
+  liveSegmented,
+}
+
 class MathPadRecordingException implements Exception {
   final String message;
   MathPadRecordingException(this.message);
@@ -396,6 +436,7 @@ class MathPadRecordingService extends ChangeNotifier {
     unawaited(loadAudioBitrateMode());
     unawaited(loadCameraSyncMethod());
     unawaited(loadMicEnhancementMode());
+    unawaited(loadCameraEncodeMode());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -571,6 +612,40 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [cameraEncodeMode] from local storage, if
+  /// any was ever saved -- falls back to (and leaves unchanged) whatever
+  /// [cameraEncodeMode] already is on any error or missing value.
+  Future<void> loadCameraEncodeMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kCameraEncodeModePrefKey);
+      if (saved == null) return;
+      cameraEncodeMode = CameraEncodeMode.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => cameraEncodeMode,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `cameraEncodeMode` already was.
+    }
+  }
+
+  /// Changes [cameraEncodeMode] and persists the choice locally so it's
+  /// still in effect the next time the app opens. Only read at
+  /// `start()` time -- changing it never affects a recording already in
+  /// progress.
+  Future<void> setCameraEncodeMode(CameraEncodeMode mode) async {
+    cameraEncodeMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCameraEncodeModePrefKey, mode.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
@@ -642,6 +717,14 @@ class MathPadRecordingService extends ChangeNotifier {
   MicEnhancementMode micEnhancementMode = MicEnhancementMode.disabled;
   static const String _kMicEnhancementModePrefKey =
       'mathpad_recording_mic_enhancement_mode';
+
+  /// The tutor's chosen camera overlay compositing strategy -- defaults
+  /// to [CameraEncodeMode.finalPass] until [loadCameraEncodeMode] (fired
+  /// from the constructor, best-effort) resolves whatever was actually
+  /// saved locally.
+  CameraEncodeMode cameraEncodeMode = CameraEncodeMode.finalPass;
+  static const String _kCameraEncodeModePrefKey =
+      'mathpad_recording_camera_encode_mode';
 
   // Snapshotted in `stopCapture()` from `audioBitrateMode` -- capture
   // itself always records raw WAV regardless of this setting (it's only
@@ -1113,6 +1196,19 @@ class MathPadRecordingService extends ChangeNotifier {
           // below fires on the FIRST such line, so this is what keeps that
           // detection close to the camera's true first frame instead of up
           // to half a second behind it.
+          //
+          // `-movflags frag_keyframe+empty_moov+default_base_moof` writes
+          // a FRAGMENTED mp4 -- unlike a normal mp4 (whose index/`moov`
+          // atom is only written once, at the very end, when the file is
+          // closed), a fragmented one is valid and readable/sliceable at
+          // any point WHILE still being written. Confirmed by direct
+          // testing. Applied unconditionally (harmless for
+          // `CameraEncodeMode.finalPass`, which never reads the file
+          // until capture stops anyway) rather than only for
+          // `liveSegmented`, so there's one fewer conditional camera-arg
+          // branch to keep in sync -- this is what `liveSegmented`'s
+          // per-segment camera slicing (see `_maybeSealSegment`) actually
+          // reads from mid-recording.
           final List<String> cameraArgs = Platform.isMacOS
               ? [
                   '-y',
@@ -1122,6 +1218,7 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
+                  '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
                   p.join(sessionDir.path, 'camera.mp4'),
                 ]
               : [
@@ -1132,6 +1229,7 @@ class MathPadRecordingService extends ChangeNotifier {
                   '-c:v', 'libx264',
                   '-preset', 'veryfast',
                   '-pix_fmt', 'yuv420p',
+                  '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
                   p.join(sessionDir.path, 'camera.mp4'),
                 ];
           _cameraProcess = await Process.start(ffmpegPath, cameraArgs);
