@@ -24,10 +24,27 @@
 // audio engine's native format -- it just needs to be a VALID WAV file,
 // which serializing the engine's own WAVEFORMATEX(TENSIBLE) straight
 // into the fmt chunk guarantees.
+//
+// MMCSS priority (see `AvSetMmThreadCharacteristicsW` in Run(), below):
+// WASAPI shared-mode capture hands data through a small, fixed-size ring
+// buffer -- if this thread doesn't drain it (GetBuffer/ReleaseBuffer)
+// often enough, the OLDEST unread audio is silently overwritten with no
+// error of any kind. A plain `std::thread` runs at normal priority, so
+// under real CPU contention (the camera's H.264 encoder, a background
+// segment-seal ffmpeg encode -- both of which this app already runs
+// concurrently) the OS scheduler can starve it long enough for that to
+// happen -- confirmed as the real cause of a "missing audio in the last
+// few seconds" bug found via real-hardware testing (worst right near a
+// recording's end, when segment-seal + finalize load tends to peak).
+// Registering with MMCSS is the standard fix every real-time audio
+// capture application uses for exactly this: it tells the scheduler this
+// thread does pro-audio work and must not be starved, independent of
+// whatever else is competing for CPU.
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <functiondiscoverykeys_devpkey.h>
+#include <avrt.h>
 
 #include <atomic>
 #include <cstdio>
@@ -37,6 +54,8 @@
 #include <unordered_map>
 #include <vector>
 #include <memory>
+
+#pragma comment(lib, "avrt.lib")
 
 #pragma comment(lib, "ole32.lib")
 
@@ -106,6 +125,18 @@ private:
         }
         bool comInitialized = SUCCEEDED(hr);
 
+        // See the file-level "MMCSS priority" comment above -- this is
+        // what actually prevents the capture buffer from silently
+        // overflowing under CPU contention from the camera encoder/
+        // segment-seal encodes. "Pro Audio" is the highest-priority
+        // MMCSS task category, the same one professional real-time audio
+        // capture applications register with; a failed registration
+        // (returns nullptr -- e.g. a locked-down environment where MMCSS
+        // isn't available) is non-fatal, capture just proceeds at normal
+        // priority same as before this existed.
+        DWORD mmcssTaskIndex = 0;
+        HANDLE mmcssHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcssTaskIndex);
+
         IMMDeviceEnumerator* pEnumerator = nullptr;
         IMMDevice* pDevice = nullptr;
         IAudioClient* pAudioClient = nullptr;
@@ -121,6 +152,7 @@ private:
             if (pDevice) pDevice->Release();
             if (pEnumerator) pEnumerator->Release();
             if (comInitialized) CoUninitialize();
+            if (mmcssHandle) AvRevertMmThreadCharacteristics(mmcssHandle);
         };
 
         hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
@@ -140,7 +172,12 @@ private:
         hr = pAudioClient->GetMixFormat(&pwfx);
         if (FAILED(hr)) { SetError(L"GetMixFormat failed", hr); cleanup(); return; }
 
-        const REFERENCE_TIME hnsBufferDuration = 10000000; // 1 second, generous headroom
+        // 3 seconds -- a second line of defense alongside the MMCSS
+        // registration above: even a thread that IS getting starved
+        // occasionally now has a much bigger cushion before the ring
+        // buffer actually wraps and starts silently overwriting unread
+        // audio.
+        const REFERENCE_TIME hnsBufferDuration = 30000000;
         hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, hnsBufferDuration, 0, pwfx, nullptr);
         if (FAILED(hr)) { SetError(L"IAudioClient::Initialize failed", hr); cleanup(); return; }
 
