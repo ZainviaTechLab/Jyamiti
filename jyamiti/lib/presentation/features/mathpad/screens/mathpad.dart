@@ -11021,6 +11021,38 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               ),
                             ],
                           ),
+                          _recordingSettingsSubmenu<RecordingPipelineMode>(
+                            isDark: isDark,
+                            icon: Icons.stream_rounded,
+                            label: 'Recording Pipeline',
+                            selectedValue: _recordingService.recordingPipelineMode,
+                            onSelected: (mode) => setState(() {
+                              unawaited(
+                                _recordingService.setRecordingPipelineMode(mode),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: RecordingPipelineMode.snapshotBased,
+                                label: 'Standard (Recommended)',
+                                description:
+                                    'Frames are saved and assembled into '
+                                    'video -- the original, most-tested path',
+                              ),
+                              (
+                                value: RecordingPipelineMode.continuousStream,
+                                label: 'Continuous',
+                                description:
+                                    'Frames are encoded to video in real '
+                                    'time as you draw -- always finishes '
+                                    'instantly, a newer path. Not used '
+                                    'together with a separate camera '
+                                    'stream (Standard/Live camera '
+                                    'encoding) -- pair with On Canvas or '
+                                    'no camera',
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                   ],

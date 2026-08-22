@@ -267,6 +267,53 @@ enum CameraEncodeMode {
   onCanvas,
 }
 
+/// How captured canvas frames get turned into the final video --
+/// [snapshotBased] (the existing approach, unchanged, everything else in
+/// this class is built around) writes each captured frame as a PNG file
+/// and assembles them afterward via ffmpeg's concat demuxer (optionally
+/// with background segment-sealing -- see [SegmentSealMode]);
+/// [continuousStream] instead pipes each captured frame's raw pixels
+/// directly into ONE continuously-running ffmpeg encoder process for the
+/// whole recording -- the same fundamental technique professional
+/// recording software actually uses. [CameraEncodeMode.onCanvas]'s doc
+/// comment covers the "how big companies actually COMPOSITE" half of
+/// that; this is the "how they actually ENCODE" half. The tutor's choice
+/// is persisted locally (see
+/// [MathPadRecordingService.loadRecordingPipelineMode]/
+/// `setRecordingPipelineMode`) so it survives across sessions.
+enum RecordingPipelineMode {
+  /// Every frame is written to disk as an individual PNG file, later
+  /// assembled into video via ffmpeg.
+  /// Benefit: the original, most-tested path every other setting in this
+  /// class was built and verified against.
+  /// Cost: real disk I/O and PNG-encode work per captured frame, plus an
+  /// assembly step even in the fast (segments-already-sealed) case.
+  /// Recommended default.
+  snapshotBased,
+
+  /// Each captured frame's raw pixels are piped directly into one
+  /// continuously-running ffmpeg process that encodes them in real time
+  /// for the whole recording -- no PNG files, no segment-sealing, no
+  /// assembly step. `stop()` just closes the pipe; the video is already
+  /// fully encoded by the time it does, so `encode()` only has a quick
+  /// audio mux left, not a real video encode.
+  /// Benefit: finishes essentially instantly regardless of recording
+  /// length, and skips the disk I/O + PNG-encode cost of the
+  /// snapshot-based path entirely.
+  /// Cost: a newer, less-tested path. Requires a FIXED capture-area
+  /// pixel size for the whole recording -- a raw-video pipe can't change
+  /// dimensions mid-stream the way each independently-sized PNG can, so
+  /// resizing the window mid-recording drops frames rather than adapting
+  /// to the new size. Not compatible with
+  /// `CameraEncodeMode.finalPass`/`liveSegmented` (both need the
+  /// snapshot-based pipeline's assembly machinery to merge in a
+  /// separately-captured camera stream) -- selecting either of those
+  /// together with this silently falls back to `snapshotBased` for that
+  /// recording; pair this with `CameraEncodeMode.onCanvas` (or no
+  /// camera) instead.
+  continuousStream,
+}
+
 class MathPadRecordingException implements Exception {
   final String message;
   MathPadRecordingException(this.message);
@@ -470,6 +517,7 @@ class MathPadRecordingService extends ChangeNotifier {
     unawaited(loadCameraSyncMethod());
     unawaited(loadMicEnhancementMode());
     unawaited(loadCameraEncodeMode());
+    unawaited(loadRecordingPipelineMode());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -679,6 +727,41 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [recordingPipelineMode] from local storage,
+  /// if any was ever saved -- falls back to (and leaves unchanged)
+  /// whatever [recordingPipelineMode] already is on any error or missing
+  /// value.
+  Future<void> loadRecordingPipelineMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kRecordingPipelineModePrefKey);
+      if (saved == null) return;
+      recordingPipelineMode = RecordingPipelineMode.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => recordingPipelineMode,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `recordingPipelineMode` already was.
+    }
+  }
+
+  /// Changes [recordingPipelineMode] and persists the choice locally so
+  /// it's still in effect the next time the app opens. Only read at
+  /// `start()` time -- changing it never affects a recording already in
+  /// progress.
+  Future<void> setRecordingPipelineMode(RecordingPipelineMode mode) async {
+    recordingPipelineMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kRecordingPipelineModePrefKey, mode.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
@@ -758,6 +841,14 @@ class MathPadRecordingService extends ChangeNotifier {
   CameraEncodeMode cameraEncodeMode = CameraEncodeMode.finalPass;
   static const String _kCameraEncodeModePrefKey =
       'mathpad_recording_camera_encode_mode';
+
+  /// The tutor's chosen recording pipeline -- defaults to
+  /// [RecordingPipelineMode.snapshotBased] until [loadRecordingPipelineMode]
+  /// (fired from the constructor, best-effort) resolves whatever was
+  /// actually saved locally.
+  RecordingPipelineMode recordingPipelineMode = RecordingPipelineMode.snapshotBased;
+  static const String _kRecordingPipelineModePrefKey =
+      'mathpad_recording_pipeline_mode';
 
   // Snapshotted in `stopCapture()` from `audioBitrateMode` -- capture
   // itself always records raw WAV regardless of this setting (it's only
@@ -901,6 +992,30 @@ class MathPadRecordingService extends ChangeNotifier {
       _state == MathPadRecordingState.recording &&
       _activeIncludeCamera &&
       _activeCameraEncodeMode == CameraEncodeMode.onCanvas;
+
+  // ─── `RecordingPipelineMode.continuousStream` state -- entirely
+  // separate from every field above; the snapshot-based path (`_frameCount`,
+  // `_concatEntries`, `_lastFrameBytes`, segment-sealing, ...) is never
+  // touched by this mode, and vice versa. See `_captureFrameContinuousStream`
+  // and `RecordingPipelineMode.continuousStream`'s doc comment. ───────────
+  // Snapshotted once in `start()`, same reasoning as the other `_active*`
+  // fields -- also where the `finalPass`/`liveSegmented` camera
+  // incompatibility fallback (see the enum's doc comment) actually gets
+  // decided.
+  RecordingPipelineMode _activeRecordingPipelineMode = RecordingPipelineMode.snapshotBased;
+  Process? _continuousStreamProcess;
+  int _continuousStreamWidth = 0;
+  int _continuousStreamHeight = 0;
+  String? _continuousStreamOutputPath;
+  // The last successfully captured frame's raw RGBA bytes -- re-written
+  // to the pipe (cheaply) for any due tick where nothing changed on the
+  // board, since a raw stream (unlike the snapshot path's PNG+duration
+  // entries) has no way to say "hold this frame N ticks longer".
+  Uint8List? _lastContinuousStreamFrameBytes;
+  int _continuousStreamFrameCount = 0;
+  bool _continuousStreamCaptureInFlight = false;
+  String? _capturedContinuousStreamOutputPath;
+  double _capturedContinuousStreamDurationSeconds = 0.0;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -1469,6 +1584,25 @@ class MathPadRecordingService extends ChangeNotifier {
     // Same snapshotting reasoning as the fps fields just above.
     _activeCameraEncodeMode = cameraEncodeMode;
     _activeIncludeCamera = includeCamera;
+    // `continuousStream` can't merge in a SEPARATELY-captured camera
+    // stream (no assembly pass left to do that merging in) -- silently
+    // falls back to `snapshotBased` for this recording rather than
+    // failing outright or (worse) silently dropping the camera. Doesn't
+    // apply to `onCanvas` (already baked into what gets captured) or no
+    // camera at all. See `RecordingPipelineMode.continuousStream`'s doc
+    // comment.
+    final bool pipelineCameraConflict =
+        includeCamera &&
+        cameraEncodeMode != CameraEncodeMode.onCanvas &&
+        recordingPipelineMode == RecordingPipelineMode.continuousStream;
+    _activeRecordingPipelineMode =
+        pipelineCameraConflict ? RecordingPipelineMode.snapshotBased : recordingPipelineMode;
+    _continuousStreamProcess = null;
+    _continuousStreamWidth = 0;
+    _continuousStreamHeight = 0;
+    _continuousStreamOutputPath = null;
+    _lastContinuousStreamFrameBytes = null;
+    _continuousStreamFrameCount = 0;
 
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
@@ -1541,15 +1675,24 @@ class MathPadRecordingService extends ChangeNotifier {
 
   Future<void> _captureFrame() async {
     if (_sessionDir == null || _startedAt == null) return;
-    
+
     // Always keep elapsed time updated
     elapsed = DateTime.now().difference(_startedAt!);
+
+    // Entirely separate capture path -- see `_captureFrameContinuousStream`'s
+    // doc comment for why this branches out this early rather than
+    // sharing any of the snapshot-based logic/state below.
+    if (_activeRecordingPipelineMode == RecordingPipelineMode.continuousStream) {
+      await _captureFrameContinuousStream();
+      _emitElapsedTick();
+      return;
+    }
 
     if (_captureInFlight) {
       _emitElapsedTick();
       return;
     }
-    
+
     // Nothing new due yet -- capturing again right now would just be a
     // needless duplicate of the last frame, but we still emitted the latest elapsed time.
     if (_targetFrameCountNow() <= _frameCount) {
@@ -1657,6 +1800,151 @@ class MathPadRecordingService extends ChangeNotifier {
       elapsed = DateTime.now().difference(_startedAt!);
     }
     _emitElapsedTick();
+  }
+
+  /// The `continuousStream` counterpart to the snapshot-based capture
+  /// logic just above -- see `RecordingPipelineMode.continuousStream`'s
+  /// doc comment. Extracts raw RGBA pixels (skipping PNG-encoding
+  /// entirely -- cheaper per frame than the snapshot path, not just
+  /// different) and writes them straight into a continuously-running
+  /// ffmpeg process's stdin, lazily spawning that process on the very
+  /// first frame so its fixed pipe dimensions match whatever this
+  /// recording's capture area actually renders at, rather than a guess
+  /// made before any frame existed.
+  ///
+  /// Entirely self-contained -- its own in-flight guard, its own frame
+  /// counter (`_continuousStreamFrameCount`, ticked against
+  /// `_activeEncodeFps` directly, not `_activeCaptureFps`, since there's
+  /// no separate capture-then-resample step here the way the snapshot
+  /// path has via `-r $encodeFps` at encode time -- whatever rate frames
+  /// get fed at IS the output rate). Never touches `_frameCount`,
+  /// `_concatEntries`, `_lastFrameBytes`, or any segment-sealing state --
+  /// those stay exclusively the snapshot path's, so the two pipelines
+  /// can never cross-contaminate each other's state.
+  Future<void> _captureFrameContinuousStream() async {
+    if (_continuousStreamCaptureInFlight || _startedAt == null) return;
+    final int fillTo =
+        (DateTime.now().difference(_startedAt!).inMilliseconds *
+                    _activeEncodeFps /
+                    1000)
+                .floor();
+    if (fillTo <= _continuousStreamFrameCount) return;
+
+    _continuousStreamCaptureInFlight = true;
+    try {
+      final RenderObject? renderObject = _canvasKey?.currentContext?.findRenderObject();
+      if (renderObject is RenderRepaintBoundary && renderObject.attached) {
+        final double pixelRatio = min(
+          ui.PlatformDispatcher.instance.views.first.devicePixelRatio,
+          _maxCapturePixelRatio,
+        );
+        final ui.Image image = await renderObject.toImage(pixelRatio: pixelRatio);
+        final ByteData? bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        final int capturedWidth = image.width;
+        final int capturedHeight = image.height;
+        image.dispose();
+        if (bytes != null) {
+          if (_continuousStreamProcess == null) {
+            // First frame -- fixes the pipe's dimensions for the whole
+            // recording (a raw-video pipe can't change size mid-stream).
+            await _startContinuousStreamEncoder(capturedWidth, capturedHeight);
+          }
+          if (capturedWidth == _continuousStreamWidth &&
+              capturedHeight == _continuousStreamHeight) {
+            _lastContinuousStreamFrameBytes = bytes.buffer.asUint8List();
+          }
+          // else: the capture area's pixel size changed mid-recording
+          // (e.g. the window was resized) -- this pipeline can't adapt
+          // mid-stream (see the mode's doc comment), so this one frame
+          // is dropped; whatever was previously cached gets re-written
+          // below instead, same as any other due tick with nothing new.
+        }
+      }
+
+      final Uint8List? rawBytes = _lastContinuousStreamFrameBytes;
+      final Process? process = _continuousStreamProcess;
+      if (rawBytes != null && process != null) {
+        // Every due tick needs a frame WRITTEN, unlike the snapshot
+        // path's duration-extension trick -- a raw stream has no
+        // metadata channel to say "hold this frame N ticks longer", so
+        // an unchanged board still costs one cheap pipe write per tick
+        // (re-sending the same cached bytes), just never the expensive
+        // toImage()/rasterize call that produced them.
+        final int slotsElapsed = fillTo - _continuousStreamFrameCount;
+        for (int i = 0; i < slotsElapsed; i++) {
+          process.stdin.add(rawBytes);
+        }
+        _continuousStreamFrameCount = fillTo;
+      }
+    } catch (_) {
+      // One missed frame isn't worth aborting the whole recording over --
+      // same philosophy as the snapshot path.
+    } finally {
+      _continuousStreamCaptureInFlight = false;
+    }
+  }
+
+  /// Spawns the long-running ffmpeg process `_captureFrameContinuousStream`
+  /// feeds raw frames into, fixed at [width]x[height] for the rest of
+  /// this recording. `-bf 0` for the same reason `_encodeSegment` uses it
+  /// -- moot for THIS process alone (nothing gets stream-copy-concatenated
+  /// with it), kept for consistency with the other two encode paths in
+  /// this file and in case a future feature ever needs to splice a
+  /// continuous-stream recording with something else.
+  Future<void> _startContinuousStreamEncoder(int width, int height) async {
+    final String ffmpegPath = _resolveFfmpegPath();
+    final String outPath = p.join(_sessionDir!.path, 'canvas_stream.mp4');
+    final Process process = await Process.start(ffmpegPath, [
+      '-y',
+      '-f', 'rawvideo',
+      '-pixel_format', 'rgba',
+      '-video_size', '${width}x$height',
+      '-framerate', '$_activeEncodeFps',
+      '-i', 'pipe:0',
+      '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p',
+      '-preset', 'veryfast',
+      '-crf', '20',
+      '-bf', '0',
+      outPath,
+    ]);
+    // See the "Windows Job Object" section above this class -- ties this
+    // process's lifetime to the app's, same as every other ffmpeg
+    // process this file spawns.
+    _tieProcessLifetimeToApp(process.pid);
+    // Must be consumed or the OS pipe buffer fills and ffmpeg freezes --
+    // same reasoning as every other spawned ffmpeg process in this file.
+    process.stdout.listen((_) {});
+    process.stderr.listen((_) {});
+    _continuousStreamProcess = process;
+    _continuousStreamWidth = width;
+    _continuousStreamHeight = height;
+    _continuousStreamOutputPath = outPath;
+  }
+
+  /// Closes the continuous-stream encoder's stdin (if one was started)
+  /// and waits for ffmpeg to finalize the file -- the `continuousStream`
+  /// counterpart to `_stopCameraCapture()`. Returns the finished video's
+  /// path (already fully encoded -- canvas, and camera too if
+  /// `CameraEncodeMode.onCanvas` composited it in live -- by the time
+  /// this returns) or null if this recording never actually started one
+  /// (wrong pipeline mode, or no frame was ever captured to trigger the
+  /// lazy spawn).
+  Future<String?> _stopContinuousStreamEncoder() async {
+    final Process? process = _continuousStreamProcess;
+    final String? outPath = _continuousStreamOutputPath;
+    _continuousStreamProcess = null;
+    if (process == null) return null;
+    try {
+      await process.stdin.flush();
+      await process.stdin.close();
+    } catch (_) {}
+    try {
+      await process.exitCode.timeout(const Duration(seconds: 10));
+    } catch (_) {
+      process.kill(ProcessSignal.sigkill);
+    }
+    return outPath;
   }
 
   /// Builds a concat-demuxer manifest for exactly [entries] and encodes it
@@ -2004,12 +2292,18 @@ class MathPadRecordingService extends ChangeNotifier {
     // sees a fully consistent `_sealedSegmentPaths`/`_sealedConcatEntryCount`
     // pair (a seal that's still mid-flight when this runs could otherwise
     // finish afterward and mutate state nobody's looking at anymore).
-    while (_captureInFlight || _segmentSealInFlight) {
+    while (_captureInFlight || _segmentSealInFlight || _continuousStreamCaptureInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
     }
 
     await _stopCameraCapture();
     _stopNativeCameraCapture();
+    // No-op (returns null immediately) unless `_activeRecordingPipelineMode`
+    // was actually `continuousStream` for this recording -- see
+    // `_stopContinuousStreamEncoder`'s doc comment.
+    _capturedContinuousStreamOutputPath = await _stopContinuousStreamEncoder();
+    _capturedContinuousStreamDurationSeconds =
+        _activeEncodeFps > 0 ? _continuousStreamFrameCount / _activeEncodeFps : 0.0;
 
     _capturedConcatEntries = List.of(_concatEntries);
     _capturedSessionDir = _sessionDir;
@@ -2036,6 +2330,14 @@ class MathPadRecordingService extends ChangeNotifier {
     _sealedSegmentPaths.clear();
     _sealedConcatEntryCount = 0;
     _lastSealCheckpoint = null;
+    // Frees the cached raw-frame buffer promptly rather than waiting for
+    // the next `start()`'s own reset -- see the "continuousStream state"
+    // field group's doc comment above.
+    _lastContinuousStreamFrameBytes = null;
+    _continuousStreamWidth = 0;
+    _continuousStreamHeight = 0;
+    _continuousStreamOutputPath = null;
+    _continuousStreamFrameCount = 0;
     _lastDistinctFrameAt = null;
     _audioStartOffsetSeconds = 0.0;
     _cameraStartOffsetSeconds = 0.0;
@@ -2138,6 +2440,75 @@ class MathPadRecordingService extends ChangeNotifier {
   /// this falls back to a plain camera-less encode so the tutor still gets
   /// a usable recording (see the `catch` around `encodeCanvasWithCamera`
   /// below).
+  /// Finalizes a `RecordingPipelineMode.continuousStream` recording --
+  /// [rawVideoPath] is already a complete, fully-encoded H.264 video (see
+  /// `_startContinuousStreamEncoder`/`_stopContinuousStreamEncoder`) by
+  /// the time this runs, so there's no canvas manifest, no segment
+  /// concat, no camera overlay pass here at all -- just a quick mux with
+  /// the separately-captured audio (`-c:v copy`, no video re-encoding),
+  /// or a straight file copy if there's no audio to add. This is the
+  /// entire reason this pipeline mode exists: finishes almost instantly
+  /// regardless of how long the recording was.
+  Future<String> _finalizeContinuousStreamRecording({
+    required String rawVideoPath,
+    required Directory sessionDir,
+    required String? audioPath,
+    required double audioStartOffsetSeconds,
+    required int audioKbps,
+    required double totalDurationSeconds,
+  }) async {
+    Future<void> cleanup() async {
+      if (await sessionDir.exists()) {
+        await sessionDir.delete(recursive: true);
+      }
+    }
+    try {
+      final Directory outDir = await getRecordingsDir();
+      final String outPath =
+          p.join(outDir.path, 'MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4');
+
+      if (audioPath != null) {
+        final String ffmpegPath = _resolveFfmpegPath();
+        await _runFfmpegWithProgress(ffmpegPath, [
+          '-y',
+          '-progress', 'pipe:1',
+          '-nostats',
+          '-i', rawVideoPath,
+          // Same reasoning as every other audio mux in this file -- see
+          // `_audioStartOffsetSeconds`'s doc comment.
+          if (audioStartOffsetSeconds > 0.0005)
+            ...['-itsoffset', audioStartOffsetSeconds.toStringAsFixed(6)],
+          '-i', audioPath,
+          '-map', '0:v',
+          '-map', '1:a',
+          // The video is already fully encoded -- copy, don't re-encode.
+          '-c:v', 'copy',
+          '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
+          // See the other encode paths' identical comment on why this is
+          // explicit rather than trusting the source WAV's own format.
+          '-ar', '48000',
+          '-ac', '1',
+          '-c:a', 'aac',
+          '-b:a', '${audioKbps}k',
+          '-shortest',
+          outPath,
+        ], totalDurationSeconds);
+      } else {
+        // No audio at all (a mic failure) -- the video is already the
+        // final file, just needs to live in the recordings folder.
+        await File(rawVideoPath).copy(outPath);
+      }
+
+      await _generateThumbnail(outPath);
+      return outPath;
+    } finally {
+      encodingProgress = 0.0;
+      await cleanup();
+      _state = MathPadRecordingState.idle;
+      _emit();
+    }
+  }
+
   Future<String> encode() async {
     if (_state != MathPadRecordingState.waitingForEncodeChoice) {
       throw MathPadRecordingException('Not waiting for encode.');
@@ -2154,6 +2525,24 @@ class MathPadRecordingService extends ChangeNotifier {
 
     _state = MathPadRecordingState.encoding;
     _emit();
+
+    // `RecordingPipelineMode.continuousStream` recordings never populate
+    // `concatEntries` at all (see that mode's doc comment) -- checked
+    // and handled FIRST, before the "nothing was captured" guard below
+    // (which would otherwise misfire for every continuous-stream
+    // recording) and before any of the canvas-manifest/segment/camera-
+    // merge machinery further down, none of which this mode uses.
+    final String? continuousStreamOutputPath = _capturedContinuousStreamOutputPath;
+    if (continuousStreamOutputPath != null) {
+      return _finalizeContinuousStreamRecording(
+        rawVideoPath: continuousStreamOutputPath,
+        sessionDir: sessionDir,
+        audioPath: _capturedAudioPath,
+        audioStartOffsetSeconds: _capturedAudioStartOffsetSeconds,
+        audioKbps: _capturedAudioBitrateKbps,
+        totalDurationSeconds: _capturedContinuousStreamDurationSeconds,
+      );
+    }
 
     Future<void> cleanup() async {
       if (await sessionDir.exists()) {
@@ -2561,7 +2950,7 @@ class MathPadRecordingService extends ChangeNotifier {
     // A sealed-segment encode may still be running in the background --
     // let it finish before deleting `sessionDir` out from under it, rather
     // than risk it failing loudly (harmlessly) partway through a delete.
-    while (_segmentSealInFlight) {
+    while (_segmentSealInFlight || _continuousStreamCaptureInFlight) {
       await Future.delayed(const Duration(milliseconds: 20));
     }
     // `cancel()` can be reached from `waitingForEncodeChoice` too (after
@@ -2580,6 +2969,8 @@ class MathPadRecordingService extends ChangeNotifier {
     }
     await _stopCameraCapture();
     _stopNativeCameraCapture();
+    await _stopContinuousStreamEncoder();
+    _capturedContinuousStreamOutputPath = null;
     _cameraEnabled = false;
     final Directory? sessionDir = _sessionDir;
     final Directory? capturedSessionDir = _capturedSessionDir;
@@ -2731,6 +3122,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _segmentSealTimer?.cancel();
     await _audioRecorder.dispose();
     _cameraProcess?.kill(ProcessSignal.sigkill);
+    _continuousStreamProcess?.kill(ProcessSignal.sigkill);
     // No hard-kill equivalent needed for either native capture path here
     // -- both are in-process worker threads, not separate processes, so
     // neither can be orphaned the way `_cameraProcess` can (see
