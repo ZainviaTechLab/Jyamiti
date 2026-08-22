@@ -173,8 +173,10 @@ class MathPadNativeCameraException implements Exception {
 // Same DLL, same handle-based C ABI shape as the camera bindings above --
 // see audio_capture.cpp's file-level doc comment for why this exists
 // alongside the camera module.
-typedef _AudioStartNative = ffi.Int64 Function(ffi.Pointer<ffi2.Utf16> outputPath);
-typedef _AudioStartDart = int Function(ffi.Pointer<ffi2.Utf16> outputPath);
+typedef _AudioStartNative = ffi.Int64 Function(
+    ffi.Pointer<ffi2.Utf16> outputPath, ffi.Int32 useRawCapture);
+typedef _AudioStartDart = int Function(
+    ffi.Pointer<ffi2.Utf16> outputPath, int useRawCapture);
 
 class _NativeAudioBindings {
   _NativeAudioBindings(ffi.DynamicLibrary lib)
@@ -226,11 +228,16 @@ class NativeAudioCapture {
   /// [outputPath], in whatever format the audio engine's own shared-mode
   /// mix format actually is (see the C++ file's doc comment for why that
   /// never needs to match what `record`-package capture produces).
-  static NativeAudioCapture start(String outputPath) {
+  ///
+  /// [useRawCapture] requests WASAPI bypass Windows' own microphone
+  /// enhancement chain (noise suppression, AGC) -- see
+  /// `MicEnhancementMode`'s doc comment in `mathpad_recording_service.dart`
+  /// for what that trades off.
+  static NativeAudioCapture start(String outputPath, {required bool useRawCapture}) {
     final _NativeAudioBindings bindings = _loadAudioBindings();
     final ffi.Pointer<ffi2.Utf16> nativeOutput = outputPath.toNativeUtf16();
     try {
-      final int handle = bindings.start(nativeOutput);
+      final int handle = bindings.start(nativeOutput, useRawCapture ? 1 : 0);
       if (handle == 0) {
         throw MathPadNativeCameraException(
           'The native audio module rejected the request (invalid output path).',

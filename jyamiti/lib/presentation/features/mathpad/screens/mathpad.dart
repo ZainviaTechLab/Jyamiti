@@ -10935,6 +10935,34 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               ),
                             ],
                           ),
+                          _recordingSettingsSubmenu<MicEnhancementMode>(
+                            isDark: isDark,
+                            icon: Icons.mic_rounded,
+                            label: 'Mic Enhancement',
+                            selectedValue: _recordingService.micEnhancementMode,
+                            onSelected: (mode) => setState(() {
+                              unawaited(
+                                _recordingService.setMicEnhancementMode(mode),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: MicEnhancementMode.disabled,
+                                label: 'Off (Recommended)',
+                                description:
+                                    'Raw mic signal -- avoids Windows mistaking '
+                                    'a sustained note/vowel for noise and '
+                                    'muting it',
+                              ),
+                              (
+                                value: MicEnhancementMode.enabled,
+                                label: 'On',
+                                description:
+                                    'Windows cleans up noise & auto-levels '
+                                    'volume -- helpful in a noisy room',
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                   ],

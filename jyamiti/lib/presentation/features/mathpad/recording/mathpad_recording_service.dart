@@ -163,6 +163,37 @@ enum CameraSyncMethod {
   nativePrecise,
 }
 
+/// Whether Windows' own microphone enhancements (noise suppression,
+/// automatic gain control) are allowed to process the narration signal
+/// before it's captured -- applies to BOTH audio capture paths (the
+/// ffmpeg/`record`-package one via its `autoGain`/`noiseSuppress`
+/// options, and the native WASAPI one via `AUDCLNT_STREAMOPTIONS_RAW`;
+/// see `camera_capture_native.dart`/`audio_capture.cpp`). The tutor's
+/// choice is persisted locally (see
+/// [MathPadRecordingService.loadMicEnhancementMode]/
+/// `setMicEnhancementMode`) so it survives across sessions.
+enum MicEnhancementMode {
+  /// Bypass Windows' enhancement chain -- as close to the mic's raw,
+  /// unprocessed signal as this app can get.
+  /// Benefit: avoids a real, confirmed failure mode -- Windows' noise
+  /// suppression estimates a "noise floor" from what looks steady/
+  /// unchanging, and can mistake a sustained, unvarying sound (a long
+  /// held vowel, a held music note) for background noise and gate it
+  /// out partway through, while normal varying speech is unaffected.
+  /// Cost: none of Windows' own noise cleanup in a genuinely noisy room
+  /// -- what you capture is what the mic actually picked up.
+  /// Recommended default.
+  disabled,
+
+  /// Let Windows apply its own microphone enhancements as it normally
+  /// would for any app.
+  /// Benefit: can meaningfully clean up narration recorded in a noisy
+  /// room (fan/AC hum, keyboard clatter, etc.) -- exactly what those
+  /// enhancements are designed for.
+  /// Cost: reintroduces the sustained-tone gating risk [disabled] avoids.
+  enabled,
+}
+
 class MathPadRecordingException implements Exception {
   final String message;
   MathPadRecordingException(this.message);
@@ -364,6 +395,7 @@ class MathPadRecordingService extends ChangeNotifier {
     unawaited(loadFrameRateMode());
     unawaited(loadAudioBitrateMode());
     unawaited(loadCameraSyncMethod());
+    unawaited(loadMicEnhancementMode());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -505,6 +537,40 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [micEnhancementMode] from local storage, if
+  /// any was ever saved -- falls back to (and leaves unchanged) whatever
+  /// [micEnhancementMode] already is on any error or missing value.
+  Future<void> loadMicEnhancementMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kMicEnhancementModePrefKey);
+      if (saved == null) return;
+      micEnhancementMode = MicEnhancementMode.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => micEnhancementMode,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `micEnhancementMode` already was.
+    }
+  }
+
+  /// Changes [micEnhancementMode] and persists the choice locally so
+  /// it's still in effect the next time the app opens. Only read at
+  /// `start()` time -- changing it never affects a recording already in
+  /// progress.
+  Future<void> setMicEnhancementMode(MicEnhancementMode mode) async {
+    micEnhancementMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kMicEnhancementModePrefKey, mode.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
@@ -568,6 +634,14 @@ class MathPadRecordingService extends ChangeNotifier {
   CameraSyncMethod cameraSyncMethod = CameraSyncMethod.ffmpegEstimate;
   static const String _kCameraSyncMethodPrefKey =
       'mathpad_recording_camera_sync_method';
+
+  /// The tutor's chosen microphone-enhancement policy -- defaults to
+  /// [MicEnhancementMode.disabled] until [loadMicEnhancementMode] (fired
+  /// from the constructor, best-effort) resolves whatever was actually
+  /// saved locally.
+  MicEnhancementMode micEnhancementMode = MicEnhancementMode.disabled;
+  static const String _kMicEnhancementModePrefKey =
+      'mathpad_recording_mic_enhancement_mode';
 
   // Snapshotted in `stopCapture()` from `audioBitrateMode` -- capture
   // itself always records raw WAV regardless of this setting (it's only
@@ -1142,7 +1216,10 @@ class MathPadRecordingService extends ChangeNotifier {
     _audioStartOffsetSeconds = 0.0;
     if (useNativeAudio) {
       try {
-        _nativeAudio = NativeAudioCapture.start(audioWavPath);
+        _nativeAudio = NativeAudioCapture.start(
+          audioWavPath,
+          useRawCapture: micEnhancementMode == MicEnhancementMode.disabled,
+        );
       } catch (e) {
         await _stopCameraCapture();
         _stopNativeCameraCapture();
@@ -1156,8 +1233,9 @@ class MathPadRecordingService extends ChangeNotifier {
       unawaited(_resolveNativeAudioOffset(_nativeAudio!, _startedAt!));
     } else {
       try {
+        final bool allowMicEnhancement = micEnhancementMode == MicEnhancementMode.enabled;
         await _audioRecorder.start(
-          const RecordConfig(
+          RecordConfig(
             encoder: AudioEncoder.wav,
             // Matches the sample rate Windows' own WASAPI shared-mode audio
             // engine mixes at by default (48kHz) -- capturing at the
@@ -1173,17 +1251,19 @@ class MathPadRecordingService extends ChangeNotifier {
             // (bigger file, zero real quality gain) and risks an audible
             // channel imbalance on drivers that don't upmix cleanly.
             numChannels: 1,
-            // autoGain and noiseSuppress deliberately off: on Windows these
-            // activate the OS APO (Audio Processing Objects) pipeline which
-            // applies heavy-handed noise suppression/AGC that distorts clean
-            // mic narration into artifacts/muffled noise when there is
-            // nothing real for it to cancel. Volume normalisation is handled
-            // cleanly at encode time via dynaudnorm (see below) without any
-            // signal quality cost. echoCancel also left off for the same
-            // reason -- it exists for two-way call scenarios with live
-            // speaker feedback, not a solo narration recording.
-            autoGain: false,
-            noiseSuppress: false,
+            // Tutor-selectable via `micEnhancementMode` (see its doc
+            // comment) -- when disabled (the default), these stay off: on
+            // Windows they activate the OS APO (Audio Processing Objects)
+            // pipeline, which can distort clean narration when there's
+            // nothing real to cancel, and can mistake a sustained,
+            // unvarying sound for background noise and gate it out
+            // partway through. Volume normalisation is handled separately
+            // at encode time via dynaudnorm (see below) either way.
+            // echoCancel stays off regardless of this setting -- it
+            // exists for two-way call scenarios with live speaker
+            // feedback, not a solo narration recording.
+            autoGain: allowMicEnhancement,
+            noiseSuppress: allowMicEnhancement,
           ),
           path: audioWavPath,
         );

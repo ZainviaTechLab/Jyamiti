@@ -84,9 +84,9 @@ struct ChunkHeader {
 
 class AudioCapture {
 public:
-    void Start(std::wstring outputPath) {
-        worker_ = std::thread([this, outputPath = std::move(outputPath)]() {
-            Run(outputPath);
+    void Start(std::wstring outputPath, bool useRawCapture) {
+        worker_ = std::thread([this, outputPath = std::move(outputPath), useRawCapture]() {
+            Run(outputPath, useRawCapture);
         });
     }
 
@@ -117,7 +117,7 @@ private:
         lastError_ = buf;
     }
 
-    void Run(const std::wstring& outputPath) {
+    void Run(const std::wstring& outputPath, bool useRawCapture) {
         HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
             SetError(L"CoInitializeEx failed", hr);
@@ -169,33 +169,40 @@ private:
         hr = pDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&pAudioClient);
         if (FAILED(hr)) { SetError(L"Activate(IAudioClient) failed", hr); cleanup(); return; }
 
-        // Request RAW (unprocessed) capture -- by default WASAPI runs the
-        // signal through Windows' own microphone-enhancement chain
-        // (noise suppression, AGC), which adapts to what it thinks is
-        // the "noise floor". A sustained, unvarying tone (a long held
-        // vowel) looks exactly like steady-state noise to that
-        // algorithm and gets progressively gated out after a moment,
-        // while normal speech -- which keeps varying -- never triggers
-        // it. Confirmed as the real cause of a "some audio missing,
-        // normal speech fine" bug found via real user testing. This is
-        // the same protection the ffmpeg/`record`-package path already
-        // had via its own `autoGain: false, noiseSuppress: false`
-        // options (see start()'s doc comment on that RecordConfig) --
-        // this native path needs its own equivalent. Requires
-        // IAudioClient2; querying for it and setting this is best-effort
-        // -- some devices/drivers don't support RAW mode, in which case
-        // capture just proceeds through the normal (enhanced) chain
-        // exactly as it did before this fix, rather than failing
-        // outright.
-        IAudioClient2* pAudioClient2 = nullptr;
-        if (SUCCEEDED(pAudioClient->QueryInterface(__uuidof(IAudioClient2), (void**)&pAudioClient2))) {
-            AudioClientProperties props = {};
-            props.cbSize = sizeof(AudioClientProperties);
-            props.bIsOffload = FALSE;
-            props.eCategory = AudioCategory_Media;
-            props.Options = AUDCLNT_STREAMOPTIONS_RAW;
-            pAudioClient2->SetClientProperties(&props);
-            pAudioClient2->Release();
+        // Optionally request RAW (unprocessed) capture -- by default
+        // WASAPI runs the signal through Windows' own microphone-
+        // enhancement chain (noise suppression, AGC), which adapts to
+        // what it thinks is the "noise floor". A sustained, unvarying
+        // tone (a long held vowel) looks exactly like steady-state noise
+        // to that algorithm and gets progressively gated out after a
+        // moment, while normal speech -- which keeps varying -- never
+        // triggers it. Confirmed as the real cause of a "some audio
+        // missing, normal speech fine" bug found via real user testing.
+        // This is the same protection the ffmpeg/`record`-package path
+        // already had via its own `autoGain: false, noiseSuppress:
+        // false` options (see start()'s doc comment on that
+        // RecordConfig).
+        //
+        // Tutor-selectable (see `MicEnhancementMode` in
+        // mathpad_recording_service.dart) rather than forced -- Windows'
+        // enhancements are a genuine net win in a genuinely noisy room
+        // for a tutor who doesn't sustain long tones, so this doesn't
+        // unconditionally take that away. Requires IAudioClient2;
+        // querying for it and setting this is best-effort -- some
+        // devices/drivers don't support RAW mode, in which case capture
+        // just proceeds through the normal (enhanced) chain regardless
+        // of what was requested, rather than failing outright.
+        if (useRawCapture) {
+            IAudioClient2* pAudioClient2 = nullptr;
+            if (SUCCEEDED(pAudioClient->QueryInterface(__uuidof(IAudioClient2), (void**)&pAudioClient2))) {
+                AudioClientProperties props = {};
+                props.cbSize = sizeof(AudioClientProperties);
+                props.bIsOffload = FALSE;
+                props.eCategory = AudioCategory_Media;
+                props.Options = AUDCLNT_STREAMOPTIONS_RAW;
+                pAudioClient2->SetClientProperties(&props);
+                pAudioClient2->Release();
+            }
         }
 
         hr = pAudioClient->GetMixFormat(&pwfx);
@@ -321,10 +328,10 @@ std::atomic<int64_t> g_nextAudioHandle{1};
 
 extern "C" {
 
-__declspec(dllexport) int64_t jyamiti_audio_start(const wchar_t* outputPath) {
+__declspec(dllexport) int64_t jyamiti_audio_start(const wchar_t* outputPath, int32_t useRawCapture) {
     if (!outputPath) return 0;
     auto capture = std::make_unique<AudioCapture>();
-    capture->Start(outputPath);
+    capture->Start(outputPath, useRawCapture != 0);
 
     int64_t handle = g_nextAudioHandle.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(g_audioHandlesMutex);
