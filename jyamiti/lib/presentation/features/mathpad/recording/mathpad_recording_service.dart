@@ -838,6 +838,19 @@ class MathPadRecordingService extends ChangeNotifier {
   int _sealedConcatEntryCount = 0;
   List<String>? _capturedSealedSegmentPaths;
   int _capturedSealedConcatEntryCount = 0;
+  // Cumulative canvas-timeline seconds represented by every segment
+  // sealed so far -- i.e. where, on the shared `_startedAt`-anchored
+  // timeline, the NEXT segment (or the leftover tail) actually starts.
+  // Only meaningful for/updated by `CameraEncodeMode.liveSegmented` (see
+  // `_maybeSealSegment`), but harmless to track unconditionally.
+  double _sealedTimelineSeconds = 0.0;
+  double _capturedSealedTimelineSeconds = 0.0;
+  // Snapshotted once in `start()` from `cameraEncodeMode` -- same
+  // reasoning as `_activeCaptureFps`/`_activeEncodeFps`: a live setting
+  // change mid-recording must never produce a mix of segments sealed
+  // under two different strategies.
+  CameraEncodeMode _activeCameraEncodeMode = CameraEncodeMode.finalPass;
+  CameraEncodeMode _capturedActiveCameraEncodeMode = CameraEncodeMode.finalPass;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -1395,6 +1408,9 @@ class MathPadRecordingService extends ChangeNotifier {
     _activeCaptureFps = _captureFpsFor(frameRateMode);
     _activeEncodeFps = _encodeFpsFor(frameRateMode);
 
+    // Same snapshotting reasoning as the fps fields just above.
+    _activeCameraEncodeMode = cameraEncodeMode;
+
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
     _frameCount = 0;
@@ -1403,6 +1419,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _concatEntries.clear();
     _sealedSegmentPaths.clear();
     _sealedConcatEntryCount = 0;
+    _sealedTimelineSeconds = 0.0;
     encodingProgress = 0.0;
 
     _state = MathPadRecordingState.recording;
@@ -1591,6 +1608,19 @@ class MathPadRecordingService extends ChangeNotifier {
   /// all together afterward). Returns false (never throws) on any
   /// failure, so a failed segment just means more work happens at the
   /// final encode instead -- never worth losing the recording over.
+  ///
+  /// [cameraFilePath]/[cameraStartOffsetSeconds]/[segmentStartSeconds]
+  /// are all-or-nothing together -- when given, this segment gets the
+  /// picture-in-picture camera overlay baked in directly (see
+  /// `CameraEncodeMode.liveSegmented`'s doc comment), using the SAME
+  /// fixed, non-drifting offset for every segment (never re-estimated
+  /// per call) to locate exactly which slice of the (fragmented, so
+  /// readable mid-recording) camera file corresponds to
+  /// [segmentStartSeconds] on the shared canvas timeline. Called both
+  /// live (`_maybeSealSegment`, while recording continues) and for the
+  /// leftover tail (`encode()`, once stopped) -- identical either way,
+  /// so a segment sealed live and one encoded at the very end are
+  /// byte-for-byte produced by the same logic.
   Future<bool> _encodeSegment({
     required Directory sessionDir,
     required List<_ConcatEntry> entries,
@@ -1598,6 +1628,9 @@ class MathPadRecordingService extends ChangeNotifier {
     required String preset,
     required String crf,
     required int encodeFps,
+    String? cameraFilePath,
+    double? cameraStartOffsetSeconds,
+    double segmentStartSeconds = 0.0,
   }) async {
     if (entries.isEmpty) return false;
     try {
@@ -1615,20 +1648,99 @@ class MathPadRecordingService extends ChangeNotifier {
       );
       await manifestFile.writeAsString(manifest.toString());
 
-      final ProcessResult result = await Process.run(ffmpegPath, [
-        '-y',
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', manifestFile.path,
-        '-r', '$encodeFps',
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
-        '-preset', preset,
-        '-crf', crf,
-        '-f', 'mpegts',
-        outPath,
-      ]);
+      final double segmentDurationSeconds = entries.fold(
+        0.0,
+        (sum, e) => sum + e.durationSeconds,
+      );
+      // No camera footage exists yet for a segment that falls entirely
+      // before the camera's own measured start -- happens at most once,
+      // for whichever segment straddles or precedes that instant (in
+      // practice only ever the very first one). Falls back to a plain
+      // canvas-only encode for just that segment, matching exactly what
+      // the finalPass path's overlay filter would show (nothing) for
+      // that same stretch anyway.
+      final bool includeCameraOverlay =
+          cameraFilePath != null &&
+          cameraStartOffsetSeconds != null &&
+          (segmentStartSeconds + segmentDurationSeconds) >
+              cameraStartOffsetSeconds + 0.0005;
+
+      final List<String> args;
+      if (includeCameraOverlay) {
+        // How much of THIS segment's own start still falls before the
+        // camera actually began -- nonzero only for the one segment
+        // straddling that instant, pushing the camera's appearance in
+        // THIS segment's output later by exactly that much, same
+        // `-itsoffset` idea `encodeCanvasWithCamera()` applies once for
+        // the whole recording, just scoped to one segment here. Every
+        // later segment has already passed that instant, so this is 0.
+        final double residualItsOffset = (cameraStartOffsetSeconds - segmentStartSeconds)
+            .clamp(0.0, double.infinity);
+        // Where in the camera's OWN file this segment's footage actually
+        // lives -- simple subtraction against the one fixed offset, not
+        // a re-estimate, so this never drifts across segments the way
+        // the earlier, reverted attempt at this did.
+        final double cameraSliceStart = (segmentStartSeconds - cameraStartOffsetSeconds)
+            .clamp(0.0, double.infinity);
+        final double cameraSliceDuration = segmentDurationSeconds - residualItsOffset;
+
+        args = [
+          '-y',
+          '-f', 'concat',
+          '-safe', '0',
+          '-i', manifestFile.path,
+          if (residualItsOffset > 0.0005)
+            ...['-itsoffset', residualItsOffset.toStringAsFixed(6)],
+          '-ss', cameraSliceStart.toStringAsFixed(6),
+          '-t', cameraSliceDuration.toStringAsFixed(6),
+          '-i', cameraFilePath,
+          // Identical filter graph to `encodeCanvasWithCamera()`'s (same
+          // box size/position/border) -- see that function's comment for
+          // what each piece does. Kept in sync manually since ffmpeg has
+          // no way to share a filter-graph fragment across separate
+          // invocations.
+          '-filter_complex',
+          '[0:v]fps=$encodeFps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
+              '[1:v]crop=ih:ih,scale=w=240:h=240,'
+              'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
+              '[base][cam]overlay=x=main_w-overlay_w-24:y=24[outv]',
+          '-map', '[outv]',
+          // REQUIRED -- confirmed by direct testing, not an assumption:
+          // without an explicit output duration bound, this filter_complex
+          // (unlike the plain `-vf` path just below) doesn't reliably stop
+          // at the canvas segment's own intended length. It ran to the
+          // CAMERA input's full sliced-plus-whatever duration instead
+          // (10s canvas content produced a 10s output when the camera clip
+          // was also ~10s, rather than the canvas's actual 5s) -- overlay's
+          // `eof_action=repeat` default handles a camera shorter than the
+          // segment (freezes on its last frame, doesn't end early); this
+          // handles the segment needing to end exactly on time regardless.
+          '-t', segmentDurationSeconds.toStringAsFixed(6),
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          '-preset', preset,
+          '-crf', crf,
+          '-f', 'mpegts',
+          outPath,
+        ];
+      } else {
+        args = [
+          '-y',
+          '-f', 'concat',
+          '-safe', '0',
+          '-i', manifestFile.path,
+          '-r', '$encodeFps',
+          '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          '-preset', preset,
+          '-crf', crf,
+          '-f', 'mpegts',
+          outPath,
+        ];
+      }
+
+      final ProcessResult result = await Process.run(ffmpegPath, args);
       try {
         await manifestFile.delete();
       } catch (_) {}
@@ -1693,6 +1805,22 @@ class MathPadRecordingService extends ChangeNotifier {
         dir.path,
         'segment_${_sealedSegmentPaths.length}.ts',
       );
+      final double segmentStartSeconds = _sealedTimelineSeconds;
+      // Bakes the camera overlay into this segment right now, live,
+      // instead of leaving it for one whole-recording pass at the end --
+      // see `CameraEncodeMode.liveSegmented`'s doc comment. Gated on
+      // `_cameraEnabled` (not just the mode) so a recording where the
+      // camera failed to start at all just seals plain canvas segments,
+      // same as always. NOTE: for `CameraSyncMethod.nativePrecise`,
+      // `_cameraStartOffsetSeconds` resolves asynchronously in the
+      // background (see `_resolveNativeCameraOffset`) -- if the very
+      // FIRST seal happens unusually fast (an idle-triggered seal within
+      // the first second or so), it could in principle still be at its
+      // 0.0 default here, producing a slightly-off camera slice for just
+      // that one segment. Same "best-effort, never fatal" tradeoff as
+      // everywhere else camera timing is handled in this file.
+      final bool bakeCameraIn =
+          _activeCameraEncodeMode == CameraEncodeMode.liveSegmented && _cameraEnabled;
       // Same fixed "normal quality" preset the tail segment and the
       // single-pass path both use -- every segment in a recording (sealed
       // in the background or the leftover tail encoded once stopped) is
@@ -1705,10 +1833,15 @@ class MathPadRecordingService extends ChangeNotifier {
         preset: 'veryfast',
         crf: '20',
         encodeFps: _activeEncodeFps,
+        cameraFilePath: bakeCameraIn ? p.join(dir.path, 'camera.mp4') : null,
+        cameraStartOffsetSeconds: bakeCameraIn ? _cameraStartOffsetSeconds : null,
+        segmentStartSeconds: segmentStartSeconds,
       );
       if (ok) {
         _sealedSegmentPaths.add(segmentPath);
         _sealedConcatEntryCount += toSeal.length;
+        _sealedTimelineSeconds =
+            segmentStartSeconds + toSeal.fold(0.0, (sum, e) => sum + e.durationSeconds);
         // Already fully baked into `segmentPath` -- delete the source
         // PNGs to reclaim disk space, same spirit as the frame dedup in
         // `_captureFrame`.
@@ -1792,6 +1925,8 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedCameraStartOffsetSeconds = _cameraStartOffsetSeconds;
     _capturedSealedSegmentPaths = List.of(_sealedSegmentPaths);
     _capturedSealedConcatEntryCount = _sealedConcatEntryCount;
+    _capturedSealedTimelineSeconds = _sealedTimelineSeconds;
+    _capturedActiveCameraEncodeMode = _activeCameraEncodeMode;
     _capturedEncodeFps = _activeEncodeFps;
     _capturedAudioBitrateKbps = _audioKbpsFor(audioBitrateMode);
 
@@ -1984,12 +2119,26 @@ class MathPadRecordingService extends ChangeNotifier {
       // The unsealed leftover tail -- everything captured after the last
       // background seal (see `_sealedConcatEntryCount`'s doc comment). When
       // nothing was ever sealed (a short recording, under one seal
-      // interval), this is simply every captured entry, and the raw-stills
-      // branch below handles it exactly as it always has.
+      // interval), this is simply every captured entry.
       final List<_ConcatEntry> tailEntries =
           concatEntries.length > _capturedSealedConcatEntryCount
           ? concatEntries.sublist(_capturedSealedConcatEntryCount)
           : const [];
+
+      // Whether the camera overlay gets baked directly into each segment
+      // (sealed live, plus the tail below) instead of one separate
+      // whole-recording pass later -- see `CameraEncodeMode.liveSegmented`'s
+      // doc comment. When true, this ALSO forces the segment pipeline
+      // below even for a short recording that never sealed anything live
+      // (`sealedSegments.isEmpty`) -- the tail then simply covers the
+      // entire recording, still baked in exactly the same way, just all
+      // at once here instead of spread out live. That's what lets the
+      // final step, further down, skip `encodeCanvasWithCamera()`'s
+      // separate filter_complex pass entirely: every segment (sealed live
+      // or not) already has the camera composited in by the time it's
+      // built.
+      final bool bakeCameraIntoSegments =
+          _capturedActiveCameraEncodeMode == CameraEncodeMode.liveSegmented && hasCamera;
 
       // The canvas source, as an ffmpeg concat-demuxer manifest -- either
       // the already-encoded background-sealed segments (+ a freshly
@@ -1998,23 +2147,51 @@ class MathPadRecordingService extends ChangeNotifier {
       // a cheap `-c:v copy` when there's no camera to overlay.
       final String canvasManifestPath;
       final bool canvasPreEncoded;
-      if (sealedSegments.isNotEmpty) {
+      if (sealedSegments.isNotEmpty || bakeCameraIntoSegments) {
         // ─── Sealed segments + tail ────────────────────────────────────
         // Most of the video is already encoded (sealed periodically in
         // the background throughout the recording -- see
         // `_maybeSealSegment`). Only the small leftover tail needs a real
-        // encode here.
+        // encode here (which, if nothing was ever sealed live, is simply
+        // the entire recording -- see `bakeCameraIntoSegments`'s comment).
         final List<String> allSegments = List.of(sealedSegments);
         if (tailEntries.isNotEmpty) {
           final String tailPath = p.join(sessionDir.path, 'segment_tail.ts');
-          final bool tailOk = await _encodeSegment(
+          bool tailOk = await _encodeSegment(
             sessionDir: sessionDir,
             entries: tailEntries,
             outPath: tailPath,
             preset: 'veryfast',
             crf: '20',
             encodeFps: encodeFps,
+            cameraFilePath: bakeCameraIntoSegments ? cameraFile.path : null,
+            cameraStartOffsetSeconds:
+                bakeCameraIntoSegments ? cameraStartOffsetSeconds : null,
+            segmentStartSeconds: _capturedSealedTimelineSeconds,
           );
+          if (!tailOk && bakeCameraIntoSegments) {
+            // The tail is the last-resort step -- unlike a failed LIVE
+            // seal (which just falls through to become part of the
+            // tail), there's nowhere further for this to fall through
+            // to. Retry once without the camera overlay rather than
+            // silently losing this stretch of the recording entirely --
+            // same "camera trouble costs the camera, never the
+            // recording" philosophy as everywhere else camera work is
+            // done in this file.
+            tailOk = await _encodeSegment(
+              sessionDir: sessionDir,
+              entries: tailEntries,
+              outPath: tailPath,
+              preset: 'veryfast',
+              crf: '20',
+              encodeFps: encodeFps,
+            );
+            if (tailOk) {
+              onCameraWarning?.call(
+                'Camera couldn\'t be added to the last part of the video -- that part was saved without it.',
+              );
+            }
+          }
           if (tailOk) allSegments.add(tailPath);
         }
 
@@ -2203,6 +2380,15 @@ class MathPadRecordingService extends ChangeNotifier {
           '-filter_complex', filterComplex,
           '-map', '[outv]',
           if (audioInputIndex != null) ...['-map', '$audioInputIndex:a'],
+          // Defensive bound, confirmed necessary by direct testing on the
+          // per-segment version of this same filter graph (see
+          // `_encodeSegment`): a filter_complex+overlay pass doesn't
+          // reliably self-terminate at the canvas's own length without
+          // one. `-shortest` below (when there's audio) already caps this
+          // correctly via the real, accurate audio duration -- this is
+          // what still catches the rare audio-less camera recording,
+          // where `-shortest` never gets added at all.
+          '-t', totalDurationSeconds.toStringAsFixed(6),
           '-c:v', 'libx264',
           '-pix_fmt', 'yuv420p',
           '-preset', 'veryfast',
@@ -2227,7 +2413,7 @@ class MathPadRecordingService extends ChangeNotifier {
         ], totalDurationSeconds);
       }
 
-      if (hasCamera) {
+      if (hasCamera && !bakeCameraIntoSegments) {
         try {
           await encodeCanvasWithCamera();
         } catch (e) {
@@ -2240,6 +2426,12 @@ class MathPadRecordingService extends ChangeNotifier {
           await encodeCanvasOnly();
         }
       } else {
+        // Either there's no camera to add at all, or (`bakeCameraIntoSegments`)
+        // every segment above already has it baked in -- either way, the
+        // canvas manifest built above IS the final video already; no
+        // separate overlay pass needed. `encodeCanvasOnly()` also handles
+        // the `canvasPreEncoded` fast `-c:v copy` path transparently, so
+        // this is the same speed win a camera-less recording already got.
         await encodeCanvasOnly();
       }
 
