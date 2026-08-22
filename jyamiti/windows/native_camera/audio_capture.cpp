@@ -169,6 +169,35 @@ private:
         hr = pDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&pAudioClient);
         if (FAILED(hr)) { SetError(L"Activate(IAudioClient) failed", hr); cleanup(); return; }
 
+        // Request RAW (unprocessed) capture -- by default WASAPI runs the
+        // signal through Windows' own microphone-enhancement chain
+        // (noise suppression, AGC), which adapts to what it thinks is
+        // the "noise floor". A sustained, unvarying tone (a long held
+        // vowel) looks exactly like steady-state noise to that
+        // algorithm and gets progressively gated out after a moment,
+        // while normal speech -- which keeps varying -- never triggers
+        // it. Confirmed as the real cause of a "some audio missing,
+        // normal speech fine" bug found via real user testing. This is
+        // the same protection the ffmpeg/`record`-package path already
+        // had via its own `autoGain: false, noiseSuppress: false`
+        // options (see start()'s doc comment on that RecordConfig) --
+        // this native path needs its own equivalent. Requires
+        // IAudioClient2; querying for it and setting this is best-effort
+        // -- some devices/drivers don't support RAW mode, in which case
+        // capture just proceeds through the normal (enhanced) chain
+        // exactly as it did before this fix, rather than failing
+        // outright.
+        IAudioClient2* pAudioClient2 = nullptr;
+        if (SUCCEEDED(pAudioClient->QueryInterface(__uuidof(IAudioClient2), (void**)&pAudioClient2))) {
+            AudioClientProperties props = {};
+            props.cbSize = sizeof(AudioClientProperties);
+            props.bIsOffload = FALSE;
+            props.eCategory = AudioCategory_Media;
+            props.Options = AUDCLNT_STREAMOPTIONS_RAW;
+            pAudioClient2->SetClientProperties(&props);
+            pAudioClient2->Release();
+        }
+
         hr = pAudioClient->GetMixFormat(&pwfx);
         if (FAILED(hr)) { SetError(L"GetMixFormat failed", hr); cleanup(); return; }
 
