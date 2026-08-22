@@ -1016,6 +1016,15 @@ class MathPadRecordingService extends ChangeNotifier {
   bool _continuousStreamCaptureInFlight = false;
   String? _capturedContinuousStreamOutputPath;
   double _capturedContinuousStreamDurationSeconds = 0.0;
+  // Set the instant the encoder process is confirmed gone for any
+  // reason (failed to spawn, or its stdin pipe died mid-recording) --
+  // once true, `_captureFrameContinuousStream` stops trying entirely for
+  // the rest of this recording, rather than either endlessly respawning
+  // a new doomed process or repeatedly writing to a dead pipe. Found via
+  // real testing: an unhandled write-to-closed-pipe failure, repeating
+  // on every capture tick for the rest of the recording, was enough to
+  // make the whole app -- including the Stop button -- stop responding.
+  bool _continuousStreamFailed = false;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -1603,6 +1612,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _continuousStreamOutputPath = null;
     _lastContinuousStreamFrameBytes = null;
     _continuousStreamFrameCount = 0;
+    _continuousStreamFailed = false;
 
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
@@ -1823,6 +1833,11 @@ class MathPadRecordingService extends ChangeNotifier {
   /// can never cross-contaminate each other's state.
   Future<void> _captureFrameContinuousStream() async {
     if (_continuousStreamCaptureInFlight || _startedAt == null) return;
+    // Once the encoder is confirmed gone (failed to spawn, or its pipe
+    // died mid-recording -- see `_continuousStreamFailed`'s doc comment),
+    // stop trying entirely for the rest of this recording rather than
+    // endlessly respawning a new doomed process.
+    if (_continuousStreamFailed) return;
     final int fillTo =
         (DateTime.now().difference(_startedAt!).inMilliseconds *
                     _activeEncodeFps /
@@ -1844,10 +1859,14 @@ class MathPadRecordingService extends ChangeNotifier {
         final int capturedHeight = image.height;
         image.dispose();
         if (bytes != null) {
-          if (_continuousStreamProcess == null) {
+          if (_continuousStreamProcess == null && !_continuousStreamFailed) {
             // First frame -- fixes the pipe's dimensions for the whole
             // recording (a raw-video pipe can't change size mid-stream).
-            await _startContinuousStreamEncoder(capturedWidth, capturedHeight);
+            try {
+              await _startContinuousStreamEncoder(capturedWidth, capturedHeight);
+            } catch (_) {
+              _continuousStreamFailed = true;
+            }
           }
           if (capturedWidth == _continuousStreamWidth &&
               capturedHeight == _continuousStreamHeight) {
@@ -1901,6 +1920,15 @@ class MathPadRecordingService extends ChangeNotifier {
       '-video_size', '${width}x$height',
       '-framerate', '$_activeEncodeFps',
       '-i', 'pipe:0',
+      // yuv420p (4:2:0 chroma subsampling) requires both dimensions to
+      // be even -- the captured canvas area's raw pixel size is
+      // whatever the widget happens to render at, which is very often
+      // NOT even in both directions, and libx264 flatly refuses (rather
+      // than rounding) an odd width/height. Confirmed via real testing
+      // to be the exact cause of a "0-byte output, pipe closes
+      // immediately" failure without this -- same issue, and same fix,
+      // as every other encode path in this file already applies.
+      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
       '-c:v', 'libx264',
       '-pix_fmt', 'yuv420p',
       '-preset', 'veryfast',
@@ -1916,6 +1944,23 @@ class MathPadRecordingService extends ChangeNotifier {
     // same reasoning as every other spawned ffmpeg process in this file.
     process.stdout.listen((_) {});
     process.stderr.listen((_) {});
+    // `IOSink.add()` (used to feed frames below) doesn't throw
+    // synchronously on failure -- a write to an already-closed pipe (the
+    // process exited, e.g. hit an encoder error, or was killed) surfaces
+    // asynchronously through `stdin.done` instead. Without a handler
+    // here, that becomes an unhandled exception -- and since
+    // `_captureFrameContinuousStream` would otherwise keep trying to
+    // write on every subsequent capture tick, an unhandled failure like
+    // this repeating many times a second was enough, confirmed via real
+    // testing, to make the whole app -- including the Stop button --
+    // stop responding. This is what lets that first failure be handled
+    // once, cleanly, instead.
+    unawaited(
+      process.stdin.done.then((_) {}, onError: (Object _, StackTrace _) {
+        _continuousStreamFailed = true;
+        _continuousStreamProcess = null;
+      }),
+    );
     _continuousStreamProcess = process;
     _continuousStreamWidth = width;
     _continuousStreamHeight = height;
@@ -2463,6 +2508,18 @@ class MathPadRecordingService extends ChangeNotifier {
       }
     }
     try {
+      // Covers `_continuousStreamFailed` (the encoder never produced a
+      // usable file at all -- see that field's doc comment) as well as
+      // any other way this could end up empty/missing. Nothing to mux --
+      // surface a clear error rather than feeding ffmpeg a 0-byte input.
+      final File rawVideoFile = File(rawVideoPath);
+      if (!await rawVideoFile.exists() || await rawVideoFile.length() == 0) {
+        throw MathPadRecordingException(
+          'Recording failed -- the video encoder stopped working '
+          'partway through. Try the Standard recording pipeline instead.',
+        );
+      }
+
       final Directory outDir = await getRecordingsDir();
       final String outPath =
           p.join(outDir.path, 'MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4');
