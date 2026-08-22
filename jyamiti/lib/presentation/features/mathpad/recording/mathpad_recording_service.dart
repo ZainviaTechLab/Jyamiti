@@ -693,6 +693,12 @@ class MathPadRecordingService extends ChangeNotifier {
   // and `camera_capture_native.dart`. Never both at once for the same
   // recording.
   NativeCameraCapture? _nativeCamera;
+  // Set instead of using `_audioRecorder` for capture when
+  // `cameraSyncMethod` is [CameraSyncMethod.nativePrecise] -- unlike
+  // `_nativeCamera` this applies to EVERY recording in that mode, not
+  // just ones with `includeCamera: true` (audio-vs-canvas sync matters
+  // regardless of whether a camera is involved at all).
+  NativeAudioCapture? _nativeAudio;
 
   MathPadRecordingState _state = MathPadRecordingState.idle;
   MathPadRecordingState get state => _state;
@@ -904,6 +910,38 @@ class MathPadRecordingService extends ChangeNotifier {
     );
   }
 
+  /// Audio-side equivalent of [_resolveNativeCameraOffset] -- polls
+  /// [audio] for its real captured first-packet wall-clock timestamp and
+  /// folds it into `_audioStartOffsetSeconds` once available. Same
+  /// bounding/give-up reasoning applies; on timeout `_audioStartOffsetSeconds`
+  /// just stays at its 0.0 default (no worse than the ffmpeg/`record`
+  /// path's own estimate would be in the same situation).
+  Future<void> _resolveNativeAudioOffset(
+    NativeAudioCapture audio,
+    DateTime startedAt,
+  ) async {
+    const Duration pollInterval = Duration(milliseconds: 15);
+    const Duration giveUpAfter = Duration(seconds: 8);
+    final DateTime deadline = DateTime.now().add(giveUpAfter);
+    while (DateTime.now().isBefore(deadline)) {
+      if (!identical(_nativeAudio, audio)) return;
+      if (audio.isFirstFrameReady) {
+        final DateTime audioFirstPacketAt =
+            DateTime.fromMicrosecondsSinceEpoch(audio.firstFrameUnixMicros);
+        _audioStartOffsetSeconds = max(
+          0.0,
+          audioFirstPacketAt.difference(startedAt).inMicroseconds / 1e6,
+        );
+        return;
+      }
+      await Future<void>.delayed(pollInterval);
+    }
+    // No `onCameraWarning`-style callback here deliberately -- audio is
+    // never optional the way the camera is, so a slow-to-confirm mic
+    // shouldn't nag the tutor with a warning; it just quietly keeps the
+    // 0.0 default, same as it always did before this feature existed.
+  }
+
   /// [canvasKey] must point at a `RepaintBoundary` that already paints a
   /// fully opaque background itself (Math Pad's capture area does) --
   /// this service just snapshots it as-is, no post-capture compositing.
@@ -1090,58 +1128,87 @@ class MathPadRecordingService extends ChangeNotifier {
       unawaited(_resolveNativeCameraOffset(_nativeCamera!, _startedAt!));
     }
 
-    try {
-      await _audioRecorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.wav,
-          // Matches the sample rate Windows' own WASAPI shared-mode audio
-          // engine mixes at by default (48kHz) -- capturing at the
-          // historical default of 44.1kHz instead forces an extra
-          // resample step in the OS audio pipeline before it ever reaches
-          // this app, a real (if subtle) source of quality loss for no
-          // benefit. This is what "the natural Windows setting" actually
-          // means at the API level: matching the engine's own native
-          // format instead of a value that predates it.
-          sampleRate: 48000,
-          // A single presenter's narration is a mono source -- recording
-          // stereo just duplicates that one mic channel into both L/R
-          // (bigger file, zero real quality gain) and risks an audible
-          // channel imbalance on drivers that don't upmix cleanly.
-          numChannels: 1,
-          // autoGain and noiseSuppress deliberately off: on Windows these
-          // activate the OS APO (Audio Processing Objects) pipeline which
-          // applies heavy-handed noise suppression/AGC that distorts clean
-          // mic narration into artifacts/muffled noise when there is
-          // nothing real for it to cancel. Volume normalisation is handled
-          // cleanly at encode time via dynaudnorm (see below) without any
-          // signal quality cost. echoCancel also left off for the same
-          // reason -- it exists for two-way call scenarios with live
-          // speaker feedback, not a solo narration recording.
-          autoGain: false,
-          noiseSuppress: false,
-        ),
-        path: p.join(sessionDir.path, 'audio.wav'),
-      );
-    } catch (e) {
-      await _stopCameraCapture();
-      _stopNativeCameraCapture();
-      if (await sessionDir.exists()) {
-        await sessionDir.delete(recursive: true);
+    // Audio uses the same native-vs-existing split as the camera -- see
+    // `_nativeAudio`'s doc comment for why this applies regardless of
+    // `includeCamera`. `audioWavPath` is used by both branches so
+    // downstream `encode()` never needs to know which one actually wrote
+    // it.
+    final String audioWavPath = p.join(sessionDir.path, 'audio.wav');
+    final bool useNativeAudio = !Platform.isMacOS && cameraSyncMethod == CameraSyncMethod.nativePrecise;
+    _nativeAudio = null;
+    // No lag left to compensate for once the native path's real
+    // measurement lands -- immediately superseded below once it does,
+    // same as `_cameraStartOffsetSeconds`'s reset just above.
+    _audioStartOffsetSeconds = 0.0;
+    if (useNativeAudio) {
+      try {
+        _nativeAudio = NativeAudioCapture.start(audioWavPath);
+      } catch (e) {
+        await _stopCameraCapture();
+        _stopNativeCameraCapture();
+        if (await sessionDir.exists()) {
+          await sessionDir.delete(recursive: true);
+        }
+        throw MathPadRecordingException('Could not start audio recording: $e');
       }
-      throw MathPadRecordingException('Could not start audio recording: $e');
+      // Doesn't block `start()`, same reasoning as
+      // `_resolveNativeCameraOffset`'s own doc comment.
+      unawaited(_resolveNativeAudioOffset(_nativeAudio!, _startedAt!));
+    } else {
+      try {
+        await _audioRecorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.wav,
+            // Matches the sample rate Windows' own WASAPI shared-mode audio
+            // engine mixes at by default (48kHz) -- capturing at the
+            // historical default of 44.1kHz instead forces an extra
+            // resample step in the OS audio pipeline before it ever reaches
+            // this app, a real (if subtle) source of quality loss for no
+            // benefit. This is what "the natural Windows setting" actually
+            // means at the API level: matching the engine's own native
+            // format instead of a value that predates it.
+            sampleRate: 48000,
+            // A single presenter's narration is a mono source -- recording
+            // stereo just duplicates that one mic channel into both L/R
+            // (bigger file, zero real quality gain) and risks an audible
+            // channel imbalance on drivers that don't upmix cleanly.
+            numChannels: 1,
+            // autoGain and noiseSuppress deliberately off: on Windows these
+            // activate the OS APO (Audio Processing Objects) pipeline which
+            // applies heavy-handed noise suppression/AGC that distorts clean
+            // mic narration into artifacts/muffled noise when there is
+            // nothing real for it to cancel. Volume normalisation is handled
+            // cleanly at encode time via dynaudnorm (see below) without any
+            // signal quality cost. echoCancel also left off for the same
+            // reason -- it exists for two-way call scenarios with live
+            // speaker feedback, not a solo narration recording.
+            autoGain: false,
+            noiseSuppress: false,
+          ),
+          path: audioWavPath,
+        );
+      } catch (e) {
+        await _stopCameraCapture();
+        _stopNativeCameraCapture();
+        if (await sessionDir.exists()) {
+          await sessionDir.delete(recursive: true);
+        }
+        throw MathPadRecordingException('Could not start audio recording: $e');
+      }
+      // `_audioRecorder.start()` resolving is the earliest confirmation
+      // the mic is actually capturing -- the true start happened
+      // SOMEWHERE in the interval between `_startedAt` and now, but
+      // "now" is the soonest-available, safe upper-bound estimate
+      // (assuming it started any later would risk clipping real
+      // narration off the front of the muxed track). Zero, not negative,
+      // since a `-itsoffset` compensating for audio starting AFTER the
+      // video's t=0 needs the audio pushed later in the output timeline
+      // -- see its use in `encode()`.
+      _audioStartOffsetSeconds = max(
+        0.0,
+        DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
+      );
     }
-    // `_audioRecorder.start()` resolving is the earliest confirmation the
-    // mic is actually capturing -- the true start happened SOMEWHERE in
-    // the interval between `_startedAt` and now, but "now" is the
-    // soonest-available, safe upper-bound estimate (assuming it started
-    // any later would risk clipping real narration off the front of the
-    // muxed track). Zero, not negative, since a `-itsoffset` compensating
-    // for audio starting AFTER the video's t=0 needs the audio pushed
-    // later in the output timeline -- see its use in `encode()`.
-    _audioStartOffsetSeconds = max(
-      0.0,
-      DateTime.now().difference(_startedAt!).inMicroseconds / 1e6,
-    );
 
     // Snapshotted once here from `frameRateMode` -- see
     // `RecordingFrameRateMode`'s doc comment. Fixed for this recording's
@@ -1511,10 +1578,20 @@ class MathPadRecordingService extends ChangeNotifier {
     // stop. Stopping both here, back to back, keeps them ending at
     // essentially the same real-world instant instead.
     String? audioPath;
-    try {
-      audioPath = await _audioRecorder.stop();
-    } catch (e) {
-      audioPath = null;
+    if (_nativeAudio != null) {
+      final NativeAudioCapture audio = _nativeAudio!;
+      _nativeAudio = null;
+      final bool finalizedOk = audio.stop();
+      // Same fixed filename regardless of which capture path wrote it --
+      // see `useNativeAudio`'s doc comment in `start()`.
+      audioPath = finalizedOk ? p.join(_sessionDir!.path, 'audio.wav') : null;
+      audio.dispose();
+    } else {
+      try {
+        audioPath = await _audioRecorder.stop();
+      } catch (e) {
+        audioPath = null;
+      }
     }
 
     // Let any in-flight frame capture -- and any in-flight background
@@ -1872,6 +1949,16 @@ class MathPadRecordingService extends ChangeNotifier {
             // already slightly noisy coming off the mic. framelen=500ms
             // keeps the adaptation smooth for natural-paced speech.
             '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
+            // Explicit target format rather than trusting whatever the
+            // source WAV happens to be -- the native/precise audio
+            // capture path writes the audio engine's own native format
+            // (commonly float32 stereo), not the mono 16-bit the
+            // `record`-package path always produced, so this is what
+            // keeps every recording's narration track mono/48kHz
+            // regardless of which one wrote it (see the class doc
+            // comment on why mono is enough for a single narrator).
+            '-ar', '48000',
+            '-ac', '1',
             '-c:a', 'aac',
             '-b:a', '${audioKbps}k',
             '-shortest',
@@ -1944,6 +2031,10 @@ class MathPadRecordingService extends ChangeNotifier {
           '-crf', '20',
           if (audioInputIndex != null) ...[
             '-af', 'dynaudnorm=framelen=500:gausssize=31:peak=0.95',
+            // See the camera-less encode path above for why this is
+            // explicit rather than trusting the source WAV's own format.
+            '-ar', '48000',
+            '-ac', '1',
             '-c:a', 'aac',
             '-b:a', '${audioKbps}k',
             // Only the mapped outputs ([outv] + audio) factor into
@@ -2008,6 +2099,12 @@ class MathPadRecordingService extends ChangeNotifier {
     try {
       await _audioRecorder.stop();
     } catch (_) {}
+    if (_nativeAudio != null) {
+      final NativeAudioCapture audio = _nativeAudio!;
+      _nativeAudio = null;
+      audio.stop();
+      audio.dispose();
+    }
     await _stopCameraCapture();
     _stopNativeCameraCapture();
     _cameraEnabled = false;
@@ -2161,12 +2258,13 @@ class MathPadRecordingService extends ChangeNotifier {
     _segmentSealTimer?.cancel();
     await _audioRecorder.dispose();
     _cameraProcess?.kill(ProcessSignal.sigkill);
-    // No hard-kill equivalent needed for the native camera path here --
-    // it's an in-process worker thread, not a separate process, so it
-    // can't be orphaned the way `_cameraProcess` can (see
+    // No hard-kill equivalent needed for either native capture path here
+    // -- both are in-process worker threads, not separate processes, so
+    // neither can be orphaned the way `_cameraProcess` can (see
     // `_stopNativeCameraCapture`'s doc comment). Still worth releasing
-    // its native handle if one is somehow still around at this point.
+    // their native handles if somehow still around at this point.
     _nativeCamera?.dispose();
+    _nativeAudio?.dispose();
   }
 }
 

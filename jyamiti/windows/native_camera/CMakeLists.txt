@@ -1,9 +1,12 @@
-# Native Media Foundation webcam capture+encode DLL, used by
-# MathPadRecordingService's "precise" camera sync method. See
-# camera_capture.cpp for why this exists as a standalone native module
-# rather than an ffmpeg flag.
+# Native precise-sync capture DLL, used by MathPadRecordingService's
+# "precise" camera sync method for BOTH the webcam and the microphone
+# (despite the `jyamiti_camera` target/file name -- kept as-is to avoid
+# reshuffling an already-wired CMake target + Dart DynamicLibrary.open()
+# path for a rename). See camera_capture.cpp / audio_capture.cpp for why
+# each exists as a standalone native module rather than an ffmpeg flag.
 add_library(jyamiti_camera SHARED
   "camera_capture.cpp"
+  "audio_capture.cpp"
 )
 
 apply_standard_settings(jyamiti_camera)
