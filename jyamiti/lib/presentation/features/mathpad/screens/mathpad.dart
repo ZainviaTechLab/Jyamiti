@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:camera/camera.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:super_clipboard/super_clipboard.dart';
@@ -9767,26 +9766,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                 ),
               ),
             ),
-
-          // `CameraEncodeMode.onCanvas`'s whole mechanism -- this widget
-          // shows a live camera preview, top-right, ONLY while
-          // `_recordingService.isOnCanvasCameraActive` is true. Placed as
-          // the LAST child so it paints above everything else (strokes,
-          // watermark, toolbars-that-live-inside-this-boundary), and
-          // because it's inside the SAME `RepaintBoundary` this whole
-          // method returns, every `toImage()` snapshot the recorder takes
-          // already has it baked in -- no separate camera capture, no
-          // offset, no overlay pass, for this mode. See
-          // `_OnCanvasCameraPreview`'s own doc comment for the
-          // controller lifecycle.
-          ListenableBuilder(
-            listenable: _recordingService,
-            builder: (context, _) {
-              return _OnCanvasCameraPreview(
-                active: _recordingService.isOnCanvasCameraActive,
-              );
-            },
-          ),
         ],
       ),
     );
@@ -11009,15 +10988,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                     'Camera overlay is composited while '
                                     'recording -- finishes almost instantly, '
                                     'a newer path',
-                              ),
-                              (
-                                value: CameraEncodeMode.onCanvas,
-                                label: 'On Canvas',
-                                description:
-                                    'Camera is shown live on the board itself '
-                                    'while recording -- always finishes as '
-                                    'fast as no camera, but pauses write '
-                                    'more to disk',
                               ),
                             ],
                           ),
@@ -13164,126 +13134,5 @@ class _RenderUnconstrainedHitTestStack extends RenderStack {
       return true;
     }
     return false;
-  }
-}
-
-/// The live camera preview backing [CameraEncodeMode.onCanvas] -- see that
-/// enum value's doc comment for why this exists. Owns its own
-/// `CameraController`: creates one the moment [active] turns true,
-/// disposes it the moment [active] turns false (including if this widget
-/// itself gets torn down mid-recording, e.g. leaving the page), so it
-/// never outlives exactly the window a recording actually needs it for.
-///
-/// Deliberately positioned/cropped/bordered to match the picture-in-
-/// picture box the OTHER two `CameraEncodeMode`s produce via ffmpeg's
-/// overlay filter (`crop=ih:ih,scale=240:240`, white border, top-right,
-/// 24px inset) -- see `_encodeSegment`'s filter graph -- so a recording
-/// looks the same regardless of which mode made it.
-class _OnCanvasCameraPreview extends StatefulWidget {
-  const _OnCanvasCameraPreview({required this.active});
-
-  final bool active;
-
-  @override
-  State<_OnCanvasCameraPreview> createState() => _OnCanvasCameraPreviewState();
-}
-
-class _OnCanvasCameraPreviewState extends State<_OnCanvasCameraPreview> {
-  CameraController? _controller;
-  // Guards against a rapid active/inactive/active flicker starting a
-  // second initialize() while the first is still in flight.
-  bool _initializing = false;
-
-  @override
-  void didUpdateWidget(_OnCanvasCameraPreview oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.active && !oldWidget.active) {
-      unawaited(_start());
-    } else if (!widget.active && oldWidget.active) {
-      unawaited(_stop());
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.active) unawaited(_start());
-  }
-
-  Future<void> _start() async {
-    if (_initializing || _controller != null) return;
-    _initializing = true;
-    try {
-      final List<CameraDescription> cameras = await availableCameras();
-      if (cameras.isEmpty || !mounted || !widget.active) return;
-      // No device-name matching against `_detectCameraDeviceName()`'s
-      // ffmpeg-based detection here -- this mode never touches ffmpeg or
-      // the native capture module for the camera at all, so it just uses
-      // whatever `camera_windows` itself considers the first device,
-      // same as a tutor with one webcam would expect.
-      final CameraController controller = CameraController(
-        cameras.first,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-      await controller.initialize();
-      if (!mounted || !widget.active) {
-        await controller.dispose();
-        return;
-      }
-      setState(() => _controller = controller);
-    } catch (_) {
-      // Best-effort, same philosophy as every other camera failure path
-      // in this app -- no camera preview is a lot better than crashing
-      // the whole recording over it.
-    } finally {
-      _initializing = false;
-    }
-  }
-
-  Future<void> _stop() async {
-    final CameraController? controller = _controller;
-    _controller = null;
-    if (mounted) setState(() {});
-    if (controller != null) {
-      try {
-        await controller.dispose();
-      } catch (_) {}
-    }
-  }
-
-  @override
-  void dispose() {
-    // Fire-and-forget -- this widget is already gone, nothing left to
-    // rebuild for; still awaited internally by `_stop()`'s own body via
-    // `controller.dispose()`, just not blocking this synchronous method.
-    unawaited(_stop());
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final CameraController? controller = _controller;
-    if (!widget.active || controller == null || !controller.value.isInitialized) {
-      return const SizedBox.shrink();
-    }
-    return Positioned(
-      top: 24,
-      right: 24,
-      child: IgnorePointer(
-        child: Container(
-          width: 240,
-          height: 240,
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.white.withValues(alpha: 0.9), width: 4),
-          ),
-          // A plain `CameraPreview` inside a fixed-size box -- confirmed
-          // by direct testing to already fill the box correctly (no
-          // manual aspect-ratio/FittedBox handling needed; `CameraPreview`
-          // does that internally).
-          child: ClipRect(child: CameraPreview(controller)),
-        ),
-      ),
-    );
   }
 }

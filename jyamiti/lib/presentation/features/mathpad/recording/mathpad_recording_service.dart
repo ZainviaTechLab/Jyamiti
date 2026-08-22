@@ -232,29 +232,6 @@ enum CameraEncodeMode {
   /// path already enjoys.
   /// Cost: a newer, less-tested path than [finalPass].
   liveSegmented,
-
-  /// The camera never gets captured as a separate stream at all -- a
-  /// live camera preview is rendered directly inside Math Pad's own
-  /// canvas capture area (see `mathpad.dart`'s capture-area Stack), so
-  /// every captured canvas frame already has the camera baked in by the
-  /// time it's captured. `start()` doesn't spawn any camera process or
-  /// native capture for this mode; there's no camera.mp4, no offset to
-  /// measure, and no overlay pass of any kind -- `encode()` already
-  /// takes its fast path automatically whenever no camera.mp4 exists.
-  /// Benefit: encoding finishes exactly as fast as a camera-less
-  /// recording, always -- the entire point of the other two options was
-  /// approximating this after the fact; this achieves it directly by
-  /// construction instead.
-  /// Cost: the frame-dedup optimization that skips writing a new frame
-  /// while the board sits idle (see the class doc comment) stops
-  /// helping for as long as the camera preview is live and visibly
-  /// changing -- a live camera feed is essentially never pixel-identical
-  /// frame to frame, so a paused/idle stretch with the camera on writes
-  /// many more frames to disk than the same stretch would with either
-  /// other option. A real tradeoff, not a strict improvement -- likely
-  /// the best choice for a long recording with real pauses; the fastest
-  /// possible finish either way, but at some cost during capture itself.
-  onCanvas,
 }
 
 class MathPadRecordingException implements Exception {
@@ -874,24 +851,6 @@ class MathPadRecordingService extends ChangeNotifier {
   // under two different strategies.
   CameraEncodeMode _activeCameraEncodeMode = CameraEncodeMode.finalPass;
   CameraEncodeMode _capturedActiveCameraEncodeMode = CameraEncodeMode.finalPass;
-  // Snapshotted once in `start()` from its own `includeCamera` argument
-  // -- lets [isOnCanvasCameraActive] tell whether THIS recording asked
-  // for a camera at all, since `CameraEncodeMode.onCanvas` never sets
-  // `_cameraEnabled` (there's no separate camera stream for it to
-  // enable).
-  bool _activeIncludeCamera = false;
-
-  /// True while a recording is active, asked for a camera, and
-  /// [CameraEncodeMode.onCanvas] is selected -- the UI (see
-  /// `mathpad.dart`'s capture-area Stack) watches this to know when to
-  /// show its own live camera preview inside the capture area. Nothing
-  /// in this service itself manages that preview or its `CameraController`
-  /// -- see `CameraEncodeMode.onCanvas`'s doc comment for the full split
-  /// of responsibility.
-  bool get isOnCanvasCameraActive =>
-      _state == MathPadRecordingState.recording &&
-      _activeIncludeCamera &&
-      _activeCameraEncodeMode == CameraEncodeMode.onCanvas;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -1207,21 +1166,13 @@ class MathPadRecordingService extends ChangeNotifier {
     _cameraEnabled = false;
     _cameraProcess = null;
     _nativeCamera = null;
-    // `CameraEncodeMode.onCanvas` never spawns a separate camera stream
-    // at all -- see its doc comment. The UI (via `isOnCanvasCameraActive`)
-    // handles showing a live preview inside the capture area itself
-    // instead; this whole block simply has nothing to do for that mode.
-    final bool includeSeparateCameraStream =
-        includeCamera && cameraEncodeMode != CameraEncodeMode.onCanvas;
     // Only the ffmpeg path exists on macOS -- the native module is a
     // Windows-only Media Foundation DLL (see `CameraSyncMethod`'s doc
     // comment), so macOS always behaves as if `ffmpegEstimate` were
     // chosen regardless of the saved setting.
     final bool useNativeCamera =
-        includeSeparateCameraStream &&
-        !Platform.isMacOS &&
-        cameraSyncMethod == CameraSyncMethod.nativePrecise;
-    if (includeSeparateCameraStream && useNativeCamera) {
+        includeCamera && !Platform.isMacOS && cameraSyncMethod == CameraSyncMethod.nativePrecise;
+    if (includeCamera && useNativeCamera) {
       // Native Media Foundation path -- see `CameraSyncMethod.nativePrecise`'s
       // doc comment. Unlike the ffmpeg path below, this doesn't need to
       // wait for the camera before starting anything else: its offset
@@ -1246,7 +1197,7 @@ class MathPadRecordingService extends ChangeNotifier {
         _cameraEnabled = false;
         onCameraWarning?.call('Could not start the camera -- recording without it.');
       }
-    } else if (includeSeparateCameraStream) {
+    } else if (includeCamera) {
       try {
         final String? device = await _detectCameraDeviceName();
         final String ffmpegPath = _resolveFfmpegPath();
@@ -1459,7 +1410,6 @@ class MathPadRecordingService extends ChangeNotifier {
 
     // Same snapshotting reasoning as the fps fields just above.
     _activeCameraEncodeMode = cameraEncodeMode;
-    _activeIncludeCamera = includeCamera;
 
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
@@ -1750,8 +1700,23 @@ class MathPadRecordingService extends ChangeNotifier {
           // no way to share a filter-graph fragment across separate
           // invocations.
           '-filter_complex',
+          // `fps=$encodeFps` on BOTH [0:v] and [1:v] (not just the base)
+          // -- the camera's own native capture rate is essentially never
+          // an exact match for `encodeFps` (a real webcam commonly runs
+          // something like 29.35fps against a 30fps target), so without
+          // explicitly conforming it too, `overlay` has to pick which of
+          // its irregularly-timed input frames lines up with each base
+          // frame using its own internal PTS-nearest-match logic. In one
+          // continuous whole-recording pass that rounding is smoothed
+          // out invisibly across the whole video -- but each segment
+          // here is an independently restarted overlay computation, so
+          // that same rounding shows up as a small, localized frame
+          // skip/repeat right at the start of every segment instead.
+          // Conforming both sides to the identical explicit rate before
+          // they ever reach `overlay` removes the ambiguity it would
+          // otherwise have to round away.
           '[0:v]fps=$encodeFps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
-              '[1:v]crop=ih:ih,scale=w=240:h=240,'
+              '[1:v]fps=$encodeFps,crop=ih:ih,scale=w=240:h=240,'
               'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
               '[base][cam]overlay=x=main_w-overlay_w-24:y=24[outv]',
           '-map', '[outv]',
@@ -1770,6 +1735,9 @@ class MathPadRecordingService extends ChangeNotifier {
           '-pix_fmt', 'yuv420p',
           '-preset', preset,
           '-crf', crf,
+          // See the `-bf 0` comment on the plain-canvas branch just
+          // below -- applies equally here.
+          '-bf', '0',
           '-f', 'mpegts',
           outPath,
         ];
@@ -1785,6 +1753,23 @@ class MathPadRecordingService extends ChangeNotifier {
           '-pix_fmt', 'yuv420p',
           '-preset', preset,
           '-crf', crf,
+          // No B-frames in ANY segment that might get stream-copy-
+          // concatenated with another later (every segment this function
+          // produces does, live-sealed or the tail -- see `encode()`'s
+          // `-c:v copy` fast path). A B-frame references frames on BOTH
+          // sides of it, requiring the decoder to reorder frames in its
+          // playback buffer -- exactly what gets confused right at a
+          // splice between two independently-encoded streams, since the
+          // reordering context from one segment's encoder session means
+          // nothing to the next one's. A plain, B-frame-free IPPP...
+          // stream removes that ambiguity entirely, since there's
+          // nothing left to reorder across the join. The standard fix
+          // for stutter/hitches at segment splice points in exactly this
+          // kind of stream-copy-concatenated recording. Slightly larger
+          // files at the same CRF (B-frames are what give H.264 most of
+          // its extra compression efficiency) -- a fair trade for a
+          // splice-safe recording.
+          '-bf', '0',
           '-f', 'mpegts',
           outPath,
         ];
@@ -2416,9 +2401,18 @@ class MathPadRecordingService extends ChangeNotifier {
         // `overlay`'s default `eof_action` (repeat) freezes the box on
         // its last frame if the camera feed happens to be a touch shorter
         // than the canvas video, rather than cutting the output short.
+        // `fps=$encodeFps` on the camera input too, not just the base --
+        // see the identical fix's comment in `_encodeSegment` for why
+        // (a real webcam's native rate essentially never exactly matches
+        // `encodeFps`, so this removes the rate-mismatch `overlay` would
+        // otherwise have to round away on its own). Barely perceptible
+        // in this one-continuous-pass path (the rounding smooths out
+        // invisibly across the whole video here), but applied for the
+        // same underlying correctness and to keep both camera-overlay
+        // filter graphs in this file consistent with each other.
         final String filterComplex =
             '[0:v]fps=$encodeFps,scale=trunc(iw/2)*2:trunc(ih/2)*2[base];'
-            '[$cameraInputIndex:v]crop=ih:ih,scale=w=240:h=240,'
+            '[$cameraInputIndex:v]fps=$encodeFps,crop=ih:ih,scale=w=240:h=240,'
             'drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4[cam];'
             '[base][cam]overlay=x=main_w-overlay_w-24:y=24[outv]';
 
