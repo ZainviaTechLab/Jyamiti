@@ -55,6 +55,9 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Native Media Foundation webcam capture DLL; see native_camera/CMakeLists.txt.
+add_subdirectory("native_camera")
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
@@ -100,6 +103,12 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/LICENSE.ffmpeg.txt"
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/NOTICE.txt"
   DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+# jyamiti_camera.dll (see native_camera/CMakeLists.txt) -- loaded at
+# runtime via dart:ffi's DynamicLibrary.open() from the same directory as
+# the app exe, same as every other bundled native dependency here.
+install(TARGETS jyamiti_camera RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
 # Copy the native assets provided by the build.dart from all packages.

@@ -17,6 +17,8 @@ import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:win32/win32.dart' as win32;
 
+import 'camera_capture_native.dart';
+
 enum MathPadRecordingState { idle, recording, waitingForEncodeChoice, encoding }
 
 /// How `_evaluateSegmentSeal` decides when to fold captured frames into a
@@ -124,6 +126,41 @@ enum RecordingAudioBitrate {
   /// Cost: the largest audio track of the three, for a difference most
   /// tutors won't be able to hear on spoken narration.
   high,
+}
+
+/// How the camera stream gets timed against the canvas/audio when
+/// [MathPadRecordingService.start] is called with `includeCamera: true`.
+/// The tutor's choice is persisted locally (see
+/// [MathPadRecordingService.loadCameraSyncMethod]/`setCameraSyncMethod`)
+/// so it survives across sessions.
+enum CameraSyncMethod {
+  /// Camera capture runs as an independent `ffmpeg` process, same as the
+  /// canvas/audio's own encode pipeline. Its start latency is measured by
+  /// watching for the first `frame=` line in ffmpeg's own stderr status
+  /// output (see `start()`) -- accurate to within roughly the interval
+  /// ffmpeg prints that line at (tightened to 100ms via `-stats_period`).
+  /// Benefit: no extra native dependency, proven, works the same on every
+  /// webcam/driver ffmpeg's DirectShow backend already supports.
+  /// Cost: bounded to roughly a 100ms residual, not exact.
+  /// Recommended default.
+  ffmpegEstimate,
+
+  /// Camera capture runs through a small native Media Foundation module
+  /// (`jyamiti_camera.dll`, see `windows/native_camera/camera_capture.cpp`)
+  /// that captures AND encodes the webcam itself, reading the real system
+  /// clock at the exact instant the first frame is delivered by the
+  /// driver -- a genuine, sub-millisecond-accurate timestamp instead of an
+  /// estimate.
+  /// Benefit: the camera is aligned to the canvas/audio as exactly as this
+  /// app can achieve.
+  /// Cost: real testing found Media Foundation and ffmpeg's DirectShow
+  /// capture cannot reliably share one physical camera at once, so this
+  /// mode replaces ffmpeg for the camera stream entirely rather than just
+  /// supplementing it -- a genuinely different code path (its own
+  /// encoder negotiation, its own error handling) with less real-world
+  /// mileage than the ffmpeg path across the wide range of webcams/
+  /// drivers tutors might have.
+  nativePrecise,
 }
 
 class MathPadRecordingException implements Exception {
@@ -326,6 +363,7 @@ class MathPadRecordingService extends ChangeNotifier {
     unawaited(loadSegmentSealMode());
     unawaited(loadFrameRateMode());
     unawaited(loadAudioBitrateMode());
+    unawaited(loadCameraSyncMethod());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -433,6 +471,40 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [cameraSyncMethod] from local storage, if any
+  /// was ever saved -- falls back to (and leaves unchanged) whatever
+  /// [cameraSyncMethod] already is on any error or missing value.
+  Future<void> loadCameraSyncMethod() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(_kCameraSyncMethodPrefKey);
+      if (saved == null) return;
+      cameraSyncMethod = CameraSyncMethod.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => cameraSyncMethod,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `cameraSyncMethod` already was.
+    }
+  }
+
+  /// Changes [cameraSyncMethod] and persists the choice locally so it's
+  /// still in effect the next time the app opens. Only read at `start()`
+  /// time, when a recording with `includeCamera: true` actually begins --
+  /// changing it never affects a recording already in progress.
+  Future<void> setCameraSyncMethod(CameraSyncMethod method) async {
+    cameraSyncMethod = method;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCameraSyncMethodPrefKey, method.name);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
@@ -488,6 +560,14 @@ class MathPadRecordingService extends ChangeNotifier {
     RecordingAudioBitrate.standard => 128,
     RecordingAudioBitrate.high => 192,
   };
+
+  /// The tutor's chosen camera sync method -- defaults to
+  /// [CameraSyncMethod.ffmpegEstimate] until [loadCameraSyncMethod]
+  /// (fired from the constructor, best-effort) resolves whatever was
+  /// actually saved locally.
+  CameraSyncMethod cameraSyncMethod = CameraSyncMethod.ffmpegEstimate;
+  static const String _kCameraSyncMethodPrefKey =
+      'mathpad_recording_camera_sync_method';
 
   // Snapshotted in `stopCapture()` from `audioBitrateMode` -- capture
   // itself always records raw WAV regardless of this setting (it's only
@@ -608,6 +688,11 @@ class MathPadRecordingService extends ChangeNotifier {
   // capture/mic but never read from or written into by any of it.
   Process? _cameraProcess;
   bool _cameraEnabled = false;
+  // Set instead of `_cameraProcess` when `cameraSyncMethod` is
+  // [CameraSyncMethod.nativePrecise] -- see that enum value's doc comment
+  // and `camera_capture_native.dart`. Never both at once for the same
+  // recording.
+  NativeCameraCapture? _nativeCamera;
 
   MathPadRecordingState _state = MathPadRecordingState.idle;
   MathPadRecordingState get state => _state;
@@ -758,6 +843,67 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Stops+finalizes the native camera capture (if one was started) and
+  /// releases its native resources -- the native-module equivalent of
+  /// [_stopCameraCapture]. Runs synchronously: the underlying FFI call
+  /// blocks until the worker thread joins and the MP4 is finalized, which
+  /// real-hardware testing found fast (finalize completed effectively
+  /// immediately after the capture loop ended) -- comfortably within
+  /// what the ffmpeg path's own stop already allows for. If that ever
+  /// proves visibly janky in practice, moving it onto `Isolate.run`
+  /// (passing just the raw handle int across, since FFI-bound closures
+  /// can't cross isolates) is the fix.
+  ///
+  /// Unlike `_cameraProcess`, a hard-kill of the app can never orphan
+  /// this and leave the webcam locked -- there's no separate process to
+  /// orphan, the capture thread lives and dies with `jyamiti.exe` itself
+  /// (see the "Windows Job Object" section's doc comment for why that
+  /// concern exists for the ffmpeg path at all).
+  void _stopNativeCameraCapture() {
+    final NativeCameraCapture? camera = _nativeCamera;
+    _nativeCamera = null;
+    if (camera == null) return;
+    camera.stop();
+    camera.dispose();
+  }
+
+  /// Polls [camera] for its real captured first-frame wall-clock
+  /// timestamp and folds it into `_cameraStartOffsetSeconds` once
+  /// available -- see [CameraSyncMethod.nativePrecise]'s doc comment and
+  /// where this is kicked off (unawaited) in `start()`. Bounded the same
+  /// way the ffmpeg path bounds its own wait: a camera that never
+  /// produces a frame at all just leaves the offset at its 0.0 default
+  /// (equivalent to the ffmpeg path's own timeout fallback) rather than
+  /// polling forever.
+  Future<void> _resolveNativeCameraOffset(
+    NativeCameraCapture camera,
+    DateTime startedAt,
+  ) async {
+    const Duration pollInterval = Duration(milliseconds: 15);
+    const Duration giveUpAfter = Duration(seconds: 8);
+    final DateTime deadline = DateTime.now().add(giveUpAfter);
+    while (DateTime.now().isBefore(deadline)) {
+      // `_nativeCamera` can be reassigned/cleared by a later `start()`
+      // call (or cleared by `stop()`/`cancel()`) while this loop is still
+      // running for a PREVIOUS recording -- bail out rather than writing
+      // a stale offset into whatever's current now.
+      if (!identical(_nativeCamera, camera)) return;
+      if (camera.isFirstFrameReady) {
+        final DateTime cameraFirstFrameAt =
+            DateTime.fromMicrosecondsSinceEpoch(camera.firstFrameUnixMicros);
+        _cameraStartOffsetSeconds = max(
+          0.0,
+          cameraFirstFrameAt.difference(startedAt).inMicroseconds / 1e6,
+        );
+        return;
+      }
+      await Future<void>.delayed(pollInterval);
+    }
+    onCameraWarning?.call(
+      'Camera is taking a while to start -- continuing without waiting further.',
+    );
+  }
+
   /// [canvasKey] must point at a `RepaintBoundary` that already paints a
   /// fully opaque background itself (Math Pad's capture area does) --
   /// this service just snapshots it as-is, no post-capture compositing.
@@ -811,7 +957,39 @@ class MathPadRecordingService extends ChangeNotifier {
     // producing real frames.
     _cameraEnabled = false;
     _cameraProcess = null;
-    if (includeCamera) {
+    _nativeCamera = null;
+    // Only the ffmpeg path exists on macOS -- the native module is a
+    // Windows-only Media Foundation DLL (see `CameraSyncMethod`'s doc
+    // comment), so macOS always behaves as if `ffmpegEstimate` were
+    // chosen regardless of the saved setting.
+    final bool useNativeCamera =
+        includeCamera && !Platform.isMacOS && cameraSyncMethod == CameraSyncMethod.nativePrecise;
+    if (includeCamera && useNativeCamera) {
+      // Native Media Foundation path -- see `CameraSyncMethod.nativePrecise`'s
+      // doc comment. Unlike the ffmpeg path below, this doesn't need to
+      // wait for the camera before starting anything else: its offset
+      // (computed just below, once `_startedAt` exists) comes from a real
+      // captured wall-clock timestamp, not an estimate anchored to when
+      // the timeline happened to start, so it stays exact no matter which
+      // order things actually start in.
+      try {
+        final String? device = await _detectCameraDeviceName();
+        if (device == null) {
+          onCameraWarning?.call('No camera was found -- recording without one.');
+        } else {
+          _nativeCamera = NativeCameraCapture.start(
+            device,
+            p.join(sessionDir.path, 'camera.mp4'),
+          );
+          _cameraEnabled = true;
+        }
+      } catch (e) {
+        _nativeCamera?.dispose();
+        _nativeCamera = null;
+        _cameraEnabled = false;
+        onCameraWarning?.call('Could not start the camera -- recording without it.');
+      }
+    } else if (includeCamera) {
       try {
         final String? device = await _detectCameraDeviceName();
         final String ffmpegPath = _resolveFfmpegPath();
@@ -888,19 +1066,29 @@ class MathPadRecordingService extends ChangeNotifier {
       }
     }
 
-    // The video timeline's zero point -- set only now, AFTER the camera has
-    // either confirmed it's producing real frames or given up waiting.
-    // Every OTHER capture stream's actual start latency is still measured
-    // relative to THIS instant and compensated for at mux time in
-    // `encode()` via ffmpeg's `-itsoffset` -- but the camera itself no
-    // longer needs that correction (see `_cameraStartOffsetSeconds` just
-    // below), since by construction it's already running by the time this
-    // instant is captured.
+    // The video timeline's zero point -- set only now. For the ffmpeg
+    // camera path this is AFTER the camera has either confirmed it's
+    // producing real frames or given up waiting, so there's no lag left
+    // for it to correct for either (see `_cameraStartOffsetSeconds` just
+    // below). Every OTHER capture stream's actual start latency is still
+    // measured relative to THIS instant and compensated for at mux time
+    // in `encode()` via ffmpeg's `-itsoffset`.
     _startedAt = DateTime.now();
     elapsed = Duration.zero;
     _lastEmittedElapsed = Duration.zero;
-    // No lag left to compensate for -- see the comment above.
+    // No lag left to compensate for on the ffmpeg camera path -- see the
+    // comment above. Immediately superseded below for the native path,
+    // once its real measured timestamp is available.
     _cameraStartOffsetSeconds = 0.0;
+    if (_nativeCamera != null) {
+      // Doesn't block `start()` -- the native module captures the real
+      // first-frame timestamp on its own worker thread regardless of
+      // when anyone reads it, so this just polls cheaply for it to show
+      // up and folds it into `_cameraStartOffsetSeconds` whenever it
+      // does. `stop()`/`encode()` happen long after a recording begins,
+      // so there's always plenty of time for this to resolve first.
+      unawaited(_resolveNativeCameraOffset(_nativeCamera!, _startedAt!));
+    }
 
     try {
       await _audioRecorder.start(
@@ -936,6 +1124,7 @@ class MathPadRecordingService extends ChangeNotifier {
       );
     } catch (e) {
       await _stopCameraCapture();
+      _stopNativeCameraCapture();
       if (await sessionDir.exists()) {
         await sessionDir.delete(recursive: true);
       }
@@ -1338,6 +1527,7 @@ class MathPadRecordingService extends ChangeNotifier {
     }
 
     await _stopCameraCapture();
+    _stopNativeCameraCapture();
 
     _capturedConcatEntries = List.of(_concatEntries);
     _capturedSessionDir = _sessionDir;
@@ -1819,6 +2009,7 @@ class MathPadRecordingService extends ChangeNotifier {
       await _audioRecorder.stop();
     } catch (_) {}
     await _stopCameraCapture();
+    _stopNativeCameraCapture();
     _cameraEnabled = false;
     final Directory? sessionDir = _sessionDir;
     final Directory? capturedSessionDir = _capturedSessionDir;
@@ -1970,6 +2161,12 @@ class MathPadRecordingService extends ChangeNotifier {
     _segmentSealTimer?.cancel();
     await _audioRecorder.dispose();
     _cameraProcess?.kill(ProcessSignal.sigkill);
+    // No hard-kill equivalent needed for the native camera path here --
+    // it's an in-process worker thread, not a separate process, so it
+    // can't be orphaned the way `_cameraProcess` can (see
+    // `_stopNativeCameraCapture`'s doc comment). Still worth releasing
+    // its native handle if one is somehow still around at this point.
+    _nativeCamera?.dispose();
   }
 }
 

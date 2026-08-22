@@ -10908,6 +10908,33 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               ),
                             ],
                           ),
+                          _recordingSettingsSubmenu<CameraSyncMethod>(
+                            isDark: isDark,
+                            icon: Icons.sync_alt_rounded,
+                            label: 'Camera Sync',
+                            selectedValue: _recordingService.cameraSyncMethod,
+                            onSelected: (method) => setState(() {
+                              unawaited(
+                                _recordingService.setCameraSyncMethod(method),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: CameraSyncMethod.ffmpegEstimate,
+                                label: 'Standard (Recommended)',
+                                description:
+                                    'Camera start time is estimated -- accurate '
+                                    'to within roughly 100ms',
+                              ),
+                              (
+                                value: CameraSyncMethod.nativePrecise,
+                                label: 'Precise',
+                                description:
+                                    'Camera start time is measured exactly via '
+                                    'Windows -- a newer, less-tested path',
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                   ],
@@ -11000,10 +11027,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
-  /// A cascading "Windows-style" flyout submenu for one of the three
-  /// recording settings (background-encoding strategy / frame rate /
-  /// audio bitrate) -- shared by all three instead of three near-
-  /// duplicate methods, since they only differ in the option type [T],
+  /// A cascading "Windows-style" flyout submenu for one of the recording
+  /// settings (background-encoding strategy / frame rate / audio bitrate /
+  /// camera sync method) -- shared by all of them instead of one near-
+  /// duplicate method each, since they only differ in the option type [T],
   /// the icon/label, and where the current value lives. Each row shows a
   /// radio dot for whether it's the currently active choice, same visual
   /// language the old standalone popups used.
