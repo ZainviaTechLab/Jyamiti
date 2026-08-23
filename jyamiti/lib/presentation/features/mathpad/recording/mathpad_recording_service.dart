@@ -284,11 +284,14 @@ enum CameraEncodeMode {
   /// encoding genuinely never touch Flutter's UI/raster thread, so
   /// drawing stays exactly as smooth as a plain recording. Also finishes
   /// essentially instantly, same as [onCanvas].
-  /// Cropped to just the canvas area (measured live off the canvas's
-  /// `RenderRepaintBoundary`, re-sent every tick so a window resize or a
-  /// toolbar dock-side change mid-recording is picked up -- see
-  /// `_measureCanvasCropRect`), matching what the other three options
-  /// capture. One known gap in that cropping specifically: in this app's
+  /// Cropped to just the canvas area by default (measured live off the
+  /// canvas's `RenderRepaintBoundary`, re-sent every tick so a window
+  /// resize or a toolbar dock-side change mid-recording is picked up --
+  /// see `_measureCanvasCropRect`), matching what the other three options
+  /// capture -- the tutor can turn this off (see
+  /// [MathPadRecordingService.externalCompositorCropToCanvas]) to record
+  /// the full window/toolbar instead, unmodified. One known gap in the
+  /// cropping specifically: in this app's
   /// OWN full-screen mode (`_isFullScreenMode` in mathpad.dart, distinct
   /// from OS/window full screen), the canvas already fills the entire
   /// window and the toolbar/pull-handle/quick-tools become overlays
@@ -553,6 +556,7 @@ class MathPadRecordingService extends ChangeNotifier {
     unawaited(loadMicEnhancementMode());
     unawaited(loadCameraEncodeMode());
     unawaited(loadRecordingPipelineMode());
+    unawaited(loadExternalCompositorCropToCanvas());
   }
 
   /// Loads the tutor's saved [segmentSealMode] from local storage, if any
@@ -797,6 +801,37 @@ class MathPadRecordingService extends ChangeNotifier {
     }
   }
 
+  /// Loads the tutor's saved [externalCompositorCropToCanvas] choice from
+  /// local storage, if any was ever saved -- falls back to (and leaves
+  /// unchanged) whatever it already is on any error or missing value.
+  Future<void> loadExternalCompositorCropToCanvas() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final bool? saved = prefs.getBool(_kExternalCompositorCropToCanvasPrefKey);
+      if (saved == null) return;
+      externalCompositorCropToCanvas = saved;
+      notifyListeners();
+    } catch (_) {
+      // Keep whatever `externalCompositorCropToCanvas` already was.
+    }
+  }
+
+  /// Changes [externalCompositorCropToCanvas] and persists the choice
+  /// locally so it's still in effect the next time the app opens. Only
+  /// read at `start()` time -- changing it never affects a recording
+  /// already in progress.
+  Future<void> setExternalCompositorCropToCanvas(bool value) async {
+    externalCompositorCropToCanvas = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kExternalCompositorCropToCanvasPrefKey, value);
+    } catch (_) {
+      // Setting still applies for the rest of this session even if saving
+      // it for next time happened to fail.
+    }
+  }
+
   // 60fps to match how fluid the live drawing itself already feels (the
   // canvas's own live-stroke overlay repaints at up to 120fps). The
   // frame-catch-up path below keeps the recording truthful to real
@@ -884,6 +919,19 @@ class MathPadRecordingService extends ChangeNotifier {
   RecordingPipelineMode recordingPipelineMode = RecordingPipelineMode.snapshotBased;
   static const String _kRecordingPipelineModePrefKey =
       'mathpad_recording_pipeline_mode';
+
+  /// Whether [CameraEncodeMode.externalCompositor] crops its capture down
+  /// to just the canvas area (see [_measureCanvasCropRect]) or captures
+  /// the app's full window/toolbar unmodified, like it did before that
+  /// crop feature existed. Defaults to true (crop) -- the tutor can turn
+  /// it off if they'd rather see the toolbar in the recording, or run
+  /// into unexpected behavior from the crop (this is still the newest,
+  /// least-tested [CameraEncodeMode]). Irrelevant to every other
+  /// [CameraEncodeMode] -- only ever read when `externalCompositor` is
+  /// also selected.
+  bool externalCompositorCropToCanvas = true;
+  static const String _kExternalCompositorCropToCanvasPrefKey =
+      'mathpad_recording_external_compositor_crop_to_canvas';
 
   // Snapshotted in `stopCapture()` from `audioBitrateMode` -- capture
   // itself always records raw WAV regardless of this setting (it's only
@@ -1010,6 +1058,12 @@ class MathPadRecordingService extends ChangeNotifier {
   // under two different strategies.
   CameraEncodeMode _activeCameraEncodeMode = CameraEncodeMode.finalPass;
   CameraEncodeMode _capturedActiveCameraEncodeMode = CameraEncodeMode.finalPass;
+  // Snapshotted once in `start()` from `externalCompositorCropToCanvas`,
+  // same reasoning -- read every tick by `_captureFrame`'s
+  // `externalCompositor` branch, so a live settings change mid-recording
+  // must not suddenly switch a recording that started cropped over to
+  // full-window (or vice versa) partway through.
+  bool _activeExternalCompositorCropToCanvas = true;
   // Snapshotted once in `start()` from its own `includeCamera` argument --
   // lets [isOnCanvasCameraActive] tell whether THIS recording asked for a
   // camera at all, since `CameraEncodeMode.onCanvas` never sets
@@ -1536,7 +1590,9 @@ class MathPadRecordingService extends ChangeNotifier {
           cameraDeviceName: device ?? '',
           outputPath: p.join(sessionDir.path, 'compositor_output.mp4'),
           fps: _encodeFpsFor(frameRateMode),
-          cropRect: _measureCanvasCropRect(canvasKey),
+          cropRect: externalCompositorCropToCanvas
+              ? _measureCanvasCropRect(canvasKey)
+              : null,
         );
         _cameraEnabled = device != null;
       } catch (e) {
@@ -1676,6 +1732,7 @@ class MathPadRecordingService extends ChangeNotifier {
 
     // Same snapshotting reasoning as the fps fields just above.
     _activeCameraEncodeMode = cameraEncodeMode;
+    _activeExternalCompositorCropToCanvas = externalCompositorCropToCanvas;
     _activeIncludeCamera = includeCamera;
     // `continuousStream` can't merge in a SEPARATELY-captured camera
     // stream (no assembly pass left to do that merging in) -- silently
@@ -1831,7 +1888,9 @@ class MathPadRecordingService extends ChangeNotifier {
     // `NativeExternalCompositor.setCropRect`'s doc comments) -- nothing
     // else in this function has any work to do for this mode.
     if (_activeCameraEncodeMode == CameraEncodeMode.externalCompositor) {
-      _externalCompositor?.setCropRect(_measureCanvasCropRect(_canvasKey));
+      if (_activeExternalCompositorCropToCanvas) {
+        _externalCompositor?.setCropRect(_measureCanvasCropRect(_canvasKey));
+      }
       _emitElapsedTick();
       return;
     }

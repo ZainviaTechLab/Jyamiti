@@ -11033,6 +11033,38 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               ),
                             ],
                           ),
+                          _recordingSettingsSubmenu<bool>(
+                            isDark: isDark,
+                            icon: Icons.crop_rounded,
+                            label: 'External Capture Area',
+                            selectedValue:
+                                _recordingService.externalCompositorCropToCanvas,
+                            onSelected: (value) => setState(() {
+                              unawaited(
+                                _recordingService
+                                    .setExternalCompositorCropToCanvas(value),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: true,
+                                label: 'Canvas Only (Recommended)',
+                                description:
+                                    'Only used by the External camera '
+                                    'encoding option above -- crops to just '
+                                    'the canvas, matching every other '
+                                    'camera encoding option',
+                              ),
+                              (
+                                value: false,
+                                label: 'Full App Window',
+                                description:
+                                    'Records the whole app window/toolbar '
+                                    'instead, uncropped -- the External '
+                                    'option\'s original behavior',
+                              ),
+                            ],
+                          ),
                           _recordingSettingsSubmenu<RecordingPipelineMode>(
                             isDark: isDark,
                             icon: Icons.stream_rounded,
