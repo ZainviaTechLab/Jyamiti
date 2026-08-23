@@ -1,6 +1,5 @@
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -228,9 +227,6 @@ class _TutorDashboardState extends State<TutorDashboard> {
           isInline: true,
         );
       case 10:
-        if (kIsWeb) {
-          return _buildMathPadWebFallback();
-        }
         return MathPadLibraryScreen(
           batches: profile?['batches'] as List?,
           isInline: true,
@@ -242,38 +238,6 @@ class _TutorDashboardState extends State<TutorDashboard> {
       default:
         return _buildOverviewTab(profile);
     }
-  }
-
-  Widget _buildMathPadWebFallback() {
-    return Center(
-      child: Container(
-        padding: const EdgeInsets.all(32),
-        decoration: BoxDecoration(
-          color: context.isDark
-              ? Colors.white.withValues(alpha: 0.03)
-              : Colors.white.withValues(alpha: 0.9),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: context.glassBorder),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.desktop_windows_rounded,
-              size: 48,
-              color: context.textColor60,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              "Math Pad Library isn't available on the web version yet.\n"
-              'Please use the Windows/macOS/Linux desktop app or the Android/iOS app.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: context.textColor60, fontSize: 15),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   // ─── Overview Tab ────────────────────────────────────────────────────────────

@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
@@ -14,8 +13,9 @@ import 'mathpad_page_editor_page.dart';
 
 /// Per-batch Book -> Chapter -> Topic -> Sub-topic -> Pages navigator for a
 /// tutor's Math Pad drawings, persisted entirely on-device (see
-/// `MathPadLibraryStorageService`). Not available on web (no real
-/// filesystem there) -- gated on `kIsWeb` both here and at the call site.
+/// `MathPadLibraryStorageService`, which picks a file-based or
+/// IndexedDB-based backend automatically depending on platform -- this
+/// screen never needs to know which).
 ///
 /// The actual book/chapter/topic/sub-topic tree UI lives in
 /// `MathPadLibraryTreeView`, shared with the in-pad library drawer opened
@@ -206,8 +206,6 @@ class _MathPadLibraryScreenState extends State<MathPadLibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb) return _buildWebFallback(context);
-
     if (_batches.isEmpty) {
       return _buildEmptyState(
         context,
@@ -327,12 +325,4 @@ class _MathPadLibraryScreenState extends State<MathPadLibraryScreen> {
     );
   }
 
-  Widget _buildWebFallback(BuildContext context) {
-    return _buildEmptyState(
-      context,
-      icon: Icons.desktop_windows_rounded,
-      message:
-          "Math Pad Library isn't available on the web version yet.\nPlease use the Windows/macOS/Linux desktop app or the Android/iOS app.",
-    );
-  }
 }

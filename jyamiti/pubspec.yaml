@@ -38,6 +38,12 @@ dependencies:
   # OffscreenCanvas/Worker) for MathPadWebRecordingService -- UNVERIFIED,
   # see that file's header comment.
   web: ^1.1.1
+  # IndexedDB-backed document store for MathPadLibraryStorageServiceWeb --
+  # the web equivalent of the desktop/mobile file-based Math Pad Library
+  # storage (see that file's doc comment for why File/Directory can't be
+  # used on web at all).
+  sembast: ^3.8.6
+  sembast_web: ^2.4.1+1
   provider: ^6.1.5+1
   http: ^1.6.0
   shared_preferences: ^2.5.5
