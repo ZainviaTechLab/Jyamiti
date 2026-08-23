@@ -91,6 +91,23 @@ class MathPadWebRecordingException implements Exception {
   String toString() => message;
 }
 
+/// `DisplayMediaStreamOptions.preferCurrentTab` -- a Chromium-specific
+/// addition, not in package:web's typed bindings, and (per real-world
+/// testing) genuinely needed: without it, Chrome's tab picker excludes
+/// the calling tab itself from the list by design (this app's own tab
+/// never showed up, only every OTHER open tab). `implements
+/// web.DisplayMediaStreamOptions` is what lets a value of this type be
+/// passed anywhere the original type is expected (extension types can
+/// implement other extension types over the same underlying JSObject).
+extension type _DisplayMediaStreamOptionsPreferCurrentTab._(JSObject _)
+    implements web.DisplayMediaStreamOptions {
+  external factory _DisplayMediaStreamOptionsPreferCurrentTab({
+    JSAny? video,
+    JSAny? audio,
+    JSBoolean? preferCurrentTab,
+  });
+}
+
 /// Reads `MediaTrackSettings.displaySurface` -- not in package:web's typed
 /// bindings (a newer/optional part of the Screen Capture spec) -- via a
 /// small custom extension type over the same underlying JSObject, rather
@@ -179,9 +196,10 @@ class MathPadWebRecordingService {
 
     late web.MediaStream screenStream;
     try {
-      final web.DisplayMediaStreamOptions options = web.DisplayMediaStreamOptions(
+      final web.DisplayMediaStreamOptions options = _DisplayMediaStreamOptionsPreferCurrentTab(
         video: true.toJS,
         audio: false.toJS,
+        preferCurrentTab: true.toJS,
       );
       screenStream = await mediaDevices.getDisplayMedia(options).toDart;
     } catch (e) {
