@@ -67,6 +67,25 @@
 // 24px inset). Best-effort -- a getUserMedia failure only ever costs the
 // overlay, never the recording, matching every native platform here.
 //
+// AUDIO -- added after the first several versions of this shipped
+// completely silent (getDisplayMedia's own `audio` option was left
+// false, and there was no separate microphone capture at all -- a real
+// gap, not a deliberate choice, caught when asked directly "anything
+// left to do here"). A dedicated microphone-only getUserMedia call
+// (independent of the camera's, since a tutor might want narration
+// without wanting their face on camera) runs FIRST, before the screen
+// picker even appears -- matching MathPadRecordingService.start's own
+// "check the mic before anything else" ordering on desktop. Unlike
+// camera, a microphone failure IS fatal here (throws immediately,
+// before ever showing the screen picker) -- this feature exists to
+// capture narration; recording it silently would defeat the point
+// rather than just be a lesser version of it, the same reasoning
+// desktop's own mic-permission check already uses. The mic's audio
+// track and the composited canvas's video track are combined into one
+// fresh MediaStream right before MediaRecorder starts, since
+// MediaRecorder only ever records the tracks on the ONE stream it's
+// given.
+//
 // UNVERIFIED IN THE BROWSER, but more verifiable than the native modules
 // (for the Dart parts): `flutter build web` compile-checks this file's
 // `package:web` API usage, and real compiler errors were found and fixed
@@ -158,6 +177,7 @@ extension type _WorkerResponse._(JSObject _) implements JSObject {
 class MathPadWebRecordingService {
   web.MediaStream? _screenStream;
   web.MediaStream? _cameraStream;
+  web.MediaStream? _micStream;
   web.HTMLVideoElement? _screenVideo;
   web.HTMLVideoElement? _cameraVideo;
   web.MediaRecorder? _recorder;
@@ -169,22 +189,29 @@ class MathPadWebRecordingService {
 
   bool get isRecording => _recorder != null;
 
-  /// Shows the browser's screen/tab/window picker (see this file's header
-  /// comment -- unavoidable, every time), optionally starts a camera feed
-  /// for the PIP overlay, then starts compositing onto an internal canvas
-  /// and encoding via `MediaRecorder` -- off the main thread via
-  /// [_startOffThread] when the browser supports it, [_startMainThreadFallback]
-  /// otherwise. [fps] controls both the composite rate and the canvas
-  /// capture stream's rate.
+  /// Requests the microphone FIRST (see this file's header comment,
+  /// "AUDIO"), before ever showing the screen/tab/window picker (see
+  /// this file's header comment -- unavoidable, every time), optionally
+  /// starts a camera feed for the PIP overlay, then starts compositing
+  /// onto an internal canvas and encoding via `MediaRecorder` -- off the
+  /// main thread via [_startOffThread] when the browser supports it,
+  /// [_startMainThreadFallback] otherwise. [fps] controls both the
+  /// composite rate and the canvas capture stream's rate.
   ///
   /// [cropRect], if given, is only actually applied when the shared
   /// source's `displaySurface` reports `'browser'` (see this file's header
   /// comment for why).
   ///
-  /// Throws [MathPadWebRecordingException] if the user cancels the picker,
-  /// the browser doesn't support the required APIs, or no codec
-  /// `MediaRecorder` will accept could be found. A camera failure is never
-  /// fatal to the recording -- see [_startCamera].
+  /// Throws [MathPadWebRecordingException] if microphone access is
+  /// denied/unavailable, the user cancels the screen-share picker, the
+  /// browser doesn't support the required APIs, or no codec
+  /// `MediaRecorder` will accept could be found. A camera failure is
+  /// never fatal to the recording -- see [_startCamera]. Microphone
+  /// failure IS fatal, unlike camera -- matches
+  /// `MathPadRecordingService.start`'s same "no mic, no recording"
+  /// stance on desktop (this feature exists to capture narration; a
+  /// silent recording would defeat the point, not just be a lesser
+  /// version of it).
   Future<void> start({
     int fps = 30,
     bool includeCamera = false,
@@ -193,6 +220,17 @@ class MathPadWebRecordingService {
     if (isRecording) return;
 
     final web.MediaDevices mediaDevices = web.window.navigator.mediaDevices;
+
+    try {
+      _micStream = await mediaDevices
+          .getUserMedia(web.MediaStreamConstraints(audio: true.toJS, video: false.toJS))
+          .toDart;
+    } catch (e) {
+      throw MathPadWebRecordingException(
+        'Microphone access is needed to record narration -- please allow '
+        'microphone access and try again.',
+      );
+    }
 
     late web.MediaStream screenStream;
     try {
@@ -382,6 +420,17 @@ class MathPadWebRecordingService {
     final web.MediaStream canvasStream = canvas.captureStream(fps);
     _canvasStream = canvasStream;
 
+    // MediaRecorder records whatever tracks are on the ONE stream it's
+    // given -- the canvas's own captureStream() only ever has video, and
+    // the mic stream only ever has audio, so they're combined into a
+    // fresh MediaStream here rather than trying to record two streams at
+    // once (MediaRecorder doesn't support that).
+    final List<web.MediaStreamTrack> recordingTracks = [
+      ...canvasStream.getVideoTracks().toDart,
+      ...?_micStream?.getAudioTracks().toDart,
+    ];
+    final web.MediaStream recordingStream = web.MediaStream(recordingTracks.toJS);
+
     final String? mimeType = _pickSupportedMimeType();
     if (mimeType == null) {
       throw MathPadWebRecordingException(
@@ -391,7 +440,7 @@ class MathPadWebRecordingService {
 
     _chunks.clear();
     final web.MediaRecorder recorder = web.MediaRecorder(
-      canvasStream,
+      recordingStream,
       web.MediaRecorderOptions(mimeType: mimeType),
     );
     recorder.ondataavailable = ((web.Event e) {
@@ -561,10 +610,14 @@ class MathPadWebRecordingService {
     for (final web.MediaStreamTrack track in _cameraStream?.getTracks().toDart ?? const <web.MediaStreamTrack>[]) {
       track.stop();
     }
+    for (final web.MediaStreamTrack track in _micStream?.getTracks().toDart ?? const <web.MediaStreamTrack>[]) {
+      track.stop();
+    }
     _recorder = null;
     _screenStream = null;
     _canvasStream = null;
     _cameraStream = null;
+    _micStream = null;
     _screenVideo = null;
     _cameraVideo = null;
     _worker = null;
