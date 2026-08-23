@@ -9,6 +9,8 @@
 
 import 'dart:math';
 
+import 'mathpad_web_recording_result.dart';
+
 class MathPadWebRecordingException implements Exception {
   MathPadWebRecordingException(this.message);
   final String message;
@@ -29,7 +31,7 @@ class MathPadWebRecordingService {
     );
   }
 
-  Future<void> stopAndDownload({String filenameWithoutExtension = 'MathPad_recording'}) async {
+  Future<MathPadWebRecordingResult> stop() async {
     throw MathPadWebRecordingException('Not currently recording.');
   }
 

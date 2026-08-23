@@ -5,6 +5,10 @@
 // (MathPadWebRecordingService, MathPadWebRecordingException) -- mathpad.dart
 // imports this file, never the platform-specific ones directly, and gates
 // actual use on `kIsWeb` itself (the stub only exists so the import/class
-// references compile everywhere; it's never actually reached).
+// references compile everywhere; it's never actually reached). See
+// mathpad_web_recording_result.dart for MathPadWebRecordingResult -- kept
+// in its own leaf file rather than here so neither platform variant needs
+// to import this barrel back (would be circular).
+export 'mathpad_web_recording_result.dart';
 export 'mathpad_web_recording_service_web.dart'
     if (dart.library.io) 'mathpad_web_recording_service_stub.dart';

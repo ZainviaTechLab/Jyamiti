@@ -100,8 +100,11 @@
 import 'dart:async';
 import 'dart:js_interop';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
+
+import 'mathpad_web_recording_result.dart';
 
 class MathPadWebRecordingException implements Exception {
   MathPadWebRecordingException(this.message);
@@ -545,25 +548,21 @@ class MathPadWebRecordingService {
     return Rectangle<int>(x0, y0, x1 - x0, y1 - y0);
   }
 
-  /// Stops capture/compositing/encoding and immediately triggers a
-  /// browser download of the result -- the simplest of the three output
-  /// strategies discussed in the design (download / IndexedDB / backend
-  /// upload); see this file's header comment. [filenameWithoutExtension]
-  /// gets the right extension appended automatically based on the actual
-  /// codec `MediaRecorder` used (`.webm` or `.mp4`).
+  /// Stops capture/compositing/encoding and returns the finished
+  /// recording's raw bytes -- NOT an automatic download. The caller (see
+  /// mathpad.dart's `_stopWebRecording`) saves these into
+  /// `MathPadWebRecordingsStorageService` (IndexedDB) so the recording
+  /// shows up in a list the tutor can come back to, with Download as a
+  /// deliberate, later action from there -- not something sprung on them
+  /// the instant they hit Stop.
   ///
   /// Deliberately doesn't expose the underlying `Blob` in its signature --
   /// keeping every `package:web` type internal to this file is what lets
   /// `mathpad_web_recording_service.dart` (the conditional-import barrel)
   /// give non-web platforms a stub with an identical public API without
   /// THAT file ever needing to reference `package:web` at all.
-  Future<void> stopAndDownload({String filenameWithoutExtension = 'MathPad_recording'}) async {
-    final web.Blob blob = await _stop();
-    final String extension = blob.type.contains('mp4') ? 'mp4' : 'webm';
-    _triggerDownload(blob, '$filenameWithoutExtension.$extension');
-  }
-
-  Future<web.Blob> _stop() async {
+  /// [MathPadWebRecordingResult] is a plain Dart class for the same reason.
+  Future<MathPadWebRecordingResult> stop() async {
     final web.MediaRecorder? recorder = _recorder;
     if (recorder == null) {
       throw MathPadWebRecordingException('Not currently recording.');
@@ -573,9 +572,17 @@ class MathPadWebRecordingService {
     final Completer<web.Blob> completer = Completer<web.Blob>();
     _stopCompleter = completer;
     recorder.stop();
-    final web.Blob result = await completer.future;
+    final web.Blob blob = await completer.future;
     _releaseResources();
-    return result;
+
+    final JSArrayBuffer arrayBuffer = await blob.arrayBuffer().toDart;
+    final Uint8List bytes = arrayBuffer.toDart.asUint8List();
+    final String extension = blob.type.contains('mp4') ? 'mp4' : 'webm';
+    return MathPadWebRecordingResult(
+      bytes: bytes,
+      mimeType: blob.type,
+      fileExtension: extension,
+    );
   }
 
   /// Stops every active track and tears down internal state WITHOUT
@@ -622,18 +629,6 @@ class MathPadWebRecordingService {
     _cameraVideo = null;
     _worker = null;
     _stopCompleter = null;
-  }
-
-  static void _triggerDownload(web.Blob blob, String filename) {
-    final String url = web.URL.createObjectURL(blob);
-    final web.HTMLAnchorElement anchor = web.HTMLAnchorElement()
-      ..href = url
-      ..download = filename
-      ..style.display = 'none';
-    web.document.body?.append(anchor);
-    anchor.click();
-    anchor.remove();
-    web.URL.revokeObjectURL(url);
   }
 
   /// `MediaRecorder` needs an explicit, browser-supported mimeType --

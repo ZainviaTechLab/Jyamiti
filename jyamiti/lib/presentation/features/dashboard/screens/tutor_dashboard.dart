@@ -1,5 +1,6 @@
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -25,6 +26,7 @@ import '../../competitions/screens/tutor_arena_history_screen.dart';
 import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
 import '../../robo_drawing/screens/robo_drawing_screen.dart';
 import 'tutor_recordings_screen.dart';
+import 'web_recordings_screen.dart';
 import '../../mathpad/recording/mathpad_recording_service.dart';
 
 class TutorDashboard extends StatefulWidget {
@@ -232,7 +234,9 @@ class _TutorDashboardState extends State<TutorDashboard> {
           isInline: true,
         );
       case 11:
-        return const TutorRecordingsScreen(isInline: true);
+        return kIsWeb
+            ? const WebRecordingsScreen(isInline: true)
+            : const TutorRecordingsScreen(isInline: true);
       case 12:
         return const RoboDrawingScreen(isInline: true);
       default:

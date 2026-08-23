@@ -32,6 +32,7 @@ import '../instruments/media_embed_models.dart';
 import '../instruments/media_embed_widget.dart';
 import '../recording/mathpad_recording_service.dart';
 import '../recording/mathpad_web_recording_service.dart';
+import '../recording/web_recordings_storage_service.dart';
 import '../asset_library/models/asset_library_models.dart';
 import '../asset_library/models/mathpad_template_models.dart';
 import '../asset_library/services/mathpad_asset_library_storage_service.dart';
@@ -2048,17 +2049,22 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   /// Web counterpart to `_stopRecording` -- unlike the desktop path, this
   /// has no separate "encoding" phase to show a spinner for (`MediaRecorder`
-  /// finishes essentially as soon as `stop()` is called) and, for this
-  /// first slice, no destination other than an immediate browser download
-  /// -- see `MathPadWebRecordingService.stopAndDownload`'s doc comment.
+  /// finishes essentially as soon as `stop()` is called). No automatic
+  /// download -- the finished recording is saved into
+  /// `MathPadWebRecordingsStorageService` (IndexedDB) instead, so it shows
+  /// up in the web recordings list with Download as a deliberate, later
+  /// action from there.
   Future<void> _stopWebRecording() async {
     if (_webRecordingBusy || !_webRecording) return;
     final MathPadWebRecordingService? service = _webRecordingService;
     if (service == null) return;
     setState(() => _webRecordingBusy = true);
     try {
-      await service.stopAndDownload(
-        filenameWithoutExtension: 'MathPad_${DateTime.now().millisecondsSinceEpoch}',
+      final MathPadWebRecordingResult result = await service.stop();
+      await MathPadWebRecordingsStorageService().saveRecording(
+        name: 'MathPad_${DateTime.now().millisecondsSinceEpoch}.${result.fileExtension}',
+        mimeType: result.mimeType,
+        bytes: result.bytes,
       );
       if (!mounted) return;
       setState(() {
@@ -2067,7 +2073,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Recording downloaded.'),
+          content: Text('Recording saved -- find it in My Recordings.'),
           backgroundColor: Color(0xFF10B981),
           duration: Duration(seconds: 5),
         ),
