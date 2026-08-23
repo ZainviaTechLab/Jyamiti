@@ -10828,6 +10828,38 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             description: 'Record canvas, audio & webcam overlay PIP',
                           ),
                           const Divider(height: 1),
+                          MenuItemButton(
+                            onPressed: () => _showRecordingSettingsGuide(context),
+                            leadingIcon: Icon(
+                              Icons.help_outline_rounded,
+                              size: 18,
+                              color: _textColor,
+                            ),
+                            child: SizedBox(
+                              width: 240,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Settings Guide',
+                                    style: TextStyle(
+                                      color: _textColor,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'What each setting below does, and which '
+                                    'combination fits your hardware',
+                                    style: TextStyle(color: _textColor60, fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const Divider(height: 1),
                           _recordingSettingsSubmenu<SegmentSealMode>(
                             isDark: isDark,
                             icon: Icons.settings_suggest_rounded,
@@ -11249,6 +11281,419 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       child: Text(label, style: TextStyle(color: _textColor, fontSize: 13)),
     );
   }
+
+  /// Opens a scrollable reference dialog explaining every recording
+  /// setting -- what it does, when to prefer each option, and which
+  /// combinations work well on which hardware. Purely informational --
+  /// doesn't read or change any setting itself, so it can't affect the
+  /// current system regardless of what's on screen when it's opened.
+  void _showRecordingSettingsGuide(BuildContext context) {
+    final bool isDark = _isDarkTheme;
+    final Color heading = isDark ? Colors.white : Colors.black;
+    final Color body = isDark ? Colors.white70 : Colors.black87;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: isDark ? _darkPanelColor : Colors.white,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640, maxHeight: 720),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Recording Settings Guide',
+                          style: TextStyle(
+                            color: heading,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 17,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          Icons.close_rounded,
+                          color: body,
+                          size: 20,
+                        ),
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  Expanded(
+                    child: Scrollbar(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _guideP(
+                              'Every recording setting below only ever '
+                              'affects a NEW recording -- changing one '
+                              'never touches a recording already in '
+                              'progress. If you\'re ever unsure, each '
+                              'setting\'s (Recommended) option is this '
+                              'app\'s most-tested choice -- start there.',
+                              body,
+                            ),
+                            _guideH('Quick picks by hardware', heading),
+                            _guideSub('Not sure? Just use the defaults', heading),
+                            _guideP(
+                              'Every (Recommended) option together is '
+                              'this app\'s most broadly reliable '
+                              'combination, and works well on virtually '
+                              'any machine.',
+                              body,
+                            ),
+                            _guideSub('Lower-end / older laptop', heading),
+                            _guideBullet(
+                              'Frame Rate: Balanced or 30 fps -- less to encode',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Camera Encoding: Standard -- most tested, '
+                              'won\'t strain the machine while you draw',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Recording Pipeline: Standard',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Avoid On Canvas and External for now -- '
+                              'both add real-time work this kind of '
+                              'machine may struggle to keep up with',
+                              body,
+                            ),
+                            _guideSub(
+                              'Typical modern laptop / mid-range machine',
+                              heading,
+                            ),
+                            _guideBullet('Frame Rate: Balanced (default)', body),
+                            _guideBullet(
+                              'Camera Encoding: Live -- fast finish '
+                              'without On Canvas\'s drawing-lag cost',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Recording Pipeline: Standard, or '
+                              'Continuous if you\'d rather it finish '
+                              'instantly and don\'t need the camera '
+                              'composited through that pipeline',
+                              body,
+                            ),
+                            _guideSub('High-performance machine', heading),
+                            _guideP(
+                              '(recent CPU, discrete or fast integrated '
+                              'GPU, plenty of RAM)',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Camera Encoding: External (Newest) -- '
+                              'smooth drawing AND instant finish, at the '
+                              'cost of being the newest, least-tested '
+                              'option',
+                              body,
+                            ),
+                            _guideBullet(
+                              'External Capture Area: Canvas Only',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Frame Rate: 60 fps if you want maximum '
+                              'smoothness and don\'t mind larger files',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Audio Quality: High, if you want maximum '
+                              'fidelity',
+                              body,
+                            ),
+                            _guideH('What each setting does', heading),
+                            _guideSub('Background Encoding', heading),
+                            _guideP(
+                              'Controls when the Standard recording '
+                              'pipeline encodes chunks of your recording '
+                              'in the background while you\'re still '
+                              'drawing, so the final export finishes '
+                              'faster once you stop.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Hybrid (Recommended): seals on a natural '
+                              'pause, or every 20s, whichever comes '
+                              'first -- good balance for most lessons',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Idle only: seals only when you stop '
+                              'talking/drawing -- fewer, longer chunks; '
+                              'better if you draw almost continuously '
+                              'with few pauses',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Fixed interval: seals every 20s no matter '
+                              'what -- most predictable, useful for long '
+                              'unbroken stretches of drawing',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Not used when Recording Pipeline is '
+                              'Continuous, or Camera Encoding is '
+                              'External -- those modes don\'t produce '
+                              'chunks to seal',
+                              body,
+                            ),
+                            _guideSub('Frame Rate', heading),
+                            _guideP(
+                              'How many times per second the canvas is '
+                              'captured and encoded.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Balanced (Recommended): 60fps sampling, '
+                              '30fps video -- smooth strokes, smaller '
+                              'files than full 60fps',
+                              body,
+                            ),
+                            _guideBullet(
+                              '60 fps: smoothest possible motion, '
+                              'largest files -- worth it for fast, '
+                              'detailed handwriting or intricate diagrams',
+                              body,
+                            ),
+                            _guideBullet(
+                              '30 fps: smallest files -- fine for a '
+                              'slower pace, slightly coarser on very '
+                              'fast strokes',
+                              body,
+                            ),
+                            _guideSub('Audio Quality', heading),
+                            _guideP(
+                              'The bitrate of your recorded narration.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Compact (Recommended), 96kbps: smallest '
+                              'audio, still clean for narration in a '
+                              'normal room',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Standard, 128kbps: a bit more headroom -- '
+                              'pick this in a noisier room',
+                              body,
+                            ),
+                            _guideBullet(
+                              'High, 192kbps: maximum quality margin, '
+                              'largest audio files -- pick this only if '
+                              'you\'ve specifically noticed audio '
+                              'quality issues',
+                              body,
+                            ),
+                            _guideSub('Camera Sync', heading),
+                            _guideP(
+                              'How the recorded webcam video\'s start '
+                              'time is aligned with the canvas/audio '
+                              'timeline.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Standard (Recommended): start time is '
+                              'estimated, accurate to within roughly '
+                              '100ms -- reliable, well-tested',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Precise: start time is measured exactly '
+                              'via Windows -- try this only if you\'ve '
+                              'actually noticed the camera drifting out '
+                              'of sync, since it\'s a newer, '
+                              'less-tested path',
+                              body,
+                            ),
+                            _guideSub('Mic Enhancement', heading),
+                            _guideP(
+                              'Whether Windows\' own noise suppression/'
+                              'auto-leveling runs on your microphone.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Off (Recommended): raw mic signal -- '
+                              'avoids Windows mistaking a sustained note '
+                              'or held vowel (common when explaining '
+                              'something aloud) for background noise and '
+                              'muting it',
+                              body,
+                            ),
+                            _guideBullet(
+                              'On: Windows cleans up noise and '
+                              'auto-levels volume -- helpful specifically '
+                              'in an actually noisy room (fan, traffic, '
+                              'family in the background)',
+                              body,
+                            ),
+                            _guideSub('Camera Encoding', heading),
+                            _guideP(
+                              'How (and when) the webcam overlay gets '
+                              'composited into the recording, if you '
+                              'record with a camera.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Standard (Recommended): composited once, '
+                              'after you stop recording -- slower to '
+                              'finish, but the most-tested path',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Live: composited while recording -- '
+                              'finishes almost instantly, a newer but '
+                              'solid path',
+                              body,
+                            ),
+                            _guideBullet(
+                              'On Canvas: the camera preview is shown '
+                              'live, baked directly into what gets '
+                              'captured -- always finishes instantly '
+                              'regardless of camera, but the live camera '
+                              'feed can cause real drawing lag/stutter '
+                              '(confirmed through testing), since it '
+                              'forces extra work on the same thread your '
+                              'drawing runs on. Best reserved for a '
+                              'higher-performance machine, or skipped in '
+                              'favor of Live/External if you notice any '
+                              'lag',
+                              body,
+                            ),
+                            _guideBullet(
+                              'External (Newest): captures, composites, '
+                              'and encodes entirely outside the app in a '
+                              'separate native process -- no drawing lag '
+                              'AND finishes instantly, the best of both '
+                              'worlds when it works. It\'s the newest '
+                              'and least-tested option, and (unlike the '
+                              'other three) captures via a screen-'
+                              'capture technique rather than reading the '
+                              'canvas directly -- see External Capture '
+                              'Area below',
+                              body,
+                            ),
+                            _guideSub('External Capture Area', heading),
+                            _guideP(
+                              'Only matters when Camera Encoding is set '
+                              'to External.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Canvas Only (Recommended): crops the '
+                              'capture down to just the canvas, matching '
+                              'what every other Camera Encoding option '
+                              'records',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Full App Window: records the whole app '
+                              'window, toolbar included, uncropped -- '
+                              'mainly useful if you actually want the '
+                              'toolbar visible (e.g. recording a '
+                              'how-to-use-this-app demo), not for an '
+                              'ordinary lesson',
+                              body,
+                            ),
+                            _guideSub('Recording Pipeline', heading),
+                            _guideP(
+                              'How captured frames get turned into the '
+                              'final video file.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Standard (Recommended): frames are saved '
+                              'individually and assembled into video '
+                              'afterward -- the original, most-tested '
+                              'path',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Continuous: frames are encoded to video '
+                              'in real time as you draw -- always '
+                              'finishes instantly, a newer path. It '
+                              'can\'t merge in a separately-captured '
+                              'camera stream, so if you have a camera '
+                              'enabled with Camera Encoding set to '
+                              'Standard or Live, this setting is '
+                              'silently ignored for that one recording '
+                              '(it falls back to Standard instead, '
+                              'camera and all) -- pair Continuous with '
+                              'On Canvas, External, or no camera at all '
+                              'to actually get its instant-finish '
+                              'benefit',
+                              body,
+                            ),
+                            const SizedBox(height: 4),
+                            _guideP(
+                              'Every "newer"/"least-tested" option above '
+                              'is safe to try -- if a recording using '
+                              'one doesn\'t come out right, switch back '
+                              'to the (Recommended) choice and try '
+                              'again.',
+                              body,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _guideH(String text, Color color) => Padding(
+    padding: const EdgeInsets.only(top: 18, bottom: 6),
+    child: Text(
+      text,
+      style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14.5),
+    ),
+  );
+
+  Widget _guideSub(String text, Color color) => Padding(
+    padding: const EdgeInsets.only(top: 10, bottom: 3),
+    child: Text(
+      text,
+      style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12.5),
+    ),
+  );
+
+  Widget _guideP(String text, Color color) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(text, style: TextStyle(color: color, fontSize: 12, height: 1.45)),
+  );
+
+  Widget _guideBullet(String text, Color color) => Padding(
+    padding: const EdgeInsets.only(left: 2, bottom: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('•  ', style: TextStyle(color: color, fontSize: 12, height: 1.45)),
+        Expanded(
+          child: Text(text, style: TextStyle(color: color, fontSize: 12, height: 1.45)),
+        ),
+      ],
+    ),
+  );
 
   Widget _buildIconButton({
     IconData? icon,
