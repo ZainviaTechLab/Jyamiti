@@ -306,7 +306,17 @@ private:
         // Spawn ffmpeg reading raw BGRA frames from our stdin.
         SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
         HANDLE readPipe = nullptr, writePipe = nullptr;
-        if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) { SetError(L"CreatePipe failed"); return; }
+        // A generous buffer (default is only a few KB) -- one raw BGRA
+        // frame alone can be several MB, so a tiny buffer means WriteFile
+        // blocks on ffmpeg's own encode pace almost every single call.
+        // This lets a couple of frames queue up so a momentary stall in
+        // ffmpeg (or in reading the next camera/window frame) doesn't
+        // immediately stall the write below.
+        const DWORD kPipeBufferBytes = 8 * 1024 * 1024;
+        if (!CreatePipe(&readPipe, &writePipe, &sa, kPipeBufferBytes)) {
+            SetError(L"CreatePipe failed");
+            return;
+        }
         SetHandleInformation(writePipe, HANDLE_FLAG_INHERIT, 0);
 
         std::wstring ffmpegPath = ResolveFfmpegPath();
@@ -356,6 +366,28 @@ private:
         using Clock = std::chrono::steady_clock;
         const auto captureStart = Clock::now();
         int64_t framesWritten = 0;
+        // Packed, contiguous copy of the composited frame (the mapped
+        // staging texture's rows are individually pitch-padded, not
+        // contiguous) -- written to the pipe with ONE WriteFile call per
+        // frame slot instead of `height` of them. Row-by-row WriteFile
+        // calls (the previous approach) turned every single output frame
+        // into ~1000+ separate syscalls for a typical window size, which
+        // was slow enough that the composite loop routinely fell well
+        // behind real time -- and since the wall-clock catch-up above
+        // responds to falling behind by writing MORE duplicate frames,
+        // that made the same slow write path run even more often,
+        // snowballing into visible freeze-then-burst stutter instead of
+        // smooth playback. A single large write per frame is dramatically
+        // cheaper, so the loop can actually keep up most of the time and
+        // catch-up duplication stays the rare exception it's meant to be.
+        std::vector<BYTE> frameBuf((size_t)width * height * 4);
+        // Safety cap: even with the above, don't let one iteration try to
+        // flush an unbounded backlog in a single burst (e.g. after a long
+        // camera stall) -- that alone could stall the pipe for a very
+        // visible stretch. A few frames of catch-up per iteration is
+        // enough to recover from ordinary hitches; anything beyond that
+        // just gets caught up gradually over the following iterations.
+        const int64_t kMaxCatchUpFramesPerIteration = 6;
         while (!shouldStop_.load(std::memory_order_relaxed)) {
             MSG msg;
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -437,36 +469,41 @@ private:
             context->CopyResource(staging.Get(), outputTex.Get());
             D3D11_MAPPED_SUBRESOURCE mapped;
             if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+                for (UINT y = 0; y < height; y++) {
+                    memcpy(frameBuf.data() + (size_t)y * width * 4,
+                           (BYTE*)mapped.pData + (size_t)y * mapped.RowPitch,
+                           (size_t)width * 4);
+                }
+                context->Unmap(staging.Get(), 0);
+
                 // How many frame slots real elapsed time has reached, not
                 // how many loop iterations have run -- ffmpeg is told a
                 // constant `-framerate fps` for this raw pipe, so every
                 // frame it receives is stamped as exactly 1/fps seconds
                 // regardless of how long it actually took to produce.
-                // Blocking camera ReadSample calls, D2D compositing, and
-                // this unbuffered row-by-row WriteFile below all cost real
-                // time on top of the Sleep -- writing exactly one frame
-                // per loop iteration unconditionally (the previous
-                // approach) silently wrote fewer frames than real seconds
-                // elapsed whenever an iteration ran even slightly over
-                // frameIntervalMs, so the encoded video ended up shorter
-                // than the real recording and played back sped up. Writing
-                // however many slots elapsed time actually calls for here
-                // (usually 1, occasionally more to catch up) keeps the
-                // encoded duration matched to real time, same principle as
-                // `_captureFrameContinuousStream`'s fillTo on the Dart
-                // side.
+                // Writing exactly one frame per loop iteration
+                // unconditionally (the original approach) silently wrote
+                // fewer frames than real seconds elapsed whenever an
+                // iteration ran even slightly over frameIntervalMs, so the
+                // encoded video ended up shorter than the real recording
+                // and played back sped up. Writing however many slots
+                // elapsed time actually calls for here (usually 1,
+                // occasionally more to catch up, capped -- see above)
+                // keeps the encoded duration matched to real time, same
+                // principle as `_captureFrameContinuousStream`'s fillTo on
+                // the Dart side.
                 const int64_t elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     Clock::now() - captureStart).count();
-                const int64_t fillTo = elapsedMs * fps / 1000;
+                const int64_t fillTo = (std::min)(
+                    elapsedMs * fps / 1000, framesWritten + kMaxCatchUpFramesPerIteration);
                 bool writeOk = true;
                 for (int64_t slot = framesWritten; slot < fillTo && writeOk; slot++) {
-                    for (UINT y = 0; y < height && writeOk; y++) {
-                        BYTE* row = (BYTE*)mapped.pData + (size_t)y * mapped.RowPitch;
-                        DWORD written = 0;
-                        if (!WriteFile(writePipe, row, width * 4, &written, nullptr)) writeOk = false;
+                    DWORD written = 0;
+                    if (!WriteFile(writePipe, frameBuf.data(), (DWORD)frameBuf.size(), &written, nullptr) ||
+                        written != frameBuf.size()) {
+                        writeOk = false;
                     }
                 }
-                context->Unmap(staging.Get(), 0);
                 if (!writeOk) {
                     SetError(L"Writing to the encoder's pipe failed -- it may have exited");
                     break;
