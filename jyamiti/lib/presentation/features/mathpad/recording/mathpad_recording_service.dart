@@ -1934,7 +1934,17 @@ class MathPadRecordingService extends ChangeNotifier {
           if (_continuousStreamProcess == null && !_continuousStreamProcessExited) {
             // First frame -- fixes the pipe's dimensions for the whole
             // recording (a raw-video pipe can't change size mid-stream).
-            await _startContinuousStreamEncoder(capturedWidth, capturedHeight);
+            try {
+              await _startContinuousStreamEncoder(capturedWidth, capturedHeight);
+            } catch (_) {
+              // A genuine spawn failure (e.g. ffmpeg missing/unreadable) --
+              // give up on this recording's encoder for good rather than
+              // retrying every single tick for the rest of the recording.
+              // Without this, the outer catch below swallows the
+              // exception without setting the flag, and the check above
+              // stays true forever.
+              _continuousStreamProcessExited = true;
+            }
           }
           if (capturedWidth == _continuousStreamWidth &&
               capturedHeight == _continuousStreamHeight) {
