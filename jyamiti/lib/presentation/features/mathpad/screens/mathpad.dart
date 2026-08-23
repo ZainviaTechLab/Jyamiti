@@ -11019,6 +11019,16 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                     'fast as no camera, best on a '
                                     'higher-performance machine',
                               ),
+                              (
+                                value: CameraEncodeMode.externalCompositor,
+                                label: 'External (Newest)',
+                                description:
+                                    'Same as On Canvas, but captured and '
+                                    'encoded entirely outside the app -- no '
+                                    'drawing lag, always finishes instantly. '
+                                    'Records the whole app window, least '
+                                    'tested option',
+                              ),
                             ],
                           ),
                           _recordingSettingsSubmenu<RecordingPipelineMode>(

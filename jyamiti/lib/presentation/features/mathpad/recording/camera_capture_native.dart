@@ -286,3 +286,116 @@ class NativeAudioCapture {
     _loadAudioBindings().destroy(_handle);
   }
 }
+
+// ─── Native "external compositor" (external_compositor.cpp) ────────────
+// Same DLL, same handle-based C ABI shape as the camera/audio bindings
+// above -- see external_compositor.cpp's file-level doc comment for why
+// this exists: capturing this app's OWN window (Windows Graphics
+// Capture), optionally compositing a live camera feed on top (Direct2D),
+// and encoding the result (a piped ffmpeg process) all happen in this
+// separate native module/thread, entirely outside Flutter's own
+// rendering pipeline -- unlike CameraEncodeMode.onCanvas, which does the
+// same live-compositing idea but ON Flutter's UI thread (confirmed via
+// real testing to cause drawing lag/stutter).
+typedef _CompositorStartNative = ffi.Int64 Function(
+    ffi.Pointer<ffi2.Utf16> cameraDeviceName, ffi.Pointer<ffi2.Utf16> outputPath, ffi.Int32 fps);
+typedef _CompositorStartDart = int Function(
+    ffi.Pointer<ffi2.Utf16> cameraDeviceName, ffi.Pointer<ffi2.Utf16> outputPath, int fps);
+
+class _NativeCompositorBindings {
+  _NativeCompositorBindings(ffi.DynamicLibrary lib)
+      : start = lib.lookupFunction<_CompositorStartNative, _CompositorStartDart>(
+            'jyamiti_compositor_start'),
+        stop = lib.lookupFunction<_HandleToIntNative, _HandleToIntDart>('jyamiti_compositor_stop'),
+        lastError = lib.lookupFunction<_LastErrorNative, _LastErrorDart>(
+            'jyamiti_compositor_last_error'),
+        destroy =
+            lib.lookupFunction<_DestroyNative, _DestroyDart>('jyamiti_compositor_destroy');
+
+  final _CompositorStartDart start;
+  final _HandleToIntDart stop;
+  final _LastErrorDart lastError;
+  final _DestroyDart destroy;
+}
+
+_NativeCompositorBindings? _compositorBindings;
+
+_NativeCompositorBindings _loadCompositorBindings() {
+  final _NativeCompositorBindings? existing = _compositorBindings;
+  if (existing != null) return existing;
+  final String exeDir = File(Platform.resolvedExecutable).parent.path;
+  final ffi.DynamicLibrary lib =
+      ffi.DynamicLibrary.open(p.join(exeDir, 'jyamiti_camera.dll'));
+  final _NativeCompositorBindings loaded = _NativeCompositorBindings(lib);
+  _compositorBindings = loaded;
+  return loaded;
+}
+
+/// Thin Dart wrapper around one native external-compositor session --
+/// see `external_compositor.cpp`'s doc comment for the full explanation.
+/// Unlike [NativeCameraCapture]/[NativeAudioCapture], this has no
+/// first-frame-ready polling surface -- it's a fire-and-forget capture+
+/// composite+encode session with no separate offset to measure (there's
+/// only ever one stream here, camera baked directly into it if present,
+/// so there's nothing to synchronize after the fact).
+class NativeExternalCompositor {
+  NativeExternalCompositor._(this._handle);
+
+  final int _handle;
+  bool _destroyed = false;
+
+  /// Starts capturing this app's own window (found internally by the
+  /// native module -- no HWND needs to be passed from Dart), optionally
+  /// compositing [cameraDeviceName]'s live feed on top (pass an empty
+  /// string for window-capture-only, no camera), encoding continuously
+  /// to [outputPath] at [fps].
+  static NativeExternalCompositor start({
+    required String cameraDeviceName,
+    required String outputPath,
+    required int fps,
+  }) {
+    final _NativeCompositorBindings bindings = _loadCompositorBindings();
+    final ffi.Pointer<ffi2.Utf16> nativeCameraName = cameraDeviceName.toNativeUtf16();
+    final ffi.Pointer<ffi2.Utf16> nativeOutput = outputPath.toNativeUtf16();
+    try {
+      final int handle = bindings.start(nativeCameraName, nativeOutput, fps);
+      if (handle == 0) {
+        throw MathPadNativeCameraException(
+          'The native compositor module rejected the request (invalid output path).',
+        );
+      }
+      return NativeExternalCompositor._(handle);
+    } finally {
+      ffi2.calloc.free(nativeCameraName);
+      ffi2.calloc.free(nativeOutput);
+    }
+  }
+
+  /// Stops capture, finalizes the video file, and blocks (see
+  /// [NativeCameraCapture.stop]'s doc comment -- same synchronous-FFI-call
+  /// tradeoff applies here) until fully done. Returns false if
+  /// finalizing failed (output file may be missing/corrupt, e.g. the
+  /// app's own window couldn't be found or the encoder process died).
+  bool stop() => _loadCompositorBindings().stop(_handle) != 0;
+
+  /// The most recent failure message from the native module, if any.
+  String? get lastError {
+    final ffi.Pointer<ffi2.Utf16> buffer = ffi2.calloc<ffi.Uint16>(512).cast<ffi2.Utf16>();
+    try {
+      final int ok = _loadCompositorBindings().lastError(_handle, buffer, 512);
+      if (ok == 0) return null;
+      final String message = ffi2.Utf16Pointer(buffer).toDartString();
+      return message.isEmpty ? null : message;
+    } finally {
+      ffi2.calloc.free(buffer);
+    }
+  }
+
+  /// Releases native resources for this handle. Must be called exactly
+  /// once, after [stop] has returned.
+  void dispose() {
+    if (_destroyed) return;
+    _destroyed = true;
+    _loadCompositorBindings().destroy(_handle);
+  }
+}

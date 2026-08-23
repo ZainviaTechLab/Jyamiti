@@ -265,6 +265,31 @@ enum CameraEncodeMode {
   /// live capture/encode cost throughout the recording in exchange for
   /// an instant finish.
   onCanvas,
+
+  /// The real fix for [onCanvas]'s one real cost: a native module
+  /// (`external_compositor.cpp`) captures this app's own window via the
+  /// Windows Graphics Capture API (the same mechanism OBS's modern
+  /// window-capture source uses -- content DWM has ALREADY composited
+  /// for display, no extra work asked of Flutter itself), optionally
+  /// composites a live camera feed on top (Direct2D), and encodes the
+  /// result (a continuously-running, piped ffmpeg process) -- all in a
+  /// separate native process/thread, entirely outside Flutter's own
+  /// rendering pipeline. `start()` doesn't drive Flutter's normal frame
+  /// capture AT ALL for this mode (no `_captureFrame`, no PNG files, no
+  /// segment-sealing, `recordingPipelineMode` is ignored) -- the native
+  /// module handles literally all of the video side by itself; only
+  /// audio still records the normal way, muxed in once encoding stops.
+  /// Benefit: `onCanvas`'s live-camera-preview idea WITHOUT its
+  /// drawing-lag cost, confirmed via real testing -- compositing and
+  /// encoding genuinely never touch Flutter's UI/raster thread, so
+  /// drawing stays exactly as smooth as a plain recording. Also finishes
+  /// essentially instantly, same as [onCanvas].
+  /// Cost: a newer, least-tested path of the four -- and captures this
+  /// app's FULL top-level window (whatever WGC sees on screen), not
+  /// precisely cropped to just the canvas capture area the other three
+  /// options use, so the recording may include surrounding UI chrome
+  /// the others wouldn't.
+  externalCompositor,
 }
 
 /// How captured canvas frames get turned into the final video --
@@ -1004,6 +1029,7 @@ class MathPadRecordingService extends ChangeNotifier {
   // decided.
   RecordingPipelineMode _activeRecordingPipelineMode = RecordingPipelineMode.snapshotBased;
   Process? _continuousStreamProcess;
+  bool _continuousStreamProcessExited = false;
   int _continuousStreamWidth = 0;
   int _continuousStreamHeight = 0;
   String? _continuousStreamOutputPath;
@@ -1016,15 +1042,8 @@ class MathPadRecordingService extends ChangeNotifier {
   bool _continuousStreamCaptureInFlight = false;
   String? _capturedContinuousStreamOutputPath;
   double _capturedContinuousStreamDurationSeconds = 0.0;
-  // Set the instant the encoder process is confirmed gone for any
-  // reason (failed to spawn, or its stdin pipe died mid-recording) --
-  // once true, `_captureFrameContinuousStream` stops trying entirely for
-  // the rest of this recording, rather than either endlessly respawning
-  // a new doomed process or repeatedly writing to a dead pipe. Found via
-  // real testing: an unhandled write-to-closed-pipe failure, repeating
-  // on every capture tick for the rest of the recording, was enough to
-  // make the whole app -- including the Stop button -- stop responding.
-  bool _continuousStreamFailed = false;
+  RecordingPipelineMode _capturedActiveRecordingPipelineMode =
+      RecordingPipelineMode.snapshotBased;
 
   // ─── Camera capture (optional, additive -- see the class doc above) ────
   // Entirely separate from everything above: its own ffmpeg process
@@ -1043,6 +1062,15 @@ class MathPadRecordingService extends ChangeNotifier {
   // just ones with `includeCamera: true` (audio-vs-canvas sync matters
   // regardless of whether a camera is involved at all).
   NativeAudioCapture? _nativeAudio;
+  // Set instead of the separate-camera-stream AND Flutter-side capture
+  // machinery entirely when `cameraEncodeMode` is
+  // [CameraEncodeMode.externalCompositor] -- see that enum value's doc
+  // comment. Handles the whole video side (window capture, optional
+  // camera overlay, encode) by itself; audio still records the normal
+  // way alongside it and gets muxed in once this stops.
+  NativeExternalCompositor? _externalCompositor;
+  String? _capturedExternalCompositorOutputPath;
+  double _capturedExternalCompositorDurationSeconds = 0.0;
 
   MathPadRecordingState _state = MathPadRecordingState.idle;
   MathPadRecordingState get state => _state;
@@ -1185,6 +1213,9 @@ class MathPadRecordingService extends ChangeNotifier {
     try {
       process.stdin.writeln('q');
       await process.stdin.flush();
+    } catch (_) {}
+    try {
+      await process.stdin.close();
     } catch (_) {}
     try {
       await process.exitCode.timeout(const Duration(seconds: 5));
@@ -1340,12 +1371,17 @@ class MathPadRecordingService extends ChangeNotifier {
     _cameraEnabled = false;
     _cameraProcess = null;
     _nativeCamera = null;
-    // `CameraEncodeMode.onCanvas` never spawns a separate camera stream at
-    // all -- see its doc comment. The UI (via `isOnCanvasCameraActive`)
-    // handles showing a live preview inside the capture area itself
-    // instead; this whole block simply has nothing to do for that mode.
+    _externalCompositor = null;
+    // Neither `CameraEncodeMode.onCanvas` nor `.externalCompositor` ever
+    // spawns a separate camera stream -- see their doc comments. Camera
+    // compositing for `onCanvas` is handled entirely by the UI (via
+    // `isOnCanvasCameraActive`); for `externalCompositor`, by the native
+    // module itself (started further below) -- this whole block simply
+    // has nothing to do for either mode.
     final bool includeSeparateCameraStream =
-        includeCamera && cameraEncodeMode != CameraEncodeMode.onCanvas;
+        includeCamera &&
+        cameraEncodeMode != CameraEncodeMode.onCanvas &&
+        cameraEncodeMode != CameraEncodeMode.externalCompositor;
     // Only the ffmpeg path exists on macOS -- the native module is a
     // Windows-only Media Foundation DLL (see `CameraSyncMethod`'s doc
     // comment), so macOS always behaves as if `ffmpegEstimate` were
@@ -1432,6 +1468,7 @@ class MathPadRecordingService extends ChangeNotifier {
           // this process's lifetime to the app's so a hard-kill can't
           // orphan it holding the webcam locked.
           _tieProcessLifetimeToApp(_cameraProcess!.pid);
+          _cameraProcess!.stdin.done.catchError((_) {});
 
           // IMPORTANT: We must consume stdout and stderr, otherwise the OS
           // pipe buffer fills up with ffmpeg's continuous status output and
@@ -1468,6 +1505,32 @@ class MathPadRecordingService extends ChangeNotifier {
         await _stopCameraCapture();
         _cameraEnabled = false;
         onCameraWarning?.call('Could not start the camera -- recording without it.');
+      }
+    } else if (cameraEncodeMode == CameraEncodeMode.externalCompositor) {
+      // Runs regardless of `includeCamera` -- this mode's native module
+      // handles the ENTIRE video side (window capture, plus an optional
+      // camera overlay), not just the camera, so it always starts here.
+      // See `CameraEncodeMode.externalCompositor`'s doc comment.
+      try {
+        final String? device = includeCamera ? await _detectCameraDeviceName() : null;
+        if (includeCamera && device == null) {
+          onCameraWarning?.call('No camera was found -- recording without one.');
+        }
+        _externalCompositor = NativeExternalCompositor.start(
+          cameraDeviceName: device ?? '',
+          outputPath: p.join(sessionDir.path, 'compositor_output.mp4'),
+          fps: _encodeFpsFor(frameRateMode),
+        );
+        _cameraEnabled = device != null;
+      } catch (e) {
+        _externalCompositor?.dispose();
+        _externalCompositor = null;
+        _cameraEnabled = false;
+        onCameraWarning?.call(
+          includeCamera
+              ? 'Could not start recording with the camera -- try Standard or Live instead.'
+              : 'Could not start the external compositor -- try Standard or Live instead.',
+        );
       }
     }
 
@@ -1516,9 +1579,11 @@ class MathPadRecordingService extends ChangeNotifier {
       } catch (e) {
         await _stopCameraCapture();
         _stopNativeCameraCapture();
-        if (await sessionDir.exists()) {
-          await sessionDir.delete(recursive: true);
-        }
+        try {
+          if (await sessionDir.exists()) {
+            await sessionDir.delete(recursive: true);
+          }
+        } catch (_) {}
         throw MathPadRecordingException('Could not start audio recording: $e');
       }
       // Doesn't block `start()`, same reasoning as
@@ -1563,9 +1628,11 @@ class MathPadRecordingService extends ChangeNotifier {
       } catch (e) {
         await _stopCameraCapture();
         _stopNativeCameraCapture();
-        if (await sessionDir.exists()) {
-          await sessionDir.delete(recursive: true);
-        }
+        try {
+          if (await sessionDir.exists()) {
+            await sessionDir.delete(recursive: true);
+          }
+        } catch (_) {}
         throw MathPadRecordingException('Could not start audio recording: $e');
       }
       // `_audioRecorder.start()` resolving is the earliest confirmation
@@ -1607,12 +1674,12 @@ class MathPadRecordingService extends ChangeNotifier {
     _activeRecordingPipelineMode =
         pipelineCameraConflict ? RecordingPipelineMode.snapshotBased : recordingPipelineMode;
     _continuousStreamProcess = null;
+    _continuousStreamProcessExited = false;
     _continuousStreamWidth = 0;
     _continuousStreamHeight = 0;
     _continuousStreamOutputPath = null;
     _lastContinuousStreamFrameBytes = null;
     _continuousStreamFrameCount = 0;
-    _continuousStreamFailed = false;
 
     _sessionDir = sessionDir;
     _canvasKey = canvasKey;
@@ -1694,6 +1761,16 @@ class MathPadRecordingService extends ChangeNotifier {
     // sharing any of the snapshot-based logic/state below.
     if (_activeRecordingPipelineMode == RecordingPipelineMode.continuousStream) {
       await _captureFrameContinuousStream();
+      _emitElapsedTick();
+      return;
+    }
+
+    // `CameraEncodeMode.externalCompositor` doesn't use Flutter's own
+    // frame capture AT ALL -- the native module handles the entire video
+    // side itself (see that enum value's doc comment). This just keeps
+    // `elapsed`/the recording-badge timer ticking; nothing else in this
+    // function has any work to do for this mode.
+    if (_activeCameraEncodeMode == CameraEncodeMode.externalCompositor) {
       _emitElapsedTick();
       return;
     }
@@ -1833,11 +1910,6 @@ class MathPadRecordingService extends ChangeNotifier {
   /// can never cross-contaminate each other's state.
   Future<void> _captureFrameContinuousStream() async {
     if (_continuousStreamCaptureInFlight || _startedAt == null) return;
-    // Once the encoder is confirmed gone (failed to spawn, or its pipe
-    // died mid-recording -- see `_continuousStreamFailed`'s doc comment),
-    // stop trying entirely for the rest of this recording rather than
-    // endlessly respawning a new doomed process.
-    if (_continuousStreamFailed) return;
     final int fillTo =
         (DateTime.now().difference(_startedAt!).inMilliseconds *
                     _activeEncodeFps /
@@ -1859,14 +1931,10 @@ class MathPadRecordingService extends ChangeNotifier {
         final int capturedHeight = image.height;
         image.dispose();
         if (bytes != null) {
-          if (_continuousStreamProcess == null && !_continuousStreamFailed) {
+          if (_continuousStreamProcess == null && !_continuousStreamProcessExited) {
             // First frame -- fixes the pipe's dimensions for the whole
             // recording (a raw-video pipe can't change size mid-stream).
-            try {
-              await _startContinuousStreamEncoder(capturedWidth, capturedHeight);
-            } catch (_) {
-              _continuousStreamFailed = true;
-            }
+            await _startContinuousStreamEncoder(capturedWidth, capturedHeight);
           }
           if (capturedWidth == _continuousStreamWidth &&
               capturedHeight == _continuousStreamHeight) {
@@ -1882,7 +1950,7 @@ class MathPadRecordingService extends ChangeNotifier {
 
       final Uint8List? rawBytes = _lastContinuousStreamFrameBytes;
       final Process? process = _continuousStreamProcess;
-      if (rawBytes != null && process != null) {
+      if (rawBytes != null && process != null && !_continuousStreamProcessExited) {
         // Every due tick needs a frame WRITTEN, unlike the snapshot
         // path's duration-extension trick -- a raw stream has no
         // metadata channel to say "hold this frame N ticks longer", so
@@ -1891,7 +1959,12 @@ class MathPadRecordingService extends ChangeNotifier {
         // toImage()/rasterize call that produced them.
         final int slotsElapsed = fillTo - _continuousStreamFrameCount;
         for (int i = 0; i < slotsElapsed; i++) {
-          process.stdin.add(rawBytes);
+          try {
+            process.stdin.add(rawBytes);
+          } catch (_) {
+            _continuousStreamProcessExited = true;
+            break;
+          }
         }
         _continuousStreamFrameCount = fillTo;
       }
@@ -1920,14 +1993,6 @@ class MathPadRecordingService extends ChangeNotifier {
       '-video_size', '${width}x$height',
       '-framerate', '$_activeEncodeFps',
       '-i', 'pipe:0',
-      // yuv420p (4:2:0 chroma subsampling) requires both dimensions to
-      // be even -- the captured canvas area's raw pixel size is
-      // whatever the widget happens to render at, which is very often
-      // NOT even in both directions, and libx264 flatly refuses (rather
-      // than rounding) an odd width/height. Confirmed via real testing
-      // to be the exact cause of a "0-byte output, pipe closes
-      // immediately" failure without this -- same issue, and same fix,
-      // as every other encode path in this file already applies.
       '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
       '-c:v', 'libx264',
       '-pix_fmt', 'yuv420p',
@@ -1940,28 +2005,16 @@ class MathPadRecordingService extends ChangeNotifier {
     // process's lifetime to the app's, same as every other ffmpeg
     // process this file spawns.
     _tieProcessLifetimeToApp(process.pid);
+    process.stdin.done.catchError((_) {});
     // Must be consumed or the OS pipe buffer fills and ffmpeg freezes --
     // same reasoning as every other spawned ffmpeg process in this file.
     process.stdout.listen((_) {});
     process.stderr.listen((_) {});
-    // `IOSink.add()` (used to feed frames below) doesn't throw
-    // synchronously on failure -- a write to an already-closed pipe (the
-    // process exited, e.g. hit an encoder error, or was killed) surfaces
-    // asynchronously through `stdin.done` instead. Without a handler
-    // here, that becomes an unhandled exception -- and since
-    // `_captureFrameContinuousStream` would otherwise keep trying to
-    // write on every subsequent capture tick, an unhandled failure like
-    // this repeating many times a second was enough, confirmed via real
-    // testing, to make the whole app -- including the Stop button --
-    // stop responding. This is what lets that first failure be handled
-    // once, cleanly, instead.
-    unawaited(
-      process.stdin.done.then((_) {}, onError: (Object _, StackTrace _) {
-        _continuousStreamFailed = true;
-        _continuousStreamProcess = null;
-      }),
-    );
+    process.exitCode.then((_) {
+      _continuousStreamProcessExited = true;
+    }).catchError((_) {});
     _continuousStreamProcess = process;
+    _continuousStreamProcessExited = false;
     _continuousStreamWidth = width;
     _continuousStreamHeight = height;
     _continuousStreamOutputPath = outPath;
@@ -1979,17 +2032,27 @@ class MathPadRecordingService extends ChangeNotifier {
     final Process? process = _continuousStreamProcess;
     final String? outPath = _continuousStreamOutputPath;
     _continuousStreamProcess = null;
+    _continuousStreamProcessExited = true;
     if (process == null) return null;
     try {
       await process.stdin.flush();
+    } catch (_) {}
+    try {
       await process.stdin.close();
     } catch (_) {}
     try {
-      await process.exitCode.timeout(const Duration(seconds: 10));
+      final int exitCode = await process.exitCode.timeout(const Duration(seconds: 10));
+      if (exitCode != 0) {
+        return null;
+      }
     } catch (_) {
       process.kill(ProcessSignal.sigkill);
+      return null;
     }
-    return outPath;
+    if (outPath != null && await File(outPath).exists() && (await File(outPath).length()) > 0) {
+      return outPath;
+    }
+    return null;
   }
 
   /// Builds a concat-demuxer manifest for exactly [entries] and encodes it
@@ -2349,6 +2412,29 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedContinuousStreamOutputPath = await _stopContinuousStreamEncoder();
     _capturedContinuousStreamDurationSeconds =
         _activeEncodeFps > 0 ? _continuousStreamFrameCount / _activeEncodeFps : 0.0;
+    // No-op (returns null) unless `_activeCameraEncodeMode` was actually
+    // `externalCompositor` for this recording. Blocking, same as the
+    // other two native-module stops above -- the underlying FFI call
+    // waits for the native worker thread (window capture + optional
+    // camera composite + the piped ffmpeg process) to fully finish.
+    if (_externalCompositor != null) {
+      final NativeExternalCompositor compositor = _externalCompositor!;
+      _externalCompositor = null;
+      final String outPath = p.join(_sessionDir!.path, 'compositor_output.mp4');
+      final bool finalizedOk = compositor.stop();
+      final File outFile = File(outPath);
+      _capturedExternalCompositorOutputPath =
+          (finalizedOk && await outFile.exists() && await outFile.length() > 0) ? outPath : null;
+      compositor.dispose();
+    } else {
+      _capturedExternalCompositorOutputPath = null;
+    }
+    // The native module doesn't report its own frame count back to
+    // Dart -- `elapsed` (kept updated every tick even for this mode,
+    // see `_captureFrame`'s early-return branch) is a close enough
+    // proxy for the real video duration, only used for the encode
+    // progress bar's percentage math, never for correctness.
+    _capturedExternalCompositorDurationSeconds = elapsed.inMicroseconds / 1e6;
 
     _capturedConcatEntries = List.of(_concatEntries);
     _capturedSessionDir = _sessionDir;
@@ -2360,6 +2446,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedSealedConcatEntryCount = _sealedConcatEntryCount;
     _capturedSealedTimelineSeconds = _sealedTimelineSeconds;
     _capturedActiveCameraEncodeMode = _activeCameraEncodeMode;
+    _capturedActiveRecordingPipelineMode = _activeRecordingPipelineMode;
     _capturedEncodeFps = _activeEncodeFps;
     _capturedAudioBitrateKbps = _audioKbpsFor(audioBitrateMode);
 
@@ -2383,6 +2470,7 @@ class MathPadRecordingService extends ChangeNotifier {
     _continuousStreamHeight = 0;
     _continuousStreamOutputPath = null;
     _continuousStreamFrameCount = 0;
+    _continuousStreamProcessExited = false;
     _lastDistinctFrameAt = null;
     _audioStartOffsetSeconds = 0.0;
     _cameraStartOffsetSeconds = 0.0;
@@ -2508,18 +2596,6 @@ class MathPadRecordingService extends ChangeNotifier {
       }
     }
     try {
-      // Covers `_continuousStreamFailed` (the encoder never produced a
-      // usable file at all -- see that field's doc comment) as well as
-      // any other way this could end up empty/missing. Nothing to mux --
-      // surface a clear error rather than feeding ffmpeg a 0-byte input.
-      final File rawVideoFile = File(rawVideoPath);
-      if (!await rawVideoFile.exists() || await rawVideoFile.length() == 0) {
-        throw MathPadRecordingException(
-          'Recording failed -- the video encoder stopped working '
-          'partway through. Try the Standard recording pipeline instead.',
-        );
-      }
-
       final Directory outDir = await getRecordingsDir();
       final String outPath =
           p.join(outDir.path, 'MathPad_${DateTime.now().millisecondsSinceEpoch}.mp4');
@@ -2571,8 +2647,14 @@ class MathPadRecordingService extends ChangeNotifier {
       throw MathPadRecordingException('Not waiting for encode.');
     }
 
+    final Directory? sessionDir = _capturedSessionDir;
+    if (sessionDir == null) {
+      _state = MathPadRecordingState.idle;
+      _emit();
+      throw MathPadRecordingException('No active recording session found.');
+    }
+
     final List<_ConcatEntry> concatEntries = _capturedConcatEntries ?? [];
-    final Directory sessionDir = _capturedSessionDir!;
     final bool cameraWasEnabled = _capturedCameraWasEnabled;
     final String? audioPath = _capturedAudioPath;
     final double audioStartOffsetSeconds = _capturedAudioStartOffsetSeconds;
@@ -2583,27 +2665,68 @@ class MathPadRecordingService extends ChangeNotifier {
     _state = MathPadRecordingState.encoding;
     _emit();
 
+    Future<void> cleanup() async {
+      try {
+        if (await sessionDir.exists()) {
+          await sessionDir.delete(recursive: true);
+        }
+      } catch (_) {}
+    }
+
     // `RecordingPipelineMode.continuousStream` recordings never populate
     // `concatEntries` at all (see that mode's doc comment) -- checked
     // and handled FIRST, before the "nothing was captured" guard below
     // (which would otherwise misfire for every continuous-stream
     // recording) and before any of the canvas-manifest/segment/camera-
     // merge machinery further down, none of which this mode uses.
-    final String? continuousStreamOutputPath = _capturedContinuousStreamOutputPath;
-    if (continuousStreamOutputPath != null) {
-      return _finalizeContinuousStreamRecording(
-        rawVideoPath: continuousStreamOutputPath,
-        sessionDir: sessionDir,
-        audioPath: _capturedAudioPath,
-        audioStartOffsetSeconds: _capturedAudioStartOffsetSeconds,
-        audioKbps: _capturedAudioBitrateKbps,
-        totalDurationSeconds: _capturedContinuousStreamDurationSeconds,
-      );
+    if (_capturedActiveRecordingPipelineMode == RecordingPipelineMode.continuousStream) {
+      final String? continuousStreamOutputPath = _capturedContinuousStreamOutputPath;
+      if (continuousStreamOutputPath != null &&
+          await File(continuousStreamOutputPath).exists() &&
+          (await File(continuousStreamOutputPath).length()) > 0) {
+        return _finalizeContinuousStreamRecording(
+          rawVideoPath: continuousStreamOutputPath,
+          sessionDir: sessionDir,
+          audioPath: _capturedAudioPath,
+          audioStartOffsetSeconds: _capturedAudioStartOffsetSeconds,
+          audioKbps: _capturedAudioBitrateKbps,
+          totalDurationSeconds: _capturedContinuousStreamDurationSeconds,
+        );
+      } else {
+        await cleanup();
+        _state = MathPadRecordingState.idle;
+        _emit();
+        throw MathPadRecordingException(
+          'Continuous stream recording failed -- no video frames were captured.',
+        );
+      }
     }
 
-    Future<void> cleanup() async {
-      if (await sessionDir.exists()) {
-        await sessionDir.delete(recursive: true);
+    // `CameraEncodeMode.externalCompositor` -- same "check first, before
+    // the concatEntries guard below (which would otherwise misfire,
+    // since this mode never populates it either)" reasoning as the
+    // continuousStream branch just above. Reuses the exact same
+    // finalize-mux helper -- both modes hand `encode()` an
+    // already-fully-encoded video with nothing left to do but add audio.
+    if (_capturedActiveCameraEncodeMode == CameraEncodeMode.externalCompositor) {
+      final String? compositorOutputPath = _capturedExternalCompositorOutputPath;
+      if (compositorOutputPath != null) {
+        return _finalizeContinuousStreamRecording(
+          rawVideoPath: compositorOutputPath,
+          sessionDir: sessionDir,
+          audioPath: _capturedAudioPath,
+          audioStartOffsetSeconds: _capturedAudioStartOffsetSeconds,
+          audioKbps: _capturedAudioBitrateKbps,
+          totalDurationSeconds: _capturedExternalCompositorDurationSeconds,
+        );
+      } else {
+        await cleanup();
+        _state = MathPadRecordingState.idle;
+        _emit();
+        throw MathPadRecordingException(
+          'Recording failed -- the external compositor stopped working. '
+          'Try the Standard or Live camera encoding option instead.',
+        );
       }
     }
 
@@ -3028,6 +3151,13 @@ class MathPadRecordingService extends ChangeNotifier {
     _stopNativeCameraCapture();
     await _stopContinuousStreamEncoder();
     _capturedContinuousStreamOutputPath = null;
+    if (_externalCompositor != null) {
+      final NativeExternalCompositor compositor = _externalCompositor!;
+      _externalCompositor = null;
+      compositor.stop();
+      compositor.dispose();
+    }
+    _capturedExternalCompositorOutputPath = null;
     _cameraEnabled = false;
     final Directory? sessionDir = _sessionDir;
     final Directory? capturedSessionDir = _capturedSessionDir;
@@ -3180,13 +3310,17 @@ class MathPadRecordingService extends ChangeNotifier {
     await _audioRecorder.dispose();
     _cameraProcess?.kill(ProcessSignal.sigkill);
     _continuousStreamProcess?.kill(ProcessSignal.sigkill);
-    // No hard-kill equivalent needed for either native capture path here
-    // -- both are in-process worker threads, not separate processes, so
-    // neither can be orphaned the way `_cameraProcess` can (see
-    // `_stopNativeCameraCapture`'s doc comment). Still worth releasing
-    // their native handles if somehow still around at this point.
+    // No hard-kill equivalent needed for any of the three native capture
+    // paths here -- all are in-process worker threads, not separate
+    // Dart-visible processes, so none can be orphaned the way
+    // `_cameraProcess` can (see `_stopNativeCameraCapture`'s doc
+    // comment). The external compositor's OWN internal ffmpeg process
+    // has its own independent Job Object protection, set up natively in
+    // external_compositor.cpp, for exactly this scenario. Still worth
+    // releasing all three native handles here if somehow still around.
     _nativeCamera?.dispose();
     _nativeAudio?.dispose();
+    _externalCompositor?.dispose();
   }
 }
 
