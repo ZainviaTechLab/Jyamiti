@@ -31,6 +31,7 @@ import '../instruments/graph_widget.dart';
 import '../instruments/media_embed_models.dart';
 import '../instruments/media_embed_widget.dart';
 import '../recording/mathpad_recording_service.dart';
+import '../recording/mathpad_web_recording_service.dart';
 import '../asset_library/models/asset_library_models.dart';
 import '../asset_library/models/mathpad_template_models.dart';
 import '../asset_library/services/mathpad_asset_library_storage_service.dart';
@@ -1523,6 +1524,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // `MathPadRecordingService.start`'s `includeCamera`.
   bool _recordWithCamera = false;
 
+  // ─── Board + Voice Recording (Web) ─────────────────────────────────────
+  // Entirely separate from MathPadRecordingService above -- see
+  // MathPadWebRecordingService's doc comment for why. Created lazily, only
+  // ever touched behind `kIsWeb` checks (see `_startWebRecording`/the
+  // toolbar button), so this stays a harmless, never-instantiated field on
+  // every other platform.
+  MathPadWebRecordingService? _webRecordingService;
+  bool _webRecording = false;
+  // Guards against a double-tap on the button starting/stopping this twice
+  // while the previous async call (the getDisplayMedia permission prompt
+  // in particular can take a while) is still in flight -- desktop
+  // recording doesn't need this same guard since its richer state machine
+  // (MathPadRecordingState) already prevents it structurally.
+  bool _webRecordingBusy = false;
+
   // A small pixel ratio, not the device's real one -- this is only ever
   // displayed at ~120px tall in the Math Pad Library's pages sidebar, so a
   // full-resolution capture would just be wasted disk space and encode
@@ -1958,6 +1974,73 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       );
     } on MathPadRecordingException catch (e) {
       if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 10),
+        ),
+      );
+    }
+  }
+
+  /// Web counterpart to `_startRecording` -- see
+  /// `MathPadWebRecordingService`'s doc comment for the whole picture
+  /// (getDisplayMedia's picker prompt is unavoidable here; expect it to
+  /// show up the instant this is called, not after some other warm-up).
+  Future<void> _startWebRecording() async {
+    if (_webRecordingBusy || _webRecording) return;
+    setState(() => _webRecordingBusy = true);
+    final MathPadWebRecordingService service =
+        _webRecordingService ??= MathPadWebRecordingService();
+    try {
+      await service.start();
+      if (!mounted) return;
+      setState(() {
+        _webRecording = true;
+        _webRecordingBusy = false;
+      });
+    } on MathPadWebRecordingException catch (e) {
+      if (!mounted) return;
+      setState(() => _webRecordingBusy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  /// Web counterpart to `_stopRecording` -- unlike the desktop path, this
+  /// has no separate "encoding" phase to show a spinner for (`MediaRecorder`
+  /// finishes essentially as soon as `stop()` is called) and, for this
+  /// first slice, no destination other than an immediate browser download
+  /// -- see `MathPadWebRecordingService.stopAndDownload`'s doc comment.
+  Future<void> _stopWebRecording() async {
+    if (_webRecordingBusy || !_webRecording) return;
+    final MathPadWebRecordingService? service = _webRecordingService;
+    if (service == null) return;
+    setState(() => _webRecordingBusy = true);
+    try {
+      await service.stopAndDownload(
+        filenameWithoutExtension: 'MathPad_${DateTime.now().millisecondsSinceEpoch}',
+      );
+      if (!mounted) return;
+      setState(() {
+        _webRecording = false;
+        _webRecordingBusy = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Recording downloaded.'),
+          backgroundColor: Color(0xFF10B981),
+          duration: Duration(seconds: 5),
+        ),
+      );
+    } on MathPadWebRecordingException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _webRecording = false;
+        _webRecordingBusy = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(e.message),
@@ -11130,6 +11213,37 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             ],
                           ),
                         ],
+                      ),
+                  ],
+
+                  // Web's own, much simpler recording button -- entirely
+                  // separate feature/service from the one above (see
+                  // MathPadWebRecordingService's doc comment). No camera
+                  // overlay, no settings menu, no "encoding" phase to show a
+                  // spinner for -- just start/stop, with stop immediately
+                  // triggering a browser download of the result.
+                  if (kIsWeb) ...[
+                    if (_webRecording)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.stop_circle_rounded,
+                          size: 20,
+                          color: Colors.redAccent,
+                        ),
+                        onPressed: _webRecordingBusy ? null : _stopWebRecording,
+                        tooltip: 'Stop Recording',
+                      )
+                    else
+                      IconButton(
+                        icon: Icon(
+                          Icons.fiber_manual_record_rounded,
+                          size: 20,
+                          color: _webRecordingBusy ? _textColor60 : _textColor,
+                        ),
+                        onPressed: _webRecordingBusy ? null : _startWebRecording,
+                        tooltip:
+                            'Start Recording -- your browser will ask you to '
+                            'choose a window/tab/screen to share',
                       ),
                   ],
 
