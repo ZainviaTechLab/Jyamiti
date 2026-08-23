@@ -42,6 +42,7 @@
 #include <avrt.h>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -350,6 +351,11 @@ private:
         } catch (...) { SetError(L"StartCapture failed"); }
 
         const DWORD frameIntervalMs = (DWORD)(1000 / (std::max)(1, fps));
+        // Wall-clock-driven frame accounting -- see the write loop below
+        // for why this exists (fixes recordings playing back sped up).
+        using Clock = std::chrono::steady_clock;
+        const auto captureStart = Clock::now();
+        int64_t framesWritten = 0;
         while (!shouldStop_.load(std::memory_order_relaxed)) {
             MSG msg;
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -431,17 +437,41 @@ private:
             context->CopyResource(staging.Get(), outputTex.Get());
             D3D11_MAPPED_SUBRESOURCE mapped;
             if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+                // How many frame slots real elapsed time has reached, not
+                // how many loop iterations have run -- ffmpeg is told a
+                // constant `-framerate fps` for this raw pipe, so every
+                // frame it receives is stamped as exactly 1/fps seconds
+                // regardless of how long it actually took to produce.
+                // Blocking camera ReadSample calls, D2D compositing, and
+                // this unbuffered row-by-row WriteFile below all cost real
+                // time on top of the Sleep -- writing exactly one frame
+                // per loop iteration unconditionally (the previous
+                // approach) silently wrote fewer frames than real seconds
+                // elapsed whenever an iteration ran even slightly over
+                // frameIntervalMs, so the encoded video ended up shorter
+                // than the real recording and played back sped up. Writing
+                // however many slots elapsed time actually calls for here
+                // (usually 1, occasionally more to catch up) keeps the
+                // encoded duration matched to real time, same principle as
+                // `_captureFrameContinuousStream`'s fillTo on the Dart
+                // side.
+                const int64_t elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    Clock::now() - captureStart).count();
+                const int64_t fillTo = elapsedMs * fps / 1000;
                 bool writeOk = true;
-                for (UINT y = 0; y < height && writeOk; y++) {
-                    BYTE* row = (BYTE*)mapped.pData + (size_t)y * mapped.RowPitch;
-                    DWORD written = 0;
-                    if (!WriteFile(writePipe, row, width * 4, &written, nullptr)) writeOk = false;
+                for (int64_t slot = framesWritten; slot < fillTo && writeOk; slot++) {
+                    for (UINT y = 0; y < height && writeOk; y++) {
+                        BYTE* row = (BYTE*)mapped.pData + (size_t)y * mapped.RowPitch;
+                        DWORD written = 0;
+                        if (!WriteFile(writePipe, row, width * 4, &written, nullptr)) writeOk = false;
+                    }
                 }
                 context->Unmap(staging.Get(), 0);
                 if (!writeOk) {
                     SetError(L"Writing to the encoder's pipe failed -- it may have exited");
                     break;
                 }
+                framesWritten = fillTo;
             }
 
             Sleep(frameIntervalMs);
