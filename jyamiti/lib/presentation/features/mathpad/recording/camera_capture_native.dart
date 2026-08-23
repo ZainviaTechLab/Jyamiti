@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:ffi/ffi.dart' as ffi2;
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:path/path.dart' as p;
 
 // Dart FFI bridge to `jyamiti_camera.dll` -- the native module backing
@@ -351,24 +352,52 @@ _NativeCompositorBindings _loadCompositorBindings() {
   return loaded;
 }
 
+// ─── macOS backend (ExternalCompositor.swift, MainFlutterWindow.swift) ──
+// UNVERIFIED -- written with no Mac/Xcode available to build or run it.
+// See ExternalCompositor.swift's header comment for the full explanation
+// and known risk areas. Uses a FlutterMethodChannel rather than dart:ffi
+// (unlike the Windows backend above) -- a deliberate choice, not an
+// inconsistency; see that same header comment for why.
+//
+// Also NOT currently reachable from the UI at all: MathPadRecordingService
+// .start() still unconditionally throws on any non-Windows platform, so
+// nothing below can actually run yet regardless of whether it's correct.
+const MethodChannel _externalCompositorChannel = MethodChannel(
+  'jyamiti.com/external_compositor',
+);
+
 /// Thin Dart wrapper around one native external-compositor session --
-/// see `external_compositor.cpp`'s doc comment for the full explanation.
-/// Unlike [NativeCameraCapture]/[NativeAudioCapture], this has no
-/// first-frame-ready polling surface -- it's a fire-and-forget capture+
-/// composite+encode session with no separate offset to measure (there's
-/// only ever one stream here, camera baked directly into it if present,
-/// so there's nothing to synchronize after the fact).
+/// see `external_compositor.cpp`'s doc comment (Windows) and
+/// `ExternalCompositor.swift`'s doc comment (macOS, UNVERIFIED) for the
+/// full explanation. Unlike [NativeCameraCapture]/[NativeAudioCapture],
+/// this has no first-frame-ready polling surface -- it's a fire-and-forget
+/// capture+composite+encode session with no separate offset to measure
+/// (there's only ever one stream here, camera baked directly into it if
+/// present, so there's nothing to synchronize after the fact).
+///
+/// Every method here is `async`/returns a `Future` -- even on Windows,
+/// where the underlying FFI calls are actually synchronous -- so callers
+/// have one consistent API regardless of which native backend answers it
+/// (macOS's MethodChannel calls are inherently async; forcing Windows's
+/// synchronous FFI calls into the same Future-returning shape, rather
+/// than giving each platform a different-shaped API, is what lets
+/// `MathPadRecordingService` call this without ever branching on
+/// platform itself).
 class NativeExternalCompositor {
-  NativeExternalCompositor._(this._handle);
+  NativeExternalCompositor._windows(this._handle) : _usesMacOSChannel = false;
+  NativeExternalCompositor._macOS()
+      : _handle = 0,
+        _usesMacOSChannel = true;
 
   final int _handle;
+  final bool _usesMacOSChannel;
   bool _destroyed = false;
 
   /// Starts capturing this app's own window (found internally by the
-  /// native module -- no HWND needs to be passed from Dart), optionally
-  /// compositing [cameraDeviceName]'s live feed on top (pass an empty
-  /// string for window-capture-only, no camera), encoding continuously
-  /// to [outputPath] at [fps].
+  /// native module -- no HWND/NSWindow needs to be passed from Dart),
+  /// optionally compositing [cameraDeviceName]'s live feed on top (pass
+  /// an empty string for window-capture-only, no camera), encoding
+  /// continuously to [outputPath] at [fps].
   ///
   /// [cropRect], if given, is the canvas capture area's rectangle in
   /// physical-pixel window coordinates -- only that sub-region of the
@@ -376,12 +405,30 @@ class NativeExternalCompositor {
   /// of the full window/toolbar. Omit it (or pass null) to capture the
   /// full window, unchanged from before this existed. See [setCropRect]
   /// to update it live after the recording has started.
-  static NativeExternalCompositor start({
+  static Future<NativeExternalCompositor> start({
     required String cameraDeviceName,
     required String outputPath,
     required int fps,
     Rectangle<int>? cropRect,
-  }) {
+  }) async {
+    if (Platform.isMacOS) {
+      final bool? ok = await _externalCompositorChannel.invokeMethod<bool>('start', {
+        'cameraDeviceName': cameraDeviceName,
+        'outputPath': outputPath,
+        'fps': fps,
+        'cropX': cropRect?.left ?? 0,
+        'cropY': cropRect?.top ?? 0,
+        'cropW': cropRect?.width ?? 0,
+        'cropH': cropRect?.height ?? 0,
+      });
+      if (ok != true) {
+        throw MathPadNativeCameraException(
+          'The native compositor module rejected the request.',
+        );
+      }
+      return NativeExternalCompositor._macOS();
+    }
+
     final _NativeCompositorBindings bindings = _loadCompositorBindings();
     final ffi.Pointer<ffi2.Utf16> nativeCameraName = cameraDeviceName.toNativeUtf16();
     final ffi.Pointer<ffi2.Utf16> nativeOutput = outputPath.toNativeUtf16();
@@ -400,7 +447,7 @@ class NativeExternalCompositor {
           'The native compositor module rejected the request (invalid output path).',
         );
       }
-      return NativeExternalCompositor._(handle);
+      return NativeExternalCompositor._windows(handle);
     } finally {
       ffi2.calloc.free(nativeCameraName);
       ffi2.calloc.free(nativeOutput);
@@ -410,12 +457,24 @@ class NativeExternalCompositor {
   /// Updates which sub-rectangle of the captured window gets encoded,
   /// live, mid-recording -- e.g. after the canvas area moves/resizes
   /// (window resize, toolbar dock-side toggle). See
-  /// `ExternalCompositor::SetCrop`'s doc comment (native side) for what
-  /// this does and doesn't affect (the output video's own dimensions are
-  /// fixed at [start], never revisited here). Pass null to fall back to
-  /// capturing the full window.
-  void setCropRect(Rectangle<int>? cropRect) {
+  /// `ExternalCompositor::SetCrop`'s doc comment (native side, both
+  /// platforms) for what this does and doesn't affect (the output
+  /// video's own dimensions are fixed at [start], never revisited here).
+  /// Pass null to fall back to capturing the full window. Fire-and-forget
+  /// is fine for callers -- a dropped/failed crop update just means the
+  /// next tick's update (or the full window, if none ever lands) is used
+  /// instead, never a fatal error.
+  Future<void> setCropRect(Rectangle<int>? cropRect) async {
     if (_destroyed) return;
+    if (_usesMacOSChannel) {
+      await _externalCompositorChannel.invokeMethod<void>('setCrop', {
+        'x': cropRect?.left ?? 0,
+        'y': cropRect?.top ?? 0,
+        'w': cropRect?.width ?? 0,
+        'h': cropRect?.height ?? 0,
+      });
+      return;
+    }
     _loadCompositorBindings().setCrop(
       _handle,
       cropRect?.left ?? 0,
@@ -425,15 +484,23 @@ class NativeExternalCompositor {
     );
   }
 
-  /// Stops capture, finalizes the video file, and blocks (see
-  /// [NativeCameraCapture.stop]'s doc comment -- same synchronous-FFI-call
-  /// tradeoff applies here) until fully done. Returns false if
-  /// finalizing failed (output file may be missing/corrupt, e.g. the
-  /// app's own window couldn't be found or the encoder process died).
-  bool stop() => _loadCompositorBindings().stop(_handle) != 0;
+  /// Stops capture, finalizes the video file, and waits until fully done.
+  /// Returns false if finalizing failed (output file may be
+  /// missing/corrupt, e.g. the app's own window couldn't be found or the
+  /// encoder process died).
+  Future<bool> stop() async {
+    if (_usesMacOSChannel) {
+      final bool? ok = await _externalCompositorChannel.invokeMethod<bool>('stop');
+      return ok ?? false;
+    }
+    return _loadCompositorBindings().stop(_handle) != 0;
+  }
 
   /// The most recent failure message from the native module, if any.
-  String? get lastError {
+  Future<String?> get lastError async {
+    if (_usesMacOSChannel) {
+      return _externalCompositorChannel.invokeMethod<String?>('lastError');
+    }
     final ffi.Pointer<ffi2.Utf16> buffer = ffi2.calloc<ffi.Uint16>(512).cast<ffi2.Utf16>();
     try {
       final int ok = _loadCompositorBindings().lastError(_handle, buffer, 512);
@@ -446,10 +513,14 @@ class NativeExternalCompositor {
   }
 
   /// Releases native resources for this handle. Must be called exactly
-  /// once, after [stop] has returned.
+  /// once, after [stop] has returned. A no-op on macOS -- there's no
+  /// persistent native handle table there the way Windows has one
+  /// (`stop` already fully tears down that session's native state), only
+  /// this Dart-side wrapper needs marking as spent.
   void dispose() {
     if (_destroyed) return;
     _destroyed = true;
+    if (_usesMacOSChannel) return;
     _loadCompositorBindings().destroy(_handle);
   }
 }

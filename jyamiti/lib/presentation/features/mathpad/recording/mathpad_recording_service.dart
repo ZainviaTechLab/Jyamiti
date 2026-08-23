@@ -1586,7 +1586,7 @@ class MathPadRecordingService extends ChangeNotifier {
         // `NativeExternalCompositor.start`'s for what a null rect falls
         // back to (unchanged full-window capture) if this measurement
         // ever fails for some reason.
-        _externalCompositor = NativeExternalCompositor.start(
+        _externalCompositor = await NativeExternalCompositor.start(
           cameraDeviceName: device ?? '',
           outputPath: p.join(sessionDir.path, 'compositor_output.mp4'),
           fps: _encodeFpsFor(frameRateMode),
@@ -1889,7 +1889,9 @@ class MathPadRecordingService extends ChangeNotifier {
     // else in this function has any work to do for this mode.
     if (_activeCameraEncodeMode == CameraEncodeMode.externalCompositor) {
       if (_activeExternalCompositorCropToCanvas) {
-        _externalCompositor?.setCropRect(_measureCanvasCropRect(_canvasKey));
+        // Fire-and-forget -- see `setCropRect`'s doc comment for why a
+        // dropped/failed update here is harmless.
+        unawaited(_externalCompositor?.setCropRect(_measureCanvasCropRect(_canvasKey)));
       }
       _emitElapsedTick();
       return;
@@ -2543,15 +2545,16 @@ class MathPadRecordingService extends ChangeNotifier {
     _capturedContinuousStreamDurationSeconds =
         _activeEncodeFps > 0 ? _continuousStreamFrameCount / _activeEncodeFps : 0.0;
     // No-op (returns null) unless `_activeCameraEncodeMode` was actually
-    // `externalCompositor` for this recording. Blocking, same as the
-    // other two native-module stops above -- the underlying FFI call
-    // waits for the native worker thread (window capture + optional
-    // camera composite + the piped ffmpeg process) to fully finish.
+    // `externalCompositor` for this recording. Awaited -- on Windows this
+    // just resolves the already-synchronous FFI call's wrapped Future; on
+    // macOS it genuinely waits on the MethodChannel round-trip for the
+    // native worker (window capture + optional camera composite + the
+    // piped ffmpeg process) to fully finish.
     if (_externalCompositor != null) {
       final NativeExternalCompositor compositor = _externalCompositor!;
       _externalCompositor = null;
       final String outPath = p.join(_sessionDir!.path, 'compositor_output.mp4');
-      final bool finalizedOk = compositor.stop();
+      final bool finalizedOk = await compositor.stop();
       final File outFile = File(outPath);
       _capturedExternalCompositorOutputPath =
           (finalizedOk && await outFile.exists() && await outFile.length() > 0) ? outPath : null;
@@ -3284,7 +3287,7 @@ class MathPadRecordingService extends ChangeNotifier {
     if (_externalCompositor != null) {
       final NativeExternalCompositor compositor = _externalCompositor!;
       _externalCompositor = null;
-      compositor.stop();
+      await compositor.stop();
       compositor.dispose();
     }
     _capturedExternalCompositorOutputPath = null;
