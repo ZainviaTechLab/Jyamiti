@@ -1,5 +1,6 @@
 import 'dart:ffi' as ffi;
 import 'dart:io';
+import 'dart:math';
 
 import 'package:ffi/ffi.dart' as ffi2;
 import 'package:path/path.dart' as p;
@@ -298,14 +299,32 @@ class NativeAudioCapture {
 // same live-compositing idea but ON Flutter's UI thread (confirmed via
 // real testing to cause drawing lag/stutter).
 typedef _CompositorStartNative = ffi.Int64 Function(
-    ffi.Pointer<ffi2.Utf16> cameraDeviceName, ffi.Pointer<ffi2.Utf16> outputPath, ffi.Int32 fps);
+    ffi.Pointer<ffi2.Utf16> cameraDeviceName,
+    ffi.Pointer<ffi2.Utf16> outputPath,
+    ffi.Int32 fps,
+    ffi.Int32 cropX,
+    ffi.Int32 cropY,
+    ffi.Int32 cropW,
+    ffi.Int32 cropH);
 typedef _CompositorStartDart = int Function(
-    ffi.Pointer<ffi2.Utf16> cameraDeviceName, ffi.Pointer<ffi2.Utf16> outputPath, int fps);
+    ffi.Pointer<ffi2.Utf16> cameraDeviceName,
+    ffi.Pointer<ffi2.Utf16> outputPath,
+    int fps,
+    int cropX,
+    int cropY,
+    int cropW,
+    int cropH);
+
+typedef _CompositorSetCropNative = ffi.Int32 Function(
+    ffi.Int64 handle, ffi.Int32 x, ffi.Int32 y, ffi.Int32 w, ffi.Int32 h);
+typedef _CompositorSetCropDart = int Function(int handle, int x, int y, int w, int h);
 
 class _NativeCompositorBindings {
   _NativeCompositorBindings(ffi.DynamicLibrary lib)
       : start = lib.lookupFunction<_CompositorStartNative, _CompositorStartDart>(
             'jyamiti_compositor_start'),
+        setCrop = lib.lookupFunction<_CompositorSetCropNative, _CompositorSetCropDart>(
+            'jyamiti_compositor_set_crop'),
         stop = lib.lookupFunction<_HandleToIntNative, _HandleToIntDart>('jyamiti_compositor_stop'),
         lastError = lib.lookupFunction<_LastErrorNative, _LastErrorDart>(
             'jyamiti_compositor_last_error'),
@@ -313,6 +332,7 @@ class _NativeCompositorBindings {
             lib.lookupFunction<_DestroyNative, _DestroyDart>('jyamiti_compositor_destroy');
 
   final _CompositorStartDart start;
+  final _CompositorSetCropDart setCrop;
   final _HandleToIntDart stop;
   final _LastErrorDart lastError;
   final _DestroyDart destroy;
@@ -349,16 +369,32 @@ class NativeExternalCompositor {
   /// compositing [cameraDeviceName]'s live feed on top (pass an empty
   /// string for window-capture-only, no camera), encoding continuously
   /// to [outputPath] at [fps].
+  ///
+  /// [cropRect], if given, is the canvas capture area's rectangle in
+  /// physical-pixel window coordinates -- only that sub-region of the
+  /// captured window gets encoded (at that rectangle's own size) instead
+  /// of the full window/toolbar. Omit it (or pass null) to capture the
+  /// full window, unchanged from before this existed. See [setCropRect]
+  /// to update it live after the recording has started.
   static NativeExternalCompositor start({
     required String cameraDeviceName,
     required String outputPath,
     required int fps,
+    Rectangle<int>? cropRect,
   }) {
     final _NativeCompositorBindings bindings = _loadCompositorBindings();
     final ffi.Pointer<ffi2.Utf16> nativeCameraName = cameraDeviceName.toNativeUtf16();
     final ffi.Pointer<ffi2.Utf16> nativeOutput = outputPath.toNativeUtf16();
     try {
-      final int handle = bindings.start(nativeCameraName, nativeOutput, fps);
+      final int handle = bindings.start(
+        nativeCameraName,
+        nativeOutput,
+        fps,
+        cropRect?.left ?? 0,
+        cropRect?.top ?? 0,
+        cropRect?.width ?? 0,
+        cropRect?.height ?? 0,
+      );
       if (handle == 0) {
         throw MathPadNativeCameraException(
           'The native compositor module rejected the request (invalid output path).',
@@ -369,6 +405,24 @@ class NativeExternalCompositor {
       ffi2.calloc.free(nativeCameraName);
       ffi2.calloc.free(nativeOutput);
     }
+  }
+
+  /// Updates which sub-rectangle of the captured window gets encoded,
+  /// live, mid-recording -- e.g. after the canvas area moves/resizes
+  /// (window resize, toolbar dock-side toggle). See
+  /// `ExternalCompositor::SetCrop`'s doc comment (native side) for what
+  /// this does and doesn't affect (the output video's own dimensions are
+  /// fixed at [start], never revisited here). Pass null to fall back to
+  /// capturing the full window.
+  void setCropRect(Rectangle<int>? cropRect) {
+    if (_destroyed) return;
+    _loadCompositorBindings().setCrop(
+      _handle,
+      cropRect?.left ?? 0,
+      cropRect?.top ?? 0,
+      cropRect?.width ?? 0,
+      cropRect?.height ?? 0,
+    );
   }
 
   /// Stops capture, finalizes the video file, and blocks (see

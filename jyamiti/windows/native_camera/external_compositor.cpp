@@ -120,10 +120,25 @@ IDirect3DDevice CreateWinRTDevice(ComPtr<ID3D11Device>& d3dDevice) {
 
 class ExternalCompositor {
 public:
-    void Start(std::wstring cameraDeviceName, std::wstring outputPath, int fps) {
+    // [cropW]/[cropH] <= 0 means "no crop -- capture the full window",
+    // the original/default behavior. When a crop is given, its width/
+    // height (not the full window's) become the FIXED output/pipe
+    // dimensions for the whole recording -- ffmpeg's raw-video pipe can't
+    // change size mid-stream, same constraint the Dart-side continuousStream
+    // pipeline already documents. [cropX]/[cropY]/[cropW]/[cropH] are also
+    // seeded into the live-updatable crop state below, so `Run()`'s
+    // per-frame source rect (which only ever reads that live state, never
+    // these constructor args again) starts correct even before any
+    // `SetCrop` call arrives.
+    void Start(std::wstring cameraDeviceName, std::wstring outputPath, int fps,
+               int32_t cropX, int32_t cropY, int32_t cropW, int32_t cropH) {
+        cropX_.store(cropX, std::memory_order_relaxed);
+        cropY_.store(cropY, std::memory_order_relaxed);
+        cropW_.store(cropW, std::memory_order_relaxed);
+        cropH_.store(cropH, std::memory_order_relaxed);
         worker_ = std::thread([this, cameraDeviceName = std::move(cameraDeviceName),
-                                outputPath = std::move(outputPath), fps]() {
-            Run(cameraDeviceName, outputPath, fps);
+                                outputPath = std::move(outputPath), fps, cropW, cropH]() {
+            Run(cameraDeviceName, outputPath, fps, cropW, cropH);
         });
     }
 
@@ -138,7 +153,28 @@ public:
         return lastError_;
     }
 
+    // Updates which sub-rectangle of the captured window gets encoded,
+    // live, mid-recording -- e.g. the tutor resizes the window, or
+    // toggles the toolbar's dock side, changing where the canvas sits.
+    // Deliberately does NOT touch the output/pipe dimensions (fixed once
+    // at `Start()` -- see its doc comment) -- a later rect with a
+    // different aspect ratio just gets stretched to fit that fixed size
+    // rather than resizing the encoder, which would require restarting
+    // the whole ffmpeg process. [w]/[h] <= 0 reverts to full-window
+    // capture (still cropped/scaled into whatever the fixed output
+    // dimensions ended up being).
+    void SetCrop(int32_t x, int32_t y, int32_t w, int32_t h) {
+        cropX_.store(x, std::memory_order_relaxed);
+        cropY_.store(y, std::memory_order_relaxed);
+        cropW_.store(w, std::memory_order_relaxed);
+        cropH_.store(h, std::memory_order_relaxed);
+    }
+
 private:
+    std::atomic<int32_t> cropX_{0};
+    std::atomic<int32_t> cropY_{0};
+    std::atomic<int32_t> cropW_{0};
+    std::atomic<int32_t> cropH_{0};
     void SetError(const wchar_t* what, HRESULT hr) {
         wchar_t buf[256];
         swprintf_s(buf, L"%s (hr=0x%08lx)", what, hr);
@@ -150,7 +186,8 @@ private:
         lastError_ = what;
     }
 
-    void Run(const std::wstring& cameraDeviceName, const std::wstring& outputPath, int fps) {
+    void Run(const std::wstring& cameraDeviceName, const std::wstring& outputPath, int fps,
+             int32_t initialCropW, int32_t initialCropH) {
         init_apartment(apartment_type::single_threaded);
 
         // Real-time priority for this thread -- same reasoning as
@@ -162,6 +199,22 @@ private:
 
         HWND targetWindow = FindOwnWindow();
         if (!targetWindow) { SetError(L"Could not find the app's own window"); return; }
+
+        // This window has a standard title bar/borders (WS_OVERLAPPEDWINDOW
+        // -- see win32_window.cpp), but WGC's window capture includes that
+        // whole non-client area, not just Flutter's own rendered content.
+        // The crop rect Dart sends is measured in Flutter's own coordinate
+        // space, which starts at the CLIENT area's origin (below/inside the
+        // title bar/borders) -- so it needs this offset added before it
+        // means anything in the captured image's coordinate space. Computed
+        // once, since a window's non-client geometry doesn't change while
+        // it's open (aside from maximizing, which this app doesn't use).
+        RECT windowRect = {};
+        POINT clientOrigin = { 0, 0 };
+        GetWindowRect(targetWindow, &windowRect);
+        ClientToScreen(targetWindow, &clientOrigin);
+        const int32_t clientOffsetX = clientOrigin.x - windowRect.left;
+        const int32_t clientOffsetY = clientOrigin.y - windowRect.top;
 
         ComPtr<ID3D11Device> d3dDevice;
         IDirect3DDevice winrtDevice = CreateWinRTDevice(d3dDevice);
@@ -188,8 +241,19 @@ private:
         } catch (...) { hr = E_FAIL; }
         if (FAILED(hr) || !item) { SetError(L"CreateForWindow failed", hr); return; }
 
-        UINT32 width = (std::max)(2, ((int)item.Size().Width / 2) * 2);
-        UINT32 height = (std::max)(2, ((int)item.Size().Height / 2) * 2);
+        const UINT32 fullWidth = (UINT32)item.Size().Width;
+        const UINT32 fullHeight = (UINT32)item.Size().Height;
+        // Output/pipe dimensions are fixed for the whole recording, chosen
+        // once here -- from the initial crop rect if one was given
+        // (encodes just that region's size instead of the full window),
+        // otherwise from the full captured window like before this crop
+        // feature existed. See `Start()`'s doc comment for why live
+        // `SetCrop` updates never revisit this decision.
+        const bool haveInitialCrop = initialCropW > 0 && initialCropH > 0;
+        UINT32 width = (std::max)(
+            2, ((haveInitialCrop ? initialCropW : (int)fullWidth) / 2) * 2);
+        UINT32 height = (std::max)(
+            2, ((haveInitialCrop ? initialCropH : (int)fullHeight) / 2) * 2);
 
         Direct3D11CaptureFramePool framePool{ nullptr };
         GraphicsCaptureSession session{ nullptr };
@@ -434,10 +498,47 @@ private:
                         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
                     ComPtr<ID2D1Bitmap1> winBitmap;
                     if (SUCCEEDED(d2dContext->CreateBitmapFromDxgiSurface(winSurface.Get(), &wbp, &winBitmap))) {
+                        // Live crop -- lets the tutor's canvas area (rather
+                        // than the whole app window/toolbar) be what
+                        // actually gets encoded, updated on the fly via
+                        // SetCrop() so a window resize or a toolbar
+                        // dock-side change mid-recording is picked up
+                        // without needing to restart the encoder. Queried
+                        // against THIS frame's own live texture size
+                        // (rather than the size captured once at Run()
+                        // startup) so a stale bound can't be requested if
+                        // the window has resized since then.
+                        D3D11_TEXTURE2D_DESC winDesc;
+                        tex->GetDesc(&winDesc);
+                        const int32_t liveCropW = cropW_.load(std::memory_order_relaxed);
+                        const int32_t liveCropH = cropH_.load(std::memory_order_relaxed);
+                        D2D1_RECT_F srcRect;
+                        if (liveCropW > 0 && liveCropH > 0) {
+                            // + clientOffsetX/Y -- see where those are
+                            // computed above for why (Dart measures this
+                            // rect in client-area-relative coordinates,
+                            // this image includes the title bar/borders
+                            // too).
+                            const int32_t liveCropX =
+                                cropX_.load(std::memory_order_relaxed) + clientOffsetX;
+                            const int32_t liveCropY =
+                                cropY_.load(std::memory_order_relaxed) + clientOffsetY;
+                            const float x0 = (std::max)(0.0f, (std::min)((float)liveCropX, (float)winDesc.Width));
+                            const float y0 = (std::max)(0.0f, (std::min)((float)liveCropY, (float)winDesc.Height));
+                            const float x1 = (std::max)(
+                                x0, (std::min)((float)(liveCropX + liveCropW), (float)winDesc.Width));
+                            const float y1 = (std::max)(
+                                y0, (std::min)((float)(liveCropY + liveCropH), (float)winDesc.Height));
+                            srcRect = D2D1::RectF(x0, y0, x1, y1);
+                        } else {
+                            srcRect = D2D1::RectF(0, 0, (float)winDesc.Width, (float)winDesc.Height);
+                        }
+
                         d2dContext->SetTarget(outputBitmap.Get());
                         d2dContext->BeginDraw();
                         d2dContext->Clear(D2D1::ColorF(0, 0, 0));
-                        d2dContext->DrawBitmap(winBitmap.Get(), D2D1::RectF(0, 0, (float)width, (float)height));
+                        d2dContext->DrawBitmap(winBitmap.Get(), D2D1::RectF(0, 0, (float)width, (float)height),
+                            1.0f, D2D1_INTERPOLATION_MODE_LINEAR, srcRect);
 
                         if (haveCamFrame) {
                             D2D1_BITMAP_PROPERTIES camProps = D2D1::BitmapProperties(
@@ -450,14 +551,15 @@ private:
                                 // camera-overlay path in this app uses --
                                 // crop=ih:ih, scale=240:240, white
                                 // border, top-right 24px inset.
-                                float cropSize = (float)(std::min)(camW, camH);
-                                float cropX = (camW - cropSize) / 2.0f;
-                                D2D1_RECT_F srcRect = D2D1::RectF(cropX, 0, cropX + cropSize, cropSize);
+                                float camCropSize = (float)(std::min)(camW, camH);
+                                float camCropX = (camW - camCropSize) / 2.0f;
+                                D2D1_RECT_F camSrcRect =
+                                    D2D1::RectF(camCropX, 0, camCropX + camCropSize, camCropSize);
                                 float boxSize = 240.0f, inset = 24.0f;
                                 D2D1_RECT_F destRect = D2D1::RectF(
                                     width - inset - boxSize, inset, width - inset, inset + boxSize);
                                 d2dContext->DrawBitmap(camBitmap.Get(), destRect, 1.0f,
-                                    D2D1_INTERPOLATION_MODE_LINEAR, srcRect);
+                                    D2D1_INTERPOLATION_MODE_LINEAR, camSrcRect);
                                 d2dContext->DrawRectangle(destRect, whiteBrush.Get(), 4.0f);
                             }
                         }
@@ -555,17 +657,38 @@ std::atomic<int64_t> g_nextCompositorHandle{1};
 extern "C" {
 
 // [cameraDeviceName] may be an empty string -- window capture only, no
-// camera overlay.
+// camera overlay. [cropW]/[cropH] <= 0 means "capture the full window",
+// the original/pre-crop-feature behavior -- otherwise (cropX, cropY,
+// cropW, cropH) is the sub-rectangle (in the captured window's own
+// pixel space) to encode instead, and its width/height become the
+// output video's fixed dimensions for the whole recording. See
+// `ExternalCompositor::Start`'s doc comment for the full reasoning, and
+// `jyamiti_compositor_set_crop` for updating this live afterwards.
 __declspec(dllexport) int64_t jyamiti_compositor_start(
-    const wchar_t* cameraDeviceName, const wchar_t* outputPath, int32_t fps) {
+    const wchar_t* cameraDeviceName, const wchar_t* outputPath, int32_t fps,
+    int32_t cropX, int32_t cropY, int32_t cropW, int32_t cropH) {
     if (!outputPath) return 0;
     auto compositor = std::make_unique<ExternalCompositor>();
-    compositor->Start(cameraDeviceName ? cameraDeviceName : L"", outputPath, fps > 0 ? fps : 15);
+    compositor->Start(cameraDeviceName ? cameraDeviceName : L"", outputPath, fps > 0 ? fps : 15,
+        cropX, cropY, cropW, cropH);
 
     int64_t handle = g_nextCompositorHandle.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(g_compositorHandlesMutex);
     g_compositorHandles[handle] = std::move(compositor);
     return handle;
+}
+
+// Updates the live crop rect mid-recording -- see
+// `ExternalCompositor::SetCrop`'s doc comment. Returns 0 if [handle] is
+// unknown, 1 otherwise (this can't itself fail -- it just stores the new
+// values for the next frame to pick up).
+__declspec(dllexport) int32_t jyamiti_compositor_set_crop(
+    int64_t handle, int32_t x, int32_t y, int32_t w, int32_t h) {
+    std::lock_guard<std::mutex> lock(g_compositorHandlesMutex);
+    auto it = g_compositorHandles.find(handle);
+    if (it == g_compositorHandles.end()) return 0;
+    it->second->SetCrop(x, y, w, h);
+    return 1;
 }
 
 __declspec(dllexport) int32_t jyamiti_compositor_stop(int64_t handle) {

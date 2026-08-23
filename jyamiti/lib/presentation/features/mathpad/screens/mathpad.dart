@@ -11026,8 +11026,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                     'Same as On Canvas, but captured and '
                                     'encoded entirely outside the app -- no '
                                     'drawing lag, always finishes instantly. '
-                                    'Records the whole app window, least '
-                                    'tested option',
+                                    'Cropped to the canvas like the other '
+                                    'options, except the pull-handle/quick '
+                                    'tools may still show in full-screen '
+                                    'mode -- least tested option',
                               ),
                             ],
                           ),

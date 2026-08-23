@@ -284,11 +284,21 @@ enum CameraEncodeMode {
   /// encoding genuinely never touch Flutter's UI/raster thread, so
   /// drawing stays exactly as smooth as a plain recording. Also finishes
   /// essentially instantly, same as [onCanvas].
-  /// Cost: a newer, least-tested path of the four -- and captures this
-  /// app's FULL top-level window (whatever WGC sees on screen), not
-  /// precisely cropped to just the canvas capture area the other three
-  /// options use, so the recording may include surrounding UI chrome
-  /// the others wouldn't.
+  /// Cropped to just the canvas area (measured live off the canvas's
+  /// `RenderRepaintBoundary`, re-sent every tick so a window resize or a
+  /// toolbar dock-side change mid-recording is picked up -- see
+  /// `_measureCanvasCropRect`), matching what the other three options
+  /// capture. One known gap in that cropping specifically: in this app's
+  /// OWN full-screen mode (`_isFullScreenMode` in mathpad.dart, distinct
+  /// from OS/window full screen), the canvas already fills the entire
+  /// window and the toolbar/pull-handle/quick-tools become overlays
+  /// painted ON TOP of that same canvas rect rather than beside it -- a
+  /// rectangle crop can only exclude UI outside its bounds, not UI drawn
+  /// on top of it, so those specific overlays can still show up in this
+  /// mode's recordings there even though the other three options (which
+  /// capture the actual Flutter widget subtree, not raw window pixels)
+  /// never include them regardless of layout.
+  /// Cost: still a newer, least-tested path of the four.
   externalCompositor,
 }
 
@@ -1516,10 +1526,17 @@ class MathPadRecordingService extends ChangeNotifier {
         if (includeCamera && device == null) {
           onCameraWarning?.call('No camera was found -- recording without one.');
         }
+        // Crops the native capture down to just the canvas area instead
+        // of the full app window/toolbar -- see `_measureCanvasCropRect`'s
+        // doc comment for the coordinate-space reasoning, and
+        // `NativeExternalCompositor.start`'s for what a null rect falls
+        // back to (unchanged full-window capture) if this measurement
+        // ever fails for some reason.
         _externalCompositor = NativeExternalCompositor.start(
           cameraDeviceName: device ?? '',
           outputPath: p.join(sessionDir.path, 'compositor_output.mp4'),
           fps: _encodeFpsFor(frameRateMode),
+          cropRect: _measureCanvasCropRect(canvasKey),
         );
         _cameraEnabled = device != null;
       } catch (e) {
@@ -1750,6 +1767,45 @@ class MathPadRecordingService extends ChangeNotifier {
         .floor();
   }
 
+  /// [canvasKey]'s `RenderRepaintBoundary` rect in physical pixels,
+  /// relative to the window's CLIENT area origin -- what
+  /// `CameraEncodeMode.externalCompositor`'s native module needs to crop
+  /// its Windows-Graphics-Capture window image down to just the canvas
+  /// (see `NativeExternalCompositor.start`'s doc comment). The native
+  /// side adds its own separate correction for the window's title
+  /// bar/border (WGC captures those too; this rect deliberately doesn't
+  /// need to know about them -- see `external_compositor.cpp`'s
+  /// `clientOffsetX`/`clientOffsetY`).
+  ///
+  /// Uses the RAW device pixel ratio, not the [_maxCapturePixelRatio]
+  /// clamp the snapshot-based capture paths use -- that clamp only
+  /// exists to bound Flutter's OWN `toImage()`/rasterize cost, which is
+  /// irrelevant here: this rect only ever crops pixels the native module
+  /// already captured independently via WGC, at the window's real native
+  /// resolution.
+  ///
+  /// Returns null if the canvas isn't currently laid out/attached (e.g.
+  /// mid-navigation) -- callers treat that the same as "no crop given",
+  /// falling back to the full window rather than failing the recording.
+  Rectangle<int>? _measureCanvasCropRect(GlobalKey? canvasKey) {
+    final RenderObject? renderObject = canvasKey?.currentContext?.findRenderObject();
+    if (renderObject is! RenderRepaintBoundary || !renderObject.attached) {
+      return null;
+    }
+    final double dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
+    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
+    final Size size = renderObject.size;
+    final int width = (size.width * dpr).round();
+    final int height = (size.height * dpr).round();
+    if (width <= 0 || height <= 0) return null;
+    return Rectangle<int>(
+      (topLeft.dx * dpr).round(),
+      (topLeft.dy * dpr).round(),
+      width,
+      height,
+    );
+  }
+
   Future<void> _captureFrame() async {
     if (_sessionDir == null || _startedAt == null) return;
 
@@ -1767,10 +1823,15 @@ class MathPadRecordingService extends ChangeNotifier {
 
     // `CameraEncodeMode.externalCompositor` doesn't use Flutter's own
     // frame capture AT ALL -- the native module handles the entire video
-    // side itself (see that enum value's doc comment). This just keeps
-    // `elapsed`/the recording-badge timer ticking; nothing else in this
-    // function has any work to do for this mode.
+    // side itself (see that enum value's doc comment). Just keeps
+    // `elapsed`/the recording-badge timer ticking, and re-measures/
+    // forwards the canvas crop rect at this same modest tick rate so a
+    // window resize or toolbar dock-side change mid-recording is picked
+    // up live (see `_measureCanvasCropRect` and
+    // `NativeExternalCompositor.setCropRect`'s doc comments) -- nothing
+    // else in this function has any work to do for this mode.
     if (_activeCameraEncodeMode == CameraEncodeMode.externalCompositor) {
+      _externalCompositor?.setCropRect(_measureCanvasCropRect(_canvasKey));
       _emitElapsedTick();
       return;
     }
