@@ -7,6 +7,8 @@
 // pulling package:web/dart:js_interop into the Windows/macOS/Linux/
 // Android/iOS builds at all.
 
+import 'dart:math';
+
 class MathPadWebRecordingException implements Exception {
   MathPadWebRecordingException(this.message);
   final String message;
@@ -17,7 +19,11 @@ class MathPadWebRecordingException implements Exception {
 class MathPadWebRecordingService {
   bool get isRecording => false;
 
-  Future<void> start({int fps = 30}) async {
+  Future<void> start({
+    int fps = 30,
+    bool includeCamera = false,
+    Rectangle<int>? cropRect,
+  }) async {
     throw MathPadWebRecordingException(
       'Web recording is not available on this platform.',
     );
@@ -26,4 +32,6 @@ class MathPadWebRecordingService {
   Future<void> stopAndDownload({String filenameWithoutExtension = 'MathPad_recording'}) async {
     throw MathPadWebRecordingException('Not currently recording.');
   }
+
+  void cancelSync() {}
 }

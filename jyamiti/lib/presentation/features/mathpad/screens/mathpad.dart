@@ -1924,6 +1924,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _frictionController?.dispose();
 
     _recordingService.removeListener(_onRecordingServiceChanged);
+    // Releases any still-active screen/camera share if the tutor
+    // navigates away mid-recording -- see `cancelSync`'s doc comment for
+    // why this deliberately abandons the recording rather than trying to
+    // salvage a download from here. A no-op if nothing was recording (and
+    // a genuine no-op on every non-web platform -- see the stub).
+    _webRecordingService?.cancelSync();
     _laserFadeTimer?.cancel();
     _selectionGlowTimer?.cancel();
     super.dispose();
@@ -1984,17 +1990,48 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
   }
 
+  /// [canvasCaptureKey]'s `RenderRepaintBoundary` rect in physical pixels
+  /// -- passed to `MathPadWebRecordingService.start` as a CANDIDATE crop
+  /// rect, only actually applied if the shared source turns out to be a
+  /// browser tab (see that service's doc comment, "CROP-TO-CANVAS", for
+  /// why this can't be trusted blindly). Same technique the Windows
+  /// compositor's `_measureCanvasCropRect` uses -- raw devicePixelRatio,
+  /// not `_maxCapturePixelRatio` (that clamp exists only to bound
+  /// Flutter's own `toImage()` cost, irrelevant here since this never
+  /// goes through Flutter's rasterizer at all).
+  Rectangle<int>? _measureWebCropRect() {
+    final RenderObject? renderObject = _canvasCaptureKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderRepaintBoundary || !renderObject.attached) {
+      return null;
+    }
+    final double dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
+    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
+    final Size size = renderObject.size;
+    final int width = (size.width * dpr).round();
+    final int height = (size.height * dpr).round();
+    if (width <= 0 || height <= 0) return null;
+    return Rectangle<int>(
+      (topLeft.dx * dpr).round(),
+      (topLeft.dy * dpr).round(),
+      width,
+      height,
+    );
+  }
+
   /// Web counterpart to `_startRecording` -- see
   /// `MathPadWebRecordingService`'s doc comment for the whole picture
   /// (getDisplayMedia's picker prompt is unavoidable here; expect it to
   /// show up the instant this is called, not after some other warm-up).
-  Future<void> _startWebRecording() async {
+  Future<void> _startWebRecording({required bool includeCamera}) async {
     if (_webRecordingBusy || _webRecording) return;
     setState(() => _webRecordingBusy = true);
     final MathPadWebRecordingService service =
         _webRecordingService ??= MathPadWebRecordingService();
     try {
-      await service.start();
+      await service.start(
+        includeCamera: includeCamera,
+        cropRect: _measureWebCropRect(),
+      );
       if (!mounted) return;
       setState(() {
         _webRecording = true;
@@ -10902,6 +10939,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             iconColor: _textColor,
                             label: 'Without Camera',
                             description: 'Record canvas & microphone audio only',
+                            onSelected: (includeCamera) =>
+                                _startRecording(includeCamera: includeCamera),
                           ),
                           _recordingOptionMenuItem(
                             value: true,
@@ -10909,6 +10948,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             iconColor: const Color(0xFF6366F1),
                             label: 'With Camera',
                             description: 'Record canvas, audio & webcam overlay PIP',
+                            onSelected: (includeCamera) =>
+                                _startRecording(includeCamera: includeCamera),
                           ),
                           const Divider(height: 1),
                           MenuItemButton(
@@ -11218,9 +11259,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
                   // Web's own, much simpler recording button -- entirely
                   // separate feature/service from the one above (see
-                  // MathPadWebRecordingService's doc comment). No camera
-                  // overlay, no settings menu, no "encoding" phase to show a
-                  // spinner for -- just start/stop, with stop immediately
+                  // MathPadWebRecordingService's doc comment). No settings
+                  // menu, no "encoding" phase to show a spinner for -- just
+                  // a camera choice (mirroring the desktop button's own
+                  // idle-state menu) then start/stop, with stop immediately
                   // triggering a browser download of the result.
                   if (kIsWeb) ...[
                     if (_webRecording)
@@ -11234,16 +11276,49 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                         tooltip: 'Stop Recording',
                       )
                     else
-                      IconButton(
-                        icon: Icon(
-                          Icons.fiber_manual_record_rounded,
-                          size: 20,
-                          color: _webRecordingBusy ? _textColor60 : _textColor,
+                      MenuAnchor(
+                        style: MenuStyle(
+                          backgroundColor: WidgetStatePropertyAll(
+                            isDark ? _darkPanelColor : Colors.white,
+                          ),
                         ),
-                        onPressed: _webRecordingBusy ? null : _startWebRecording,
-                        tooltip:
-                            'Start Recording -- your browser will ask you to '
-                            'choose a window/tab/screen to share',
+                        builder: (context, controller, child) {
+                          return IconButton(
+                            icon: Icon(
+                              Icons.fiber_manual_record_rounded,
+                              size: 20,
+                              color: _webRecordingBusy ? _textColor60 : _textColor,
+                            ),
+                            tooltip:
+                                'Start Recording -- your browser will ask '
+                                'you to choose a window/tab/screen to share',
+                            onPressed: _webRecordingBusy
+                                ? null
+                                : () => controller.isOpen
+                                    ? controller.close()
+                                    : controller.open(),
+                          );
+                        },
+                        menuChildren: [
+                          _recordingOptionMenuItem(
+                            value: false,
+                            icon: Icons.videocam_off_rounded,
+                            iconColor: _textColor,
+                            label: 'Without Camera',
+                            description: 'Record the shared screen only',
+                            onSelected: (includeCamera) =>
+                                _startWebRecording(includeCamera: includeCamera),
+                          ),
+                          _recordingOptionMenuItem(
+                            value: true,
+                            icon: Icons.videocam_rounded,
+                            iconColor: const Color(0xFF6366F1),
+                            label: 'With Camera',
+                            description: 'Adds a webcam overlay PIP box',
+                            onSelected: (includeCamera) =>
+                                _startWebRecording(includeCamera: includeCamera),
+                          ),
+                        ],
                       ),
                   ],
 
@@ -11306,9 +11381,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     required Color iconColor,
     required String label,
     required String description,
+    required void Function(bool includeCamera) onSelected,
   }) {
     return MenuItemButton(
-      onPressed: () => _startRecording(includeCamera: value),
+      onPressed: () => onSelected(value),
       leadingIcon: Icon(icon, size: 18, color: iconColor),
       child: SizedBox(
         width: 240,
