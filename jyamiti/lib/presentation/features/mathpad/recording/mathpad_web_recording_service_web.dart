@@ -11,8 +11,42 @@
 // web, so this couldn't be added there even as a branch. See the design
 // discussion that led here for the full reasoning.
 //
-// Now has camera overlay + best-effort crop-to-canvas, added after the
-// first slice (screen-only, no crop) was confirmed actually recording.
+// OFF-THREAD PATH -- added after a real test surfaced the exact drawing
+// stutter expected from main-thread compositing (see "MAIN-THREAD
+// FALLBACK" below). Uses Insertable Streams (`MediaStreamTrackProcessor`
+// turning each video track into a transferable `ReadableStream<VideoFrame>`)
+// + an `OffscreenCanvas` composited inside web/mathpad_recording_worker.js
+// (plain JavaScript, NOT Dart -- Flutter's web build only compiles
+// lib/main.dart; anything under web/ is copied as a static asset with ZERO
+// compile-time checking, meaning that file has had LESS verification than
+// anything else in this app). The worker posts back one composited
+// `ImageBitmap` per frame; this file's job on the main thread shrinks to
+// just `drawImage`-ing whatever bitmap arrives onto the same
+// `<canvas>` -- captureStream()/MediaRecorder (both main-thread-only APIs)
+// are unchanged, still driven off that canvas exactly as before, so that
+// already-compile-verified pipeline is reused as-is.
+//
+// `MediaStreamTrackProcessor` has meaningfully narrower browser support
+// than getDisplayMedia/MediaRecorder themselves (primarily Chromium).
+// Rather than an up-front feature check (there's no sufficiently simple,
+// reliable way to ask that directly via package:web/dart:js_interop's
+// stable surface), `start()` just always ATTEMPTS the off-thread path
+// and falls back to the ORIGINAL main-thread `requestAnimationFrame`
+// draw loop (kept unchanged) on any failure -- constructing a
+// nonexistent JS class throws a perfectly catchable exception either
+// way, and this also catches setup failures on browsers that DO have
+// the API but fail for some other reason, not just ones that lack it
+// outright. `MediaStreamTrackProcessor` itself isn't in package:web's
+// typed bindings either (a newer WebCodecs-adjacent API) -- declared
+// here via small custom extension types, same technique
+// `_DisplaySurfaceSettings` already used for `displaySurface`.
+//
+// MAIN-THREAD FALLBACK -- the original, first-shipped compositing path,
+// unchanged: a plain `requestAnimationFrame`-driven canvas draw loop that
+// runs on the SAME thread Flutter's own web rendering and pointer/stylus
+// handling run on. A tutor testing this confirmed the exact drawing
+// stutter that predicts -- the same class of problem `onCanvas` had on
+// desktop, just reached via `<canvas>`/rAF instead of a widget rebuild.
 //
 // UNAVOIDABLE, BY BROWSER DESIGN -- not a bug to fix later:
 //   `getDisplayMedia()` always shows the browser's native "choose a
@@ -20,46 +54,28 @@
 //   skip it. `preferCurrentTab: true` (Chromium) biases the picker's
 //   default toward this tab but the user can still pick something else.
 //
-// CROP-TO-CANVAS -- how it stays honest about the risk flagged in the
-// design discussion (there's no way to know for certain the user picked
-// "this tab", so cropping blind risks a nonsensical result): after
-// getDisplayMedia resolves, the video track's own `getSettings()` is
-// inspected for `displaySurface` -- a real (if not universally supported)
-// signal for WHAT KIND of source was shared ('browser' | 'window' |
-// 'monitor'). The crop rect [mathpad.dart] measured off the canvas
-// widget's own RenderBox (same technique the Windows compositor's
-// `_measureCanvasCropRect` uses, converted to physical pixels via
-// devicePixelRatio) is only ever applied when displaySurface == 'browser'
-// -- otherwise this silently falls back to capturing the full shared
-// source, same as before crop existed, rather than risk cropping the
-// wrong region of a window/monitor capture where the coordinate spaces
-// don't correspond. `displaySurface` isn't in package:web's typed
-// MediaTrackSettings bindings (a newer/optional spec field) -- read via a
-// small custom extension type (_DisplaySurfaceSettings) instead, wrapped
-// in a try/catch that treats any failure the same as "don't crop".
+// CROP-TO-CANVAS -- after getDisplayMedia resolves, the video track's own
+// `getSettings()` is inspected for `displaySurface` ('browser' | 'window'
+// | 'monitor') -- the crop rect mathpad.dart measured off the canvas
+// widget's own RenderBox is only ever applied when it's 'browser',
+// otherwise this falls back to capturing the full shared source, since
+// there's no way to know for certain the user picked "this tab" and a
+// wrong-source crop would be nonsensical.
 //
 // CAMERA OVERLAY -- same PIP spec every other camera-overlay path in this
 // app uses (crop to square, scale to 240x240, white border, top-right
-// 24px inset), drawn via Canvas2D's 9-argument `drawImage` for the
-// crop+scale in one call. Best-effort, same "camera trouble costs the
-// camera, never the recording" philosophy as every native platform here --
-// a getUserMedia failure just means no camera box, not a failed recording.
+// 24px inset). Best-effort -- a getUserMedia failure only ever costs the
+// overlay, never the recording, matching every native platform here.
 //
-// NOT YET OFF-THREAD -- the real reason the other three platforms'
-// compositors are smooth is that capture+composite+encode never touch the
-// thread the UI/interaction runs on. The genuine web equivalent (Insertable
-// Streams: `MediaStreamTrackProcessor` + `OffscreenCanvas` in a Worker) has
-// meaningfully narrower browser support (primarily Chromium) -- shipping
-// something that silently doesn't work on a chunk of browsers felt worse
-// than being upfront that this still accepts main-thread compositing.
-//
-// UNVERIFIED IN THE BROWSER, but more verifiable than the native modules:
-// `flutter build web` actually compile-checks this file's `package:web`
-// API usage -- real compiler errors were found and fixed while writing
-// this (both in the original slice and in this camera/crop addition).
-// What compiling clean can't confirm: actual runtime behavior (permission
-// flow, whether `displaySurface` really reports what's expected, codec
-// support, frame timing) -- that needs a real browser, which I don't have.
+// UNVERIFIED IN THE BROWSER, but more verifiable than the native modules
+// (for the Dart parts): `flutter build web` compile-checks this file's
+// `package:web` API usage, and real compiler errors were found and fixed
+// while writing every part of this, including the off-thread path's
+// speculative bindings. What compiling clean can't confirm: actual
+// runtime behavior (whether MediaStreamTrackProcessor really behaves as
+// expected, whether the worker script -- entirely unchecked -- actually
+// runs, permission flow, codec support, frame timing) -- that needs a
+// real browser, which I don't have.
 // ============================================================================
 
 import 'dart:async';
@@ -83,14 +99,53 @@ extension type _DisplaySurfaceSettings._(JSObject _) implements JSObject {
   external JSString? get displaySurface;
 }
 
+/// `MediaStreamTrackProcessor` (Insertable Streams / WebCodecs-adjacent) --
+/// also not in package:web's typed bindings. `readable` is a
+/// `ReadableStream<VideoFrame>`, but package:web's `ReadableStream` isn't
+/// itself generic, so it's just typed as `web.ReadableStream` here (the
+/// worker script treats whatever it reads as a VideoFrame regardless).
+extension type _MediaStreamTrackProcessor._(JSObject _) implements JSObject {
+  external factory _MediaStreamTrackProcessor(_TrackProcessorInit init);
+  external web.ReadableStream get readable;
+}
+
+extension type _TrackProcessorInit._(JSObject _) implements JSObject {
+  external factory _TrackProcessorInit({web.MediaStreamTrack track});
+}
+
+extension type _WorkerStartMessage._(JSObject _) implements JSObject {
+  external factory _WorkerStartMessage({
+    String type,
+    web.ReadableStream screenStream,
+    web.ReadableStream? cameraStream,
+    int outputWidth,
+    int outputHeight,
+    _WorkerCropRect? cropRect,
+  });
+}
+
+extension type _WorkerCropRect._(JSObject _) implements JSObject {
+  external factory _WorkerCropRect({num x, num y, num w, num h});
+}
+
+extension type _WorkerStopMessage._(JSObject _) implements JSObject {
+  external factory _WorkerStopMessage({String type});
+}
+
+extension type _WorkerResponse._(JSObject _) implements JSObject {
+  external String get type;
+  external web.ImageBitmap? get bitmap;
+  external String? get message;
+}
+
 class MathPadWebRecordingService {
   web.MediaStream? _screenStream;
   web.MediaStream? _cameraStream;
   web.HTMLVideoElement? _screenVideo;
   web.HTMLVideoElement? _cameraVideo;
-  web.HTMLCanvasElement? _canvas;
   web.MediaRecorder? _recorder;
   web.MediaStream? _canvasStream;
+  web.Worker? _worker;
   final List<web.Blob> _chunks = [];
   bool _drawLoopActive = false;
   Completer<web.Blob>? _stopCompleter;
@@ -100,13 +155,14 @@ class MathPadWebRecordingService {
   /// Shows the browser's screen/tab/window picker (see this file's header
   /// comment -- unavoidable, every time), optionally starts a camera feed
   /// for the PIP overlay, then starts compositing onto an internal canvas
-  /// and encoding via `MediaRecorder`. [fps] controls both the draw loop's
-  /// target rate and the canvas capture stream's rate.
+  /// and encoding via `MediaRecorder` -- off the main thread via
+  /// [_startOffThread] when the browser supports it, [_startMainThreadFallback]
+  /// otherwise. [fps] controls both the composite rate and the canvas
+  /// capture stream's rate.
   ///
   /// [cropRect], if given, is only actually applied when the shared
   /// source's `displaySurface` reports `'browser'` (see this file's header
-  /// comment for why) -- otherwise the full shared source is captured,
-  /// same as if no crop rect were passed at all.
+  /// comment for why).
   ///
   /// Throws [MathPadWebRecordingException] if the user cancels the picker,
   /// the browser doesn't support the required APIs, or no codec
@@ -119,12 +175,7 @@ class MathPadWebRecordingService {
   }) async {
     if (isRecording) return;
 
-    final web.MediaDevices? mediaDevices = web.window.navigator.mediaDevices;
-    if (mediaDevices == null) {
-      throw MathPadWebRecordingException(
-        'This browser does not support screen recording (no navigator.mediaDevices).',
-      );
-    }
+    final web.MediaDevices mediaDevices = web.window.navigator.mediaDevices;
 
     late web.MediaStream screenStream;
     try {
@@ -141,36 +192,142 @@ class MathPadWebRecordingService {
     }
     _screenStream = screenStream;
 
-    final web.HTMLVideoElement video = web.HTMLVideoElement()
-      ..srcObject = screenStream
-      ..muted = true
-      ..autoplay = true;
-    _screenVideo = video;
-    // Wait for the first frame's real dimensions before sizing the canvas --
-    // `getDisplayMedia` doesn't guarantee metadata is ready synchronously.
-    await video.onLoadedMetadata.first;
-    await video.play().toDart;
-
-    final int fullWidth = video.videoWidth;
-    final int fullHeight = video.videoHeight;
+    final web.MediaStreamTrack screenTrack = screenStream.getVideoTracks().toDart.first;
+    final web.MediaTrackSettings screenSettings = screenTrack.getSettings();
+    final int fullWidth = screenSettings.width.toInt();
+    final int fullHeight = screenSettings.height.toInt();
     if (fullWidth == 0 || fullHeight == 0) {
       throw MathPadWebRecordingException(
         'The shared source reported no video dimensions -- try sharing again.',
       );
     }
 
-    final Rectangle<int>? effectiveCrop = _resolveCropRect(screenStream, cropRect, fullWidth, fullHeight);
+    final Rectangle<int>? effectiveCrop =
+        _resolveCropRect(screenTrack, cropRect, fullWidth, fullHeight);
     final int width = effectiveCrop?.width ?? fullWidth;
     final int height = effectiveCrop?.height ?? fullHeight;
 
+    web.MediaStreamTrack? cameraTrack;
     if (includeCamera) {
-      await _startCamera(mediaDevices);
+      cameraTrack = await _startCamera(mediaDevices);
     }
+
+    // Deliberately no up-front "does this browser support
+    // MediaStreamTrackProcessor" feature check -- there's no
+    // sufficiently-reliable-and-simple way to ask that question directly
+    // via package:web/dart:js_interop's stable API surface, so this just
+    // tries the off-thread path and falls back on ANY failure
+    // (constructing a nonexistent JS class throws a catchable exception
+    // either way). More robust than a separate check could be anyway:
+    // it also catches setup failures on browsers that DO have the API but
+    // fail for some other reason, not just ones that lack it outright.
+    try {
+      await _startOffThread(
+        screenTrack: screenTrack,
+        cameraTrack: cameraTrack,
+        width: width,
+        height: height,
+        effectiveCrop: effectiveCrop,
+        fps: fps,
+      );
+      return;
+    } catch (_) {
+      // Fall through to the main-thread path below -- a worker/
+      // Insertable-Streams setup failure shouldn't lose the recording
+      // entirely when the ordinary path is right there and already
+      // proven to work.
+      _worker?.terminate();
+      _worker = null;
+    }
+
+    await _startMainThreadFallback(
+      width: width,
+      height: height,
+      effectiveCrop: effectiveCrop,
+      fps: fps,
+    );
+  }
+
+  Future<void> _startOffThread({
+    required web.MediaStreamTrack screenTrack,
+    required web.MediaStreamTrack? cameraTrack,
+    required int width,
+    required int height,
+    required Rectangle<int>? effectiveCrop,
+    required int fps,
+  }) async {
+    final web.ReadableStream screenReadable =
+        _MediaStreamTrackProcessor(_TrackProcessorInit(track: screenTrack)).readable;
+    final web.ReadableStream? cameraReadable = cameraTrack != null
+        ? _MediaStreamTrackProcessor(_TrackProcessorInit(track: cameraTrack)).readable
+        : null;
 
     final web.HTMLCanvasElement canvas = web.HTMLCanvasElement()
       ..width = width
       ..height = height;
-    _canvas = canvas;
+    final web.CanvasRenderingContext2D ctx =
+        canvas.getContext('2d') as web.CanvasRenderingContext2D;
+
+    final web.Worker worker = web.Worker('mathpad_recording_worker.js'.toJS);
+    _worker = worker;
+    worker.onmessage = ((web.MessageEvent e) {
+      final _WorkerResponse response = e.data as _WorkerResponse;
+      if (response.type == 'frame') {
+        final web.ImageBitmap? bitmap = response.bitmap;
+        if (bitmap != null) {
+          ctx.drawImage(bitmap, 0, 0);
+          bitmap.close();
+        }
+      }
+      // 'error' responses are non-fatal by design here -- the worker
+      // already stopped trying on its own read loop; the recording still
+      // has whatever frames arrived before the error, and Stop still
+      // works normally.
+    }).toJS;
+
+    final _WorkerStartMessage startMessage = _WorkerStartMessage(
+      type: 'start',
+      screenStream: screenReadable,
+      cameraStream: cameraReadable,
+      outputWidth: width,
+      outputHeight: height,
+      cropRect: effectiveCrop != null
+          ? _WorkerCropRect(
+              x: effectiveCrop.left,
+              y: effectiveCrop.top,
+              w: effectiveCrop.width,
+              h: effectiveCrop.height,
+            )
+          : null,
+    );
+    final List<JSObject> transferList = [screenReadable, ?cameraReadable];
+    worker.postMessage(startMessage, transferList.toJS);
+
+    await _finishSetupAndStartRecorder(canvas: canvas, fps: fps);
+  }
+
+  /// Original, first-shipped compositing path -- a plain
+  /// `requestAnimationFrame`-driven canvas draw loop, unchanged. See this
+  /// file's header comment ("MAIN-THREAD FALLBACK") for why it still
+  /// exists: browsers without Insertable Streams support fall back to
+  /// this rather than not recording at all, accepting the drawing-stutter
+  /// tradeoff a tutor already confirmed happens here.
+  Future<void> _startMainThreadFallback({
+    required int width,
+    required int height,
+    required Rectangle<int>? effectiveCrop,
+    required int fps,
+  }) async {
+    final web.HTMLVideoElement video = _screenVideo ??= (web.HTMLVideoElement()
+      ..srcObject = _screenStream
+      ..muted = true
+      ..autoplay = true);
+    await video.onLoadedMetadata.first;
+    await video.play().toDart;
+
+    final web.HTMLCanvasElement canvas = web.HTMLCanvasElement()
+      ..width = width
+      ..height = height;
     final web.CanvasRenderingContext2D ctx =
         canvas.getContext('2d') as web.CanvasRenderingContext2D;
 
@@ -197,6 +354,13 @@ class MathPadWebRecordingService {
     }
     web.window.requestAnimationFrame(drawFrame.toJS);
 
+    await _finishSetupAndStartRecorder(canvas: canvas, fps: fps);
+  }
+
+  Future<void> _finishSetupAndStartRecorder({
+    required web.HTMLCanvasElement canvas,
+    required int fps,
+  }) async {
     final web.MediaStream canvasStream = canvas.captureStream(fps);
     _canvasStream = canvasStream;
 
@@ -231,33 +395,45 @@ class MathPadWebRecordingService {
   /// Best-effort camera start -- a failure here (permission denied, no
   /// camera, unsupported) only ever costs the camera overlay, never the
   /// recording itself, matching every native platform's compositor in
-  /// this app.
-  Future<void> _startCamera(web.MediaDevices mediaDevices) async {
+  /// this app. Returns the camera's video track for the off-thread path
+  /// to build its own `MediaStreamTrackProcessor` from, or null.
+  Future<web.MediaStreamTrack?> _startCamera(web.MediaDevices mediaDevices) async {
     try {
       final web.MediaStream camStream = await mediaDevices
           .getUserMedia(web.MediaStreamConstraints(video: true.toJS, audio: false.toJS))
           .toDart;
-      final web.HTMLVideoElement camVideo = web.HTMLVideoElement()
-        ..srcObject = camStream
-        ..muted = true
-        ..autoplay = true;
-      await camVideo.onLoadedMetadata.first;
-      await camVideo.play().toDart;
       _cameraStream = camStream;
-      _cameraVideo = camVideo;
+      final web.MediaStreamTrack track = camStream.getVideoTracks().toDart.first;
+      // Only the main-thread fallback path needs a playing <video>
+      // element (it reads frames via drawImage(video, ...)); the
+      // off-thread path reads frames directly off the track via
+      // MediaStreamTrackProcessor instead, so this is created lazily by
+      // _drawCameraOverlay only when that fallback path actually runs.
+      return track;
     } catch (_) {
       _cameraStream = null;
-      _cameraVideo = null;
+      return null;
     }
   }
 
   /// Draws the cropped/scaled/bordered camera PIP box on top of whatever
-  /// was already drawn this frame -- matches the exact spec (crop=ih:ih,
-  /// scale to 240x240, white border, top-right 24px inset) every other
-  /// camera-overlay path in this app uses. No-op if no camera is active.
+  /// was already drawn this frame -- main-thread fallback path only (the
+  /// off-thread path does the equivalent compositing inside the worker).
+  /// Matches the exact spec every other camera-overlay path in this app
+  /// uses. No-op if no camera is active.
   void _drawCameraOverlay(web.CanvasRenderingContext2D ctx, int canvasWidth, int canvasHeight) {
-    final web.HTMLVideoElement? camVideo = _cameraVideo;
-    if (camVideo == null || camVideo.videoWidth == 0) return;
+    final web.MediaStream? camStream = _cameraStream;
+    if (camStream == null) return;
+    web.HTMLVideoElement? camVideo = _cameraVideo;
+    if (camVideo == null) {
+      camVideo = web.HTMLVideoElement()
+        ..srcObject = camStream
+        ..muted = true
+        ..autoplay = true;
+      unawaited(camVideo.play().toDart.catchError((_) => null));
+      _cameraVideo = camVideo;
+    }
+    if (camVideo.videoWidth == 0) return;
 
     final double camW = camVideo.videoWidth.toDouble();
     final double camH = camVideo.videoHeight.toDouble();
@@ -280,16 +456,14 @@ class MathPadWebRecordingService {
   /// `'browser'`; null (meaning "don't crop") in every other case,
   /// including any failure to read that setting at all.
   Rectangle<int>? _resolveCropRect(
-    web.MediaStream stream,
+    web.MediaStreamTrack screenTrack,
     Rectangle<int>? candidate,
     int fullWidth,
     int fullHeight,
   ) {
     if (candidate == null || candidate.width <= 0 || candidate.height <= 0) return null;
     try {
-      final JSArray<web.MediaStreamTrack> tracks = stream.getVideoTracks();
-      if (tracks.toDart.isEmpty) return null;
-      final web.MediaTrackSettings settings = tracks.toDart.first.getSettings();
+      final web.MediaTrackSettings settings = screenTrack.getSettings();
       final String? displaySurface = (settings as _DisplaySurfaceSettings).displaySurface?.toDart;
       if (displaySurface != 'browser') return null;
     } catch (_) {
@@ -328,6 +502,7 @@ class MathPadWebRecordingService {
       throw MathPadWebRecordingException('Not currently recording.');
     }
     _drawLoopActive = false;
+    _worker?.postMessage(_WorkerStopMessage(type: 'stop'));
     final Completer<web.Blob> completer = Completer<web.Blob>();
     _stopCompleter = completer;
     recorder.stop();
@@ -351,6 +526,10 @@ class MathPadWebRecordingService {
     try {
       _recorder?.stop();
     } catch (_) {}
+    try {
+      _worker?.postMessage(_WorkerStopMessage(type: 'stop'));
+      _worker?.terminate();
+    } catch (_) {}
     _releaseResources();
   }
 
@@ -370,7 +549,7 @@ class MathPadWebRecordingService {
     _cameraStream = null;
     _screenVideo = null;
     _cameraVideo = null;
-    _canvas = null;
+    _worker = null;
     _stopCompleter = null;
   }
 
