@@ -3355,7 +3355,14 @@ class MathPadRecordingService extends ChangeNotifier {
 
   String _resolveFfmpegPath() {
     final String exeDir = File(Platform.resolvedExecutable).parent.path;
-    if (Platform.isMacOS) {
+    // Only Windows actually ships an `.exe` suffix -- this used to fall
+    // through to that suffix on Linux too (there was no separate branch),
+    // which would never have resolved to anything real there. Harmless
+    // until now since nothing reachable ever ran on Linux, but a real
+    // prerequisite for the Linux external-compositor module (and every
+    // other ffmpeg-based path in this file) to find ffmpeg at all once
+    // Linux support becomes reachable.
+    if (Platform.isMacOS || Platform.isLinux) {
       return p.join(exeDir, 'ffmpeg');
     }
     return p.join(exeDir, 'ffmpeg.exe');

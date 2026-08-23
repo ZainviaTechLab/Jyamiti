@@ -57,6 +57,10 @@ pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Native external-compositor module for CameraEncodeMode.externalCompositor
+# (UNVERIFIED -- see native_camera/external_compositor.cc's header comment).
+add_subdirectory("native_camera")
+
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
@@ -105,6 +109,33 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endforeach(bundled_library)
+
+# libjyamiti_camera.so -- installed directly into the bundle ROOT (NOT
+# INSTALL_BUNDLE_LIB_DIR, unlike Flutter's own shared libraries above) so
+# it sits right next to the executable, matching where dart:ffi's
+# DynamicLibrary.open() looks (File(Platform.resolvedExecutable).parent) --
+# same flat-layout convention the Windows build uses. UNVERIFIED, see
+# native_camera/external_compositor.cc's header comment.
+install(TARGETS jyamiti_camera LIBRARY DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+# Bundled ffmpeg (GPLv3, see third_party/ffmpeg/NOTICE.txt), fetched via
+# third_party/ffmpeg/fetch_ffmpeg.sh -- not committed to git, so this is
+# guarded with if(EXISTS ...) rather than a hard install() the way
+# Windows'/macOS' equivalents are, since that script may not have been run
+# yet on a fresh checkout. Installed next to the exe, same convention as
+# every other platform, so _resolveFfmpegPath() finds it with no extra
+# configuration.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/ffmpeg")
+  install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/ffmpeg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/NOTICE.txt"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}"
+    COMPONENT Runtime
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                GROUP_READ GROUP_EXECUTE
+                WORLD_READ WORLD_EXECUTE)
+endif()
 
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")

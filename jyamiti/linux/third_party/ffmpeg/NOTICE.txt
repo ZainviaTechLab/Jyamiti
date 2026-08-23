@@ -1,0 +1,15 @@
+This application bundles a separate, unmodified ffmpeg (the static amd64
+Linux build from https://johnvansickle.com/ffmpeg/) to encode Math Pad
+board+voice recordings into .mp4 files. It is invoked as a standalone
+subprocess -- it is not linked into, and does not share a process with,
+this application's own code.
+
+ffmpeg is licensed under the GNU General Public License v3 (GPLv3).
+See https://ffmpeg.org/legal.html and the license notices bundled inside
+the release archive itself (fetch_ffmpeg.sh does not vendor a separate
+copy of the license text into this directory the way
+windows/third_party/ffmpeg/LICENSE.ffmpeg.txt does -- worth adding here
+too before distributing a built Linux package).
+
+FFmpeg source code: https://ffmpeg.org/download.html
+This specific static build: https://johnvansickle.com/ffmpeg/

@@ -352,6 +352,72 @@ _NativeCompositorBindings _loadCompositorBindings() {
   return loaded;
 }
 
+// ─── Linux backend (linux/native_camera/external_compositor.cc) ────────
+// UNVERIFIED -- no Linux machine, no X11/GTK dev headers, no compiler was
+// available to build or even syntax-check this. See that file's header
+// comment for the full explanation and known risk areas (X11-only, no
+// Wayland support; needs a compositing window manager running).
+//
+// Same C ABI shape and dart:ffi + shared-library pattern as the Windows
+// backend above (unlike macOS, which uses a MethodChannel instead -- see
+// that section's comment for why) -- but NOT the same typedefs, since the
+// native signatures differ: Windows' C ABI takes `wchar_t*` (UTF-16, native
+// Win32 string type) where Linux's takes plain `char*` (UTF-8, native
+// POSIX string type). Same function names, different marshalling.
+typedef _CompositorStartNativeLinux = ffi.Int64 Function(
+    ffi.Pointer<ffi2.Utf8> cameraDevicePath,
+    ffi.Pointer<ffi2.Utf8> outputPath,
+    ffi.Int32 fps,
+    ffi.Int32 cropX,
+    ffi.Int32 cropY,
+    ffi.Int32 cropW,
+    ffi.Int32 cropH);
+typedef _CompositorStartDartLinux = int Function(
+    ffi.Pointer<ffi2.Utf8> cameraDevicePath,
+    ffi.Pointer<ffi2.Utf8> outputPath,
+    int fps,
+    int cropX,
+    int cropY,
+    int cropW,
+    int cropH);
+
+typedef _LastErrorNativeLinux = ffi.Int32 Function(
+    ffi.Int64 handle, ffi.Pointer<ffi2.Utf8> outBuffer, ffi.Int32 outBufferChars);
+typedef _LastErrorDartLinux = int Function(
+    int handle, ffi.Pointer<ffi2.Utf8> outBuffer, int outBufferChars);
+
+class _NativeCompositorBindingsLinux {
+  _NativeCompositorBindingsLinux(ffi.DynamicLibrary lib)
+      : start = lib.lookupFunction<_CompositorStartNativeLinux, _CompositorStartDartLinux>(
+            'jyamiti_compositor_start'),
+        setCrop = lib.lookupFunction<_CompositorSetCropNative, _CompositorSetCropDart>(
+            'jyamiti_compositor_set_crop'),
+        stop = lib.lookupFunction<_HandleToIntNative, _HandleToIntDart>('jyamiti_compositor_stop'),
+        lastError = lib.lookupFunction<_LastErrorNativeLinux, _LastErrorDartLinux>(
+            'jyamiti_compositor_last_error'),
+        destroy =
+            lib.lookupFunction<_DestroyNative, _DestroyDart>('jyamiti_compositor_destroy');
+
+  final _CompositorStartDartLinux start;
+  final _CompositorSetCropDart setCrop;
+  final _HandleToIntDart stop;
+  final _LastErrorDartLinux lastError;
+  final _DestroyDart destroy;
+}
+
+_NativeCompositorBindingsLinux? _compositorBindingsLinux;
+
+_NativeCompositorBindingsLinux _loadCompositorBindingsLinux() {
+  final _NativeCompositorBindingsLinux? existing = _compositorBindingsLinux;
+  if (existing != null) return existing;
+  final String exeDir = File(Platform.resolvedExecutable).parent.path;
+  final ffi.DynamicLibrary lib =
+      ffi.DynamicLibrary.open(p.join(exeDir, 'libjyamiti_camera.so'));
+  final _NativeCompositorBindingsLinux loaded = _NativeCompositorBindingsLinux(lib);
+  _compositorBindingsLinux = loaded;
+  return loaded;
+}
+
 // ─── macOS backend (ExternalCompositor.swift, MainFlutterWindow.swift) ──
 // UNVERIFIED -- written with no Mac/Xcode available to build or run it.
 // See ExternalCompositor.swift's header comment for the full explanation
@@ -383,14 +449,17 @@ const MethodChannel _externalCompositorChannel = MethodChannel(
 /// than giving each platform a different-shaped API, is what lets
 /// `MathPadRecordingService` call this without ever branching on
 /// platform itself).
+enum _CompositorBackend { windows, linux, macOS }
+
 class NativeExternalCompositor {
-  NativeExternalCompositor._windows(this._handle) : _usesMacOSChannel = false;
+  NativeExternalCompositor._windows(this._handle) : _backend = _CompositorBackend.windows;
+  NativeExternalCompositor._linux(this._handle) : _backend = _CompositorBackend.linux;
   NativeExternalCompositor._macOS()
       : _handle = 0,
-        _usesMacOSChannel = true;
+        _backend = _CompositorBackend.macOS;
 
   final int _handle;
-  final bool _usesMacOSChannel;
+  final _CompositorBackend _backend;
   bool _destroyed = false;
 
   /// Starts capturing this app's own window (found internally by the
@@ -427,6 +496,32 @@ class NativeExternalCompositor {
         );
       }
       return NativeExternalCompositor._macOS();
+    }
+
+    if (Platform.isLinux) {
+      final _NativeCompositorBindingsLinux bindings = _loadCompositorBindingsLinux();
+      final ffi.Pointer<ffi2.Utf8> nativeCameraName = cameraDeviceName.toNativeUtf8();
+      final ffi.Pointer<ffi2.Utf8> nativeOutput = outputPath.toNativeUtf8();
+      try {
+        final int handle = bindings.start(
+          nativeCameraName,
+          nativeOutput,
+          fps,
+          cropRect?.left ?? 0,
+          cropRect?.top ?? 0,
+          cropRect?.width ?? 0,
+          cropRect?.height ?? 0,
+        );
+        if (handle == 0) {
+          throw MathPadNativeCameraException(
+            'The native compositor module rejected the request (invalid output path).',
+          );
+        }
+        return NativeExternalCompositor._linux(handle);
+      } finally {
+        ffi2.calloc.free(nativeCameraName);
+        ffi2.calloc.free(nativeOutput);
+      }
     }
 
     final _NativeCompositorBindings bindings = _loadCompositorBindings();
@@ -466,7 +561,7 @@ class NativeExternalCompositor {
   /// instead, never a fatal error.
   Future<void> setCropRect(Rectangle<int>? cropRect) async {
     if (_destroyed) return;
-    if (_usesMacOSChannel) {
+    if (_backend == _CompositorBackend.macOS) {
       await _externalCompositorChannel.invokeMethod<void>('setCrop', {
         'x': cropRect?.left ?? 0,
         'y': cropRect?.top ?? 0,
@@ -475,13 +570,15 @@ class NativeExternalCompositor {
       });
       return;
     }
-    _loadCompositorBindings().setCrop(
-      _handle,
-      cropRect?.left ?? 0,
-      cropRect?.top ?? 0,
-      cropRect?.width ?? 0,
-      cropRect?.height ?? 0,
-    );
+    final int x = cropRect?.left ?? 0;
+    final int y = cropRect?.top ?? 0;
+    final int w = cropRect?.width ?? 0;
+    final int h = cropRect?.height ?? 0;
+    if (_backend == _CompositorBackend.linux) {
+      _loadCompositorBindingsLinux().setCrop(_handle, x, y, w, h);
+      return;
+    }
+    _loadCompositorBindings().setCrop(_handle, x, y, w, h);
   }
 
   /// Stops capture, finalizes the video file, and waits until fully done.
@@ -489,38 +586,62 @@ class NativeExternalCompositor {
   /// missing/corrupt, e.g. the app's own window couldn't be found or the
   /// encoder process died).
   Future<bool> stop() async {
-    if (_usesMacOSChannel) {
-      final bool? ok = await _externalCompositorChannel.invokeMethod<bool>('stop');
-      return ok ?? false;
+    switch (_backend) {
+      case _CompositorBackend.macOS:
+        final bool? ok = await _externalCompositorChannel.invokeMethod<bool>('stop');
+        return ok ?? false;
+      case _CompositorBackend.linux:
+        return _loadCompositorBindingsLinux().stop(_handle) != 0;
+      case _CompositorBackend.windows:
+        return _loadCompositorBindings().stop(_handle) != 0;
     }
-    return _loadCompositorBindings().stop(_handle) != 0;
   }
 
   /// The most recent failure message from the native module, if any.
   Future<String?> get lastError async {
-    if (_usesMacOSChannel) {
-      return _externalCompositorChannel.invokeMethod<String?>('lastError');
-    }
-    final ffi.Pointer<ffi2.Utf16> buffer = ffi2.calloc<ffi.Uint16>(512).cast<ffi2.Utf16>();
-    try {
-      final int ok = _loadCompositorBindings().lastError(_handle, buffer, 512);
-      if (ok == 0) return null;
-      final String message = ffi2.Utf16Pointer(buffer).toDartString();
-      return message.isEmpty ? null : message;
-    } finally {
-      ffi2.calloc.free(buffer);
+    switch (_backend) {
+      case _CompositorBackend.macOS:
+        return _externalCompositorChannel.invokeMethod<String?>('lastError');
+      case _CompositorBackend.linux:
+        final ffi.Pointer<ffi2.Utf8> buffer = ffi2.calloc<ffi.Uint8>(512).cast<ffi2.Utf8>();
+        try {
+          final int ok = _loadCompositorBindingsLinux().lastError(_handle, buffer, 512);
+          if (ok == 0) return null;
+          final String message = buffer.toDartString();
+          return message.isEmpty ? null : message;
+        } finally {
+          ffi2.calloc.free(buffer);
+        }
+      case _CompositorBackend.windows:
+        final ffi.Pointer<ffi2.Utf16> buffer = ffi2.calloc<ffi.Uint16>(512).cast<ffi2.Utf16>();
+        try {
+          final int ok = _loadCompositorBindings().lastError(_handle, buffer, 512);
+          if (ok == 0) return null;
+          final String message = ffi2.Utf16Pointer(buffer).toDartString();
+          return message.isEmpty ? null : message;
+        } finally {
+          ffi2.calloc.free(buffer);
+        }
     }
   }
 
   /// Releases native resources for this handle. Must be called exactly
   /// once, after [stop] has returned. A no-op on macOS -- there's no
-  /// persistent native handle table there the way Windows has one
+  /// persistent native handle table there the way Windows/Linux have one
   /// (`stop` already fully tears down that session's native state), only
   /// this Dart-side wrapper needs marking as spent.
   void dispose() {
     if (_destroyed) return;
     _destroyed = true;
-    if (_usesMacOSChannel) return;
-    _loadCompositorBindings().destroy(_handle);
+    switch (_backend) {
+      case _CompositorBackend.macOS:
+        return;
+      case _CompositorBackend.linux:
+        _loadCompositorBindingsLinux().destroy(_handle);
+        return;
+      case _CompositorBackend.windows:
+        _loadCompositorBindings().destroy(_handle);
+        return;
+    }
   }
 }
