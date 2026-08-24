@@ -1,175 +1,268 @@
-// Web equivalent of the desktop's file-based recordings list
-// (TutorRecordingsScreen/MathPadRecordingService.getRecordings) -- there's
-// no shared interface between them (unlike MathPadLibraryStorageService's
-// io/web split) since the two UIs are different enough (Drive/YouTube/
-// WhatsApp share, "Play" via a native file path -- none of which map to
-// web the same way) that a shared screen wasn't worth building. This is
-// purely a place for MathPadWebRecordingService's output to land instead
-// of an automatic download -- see that file's `stop()` doc comment.
-//
-// Same IndexedDB-via-sembast_web approach as
-// mathpad_library_storage_service_web.dart, and the same two-store split
-// for the same reason: metadata (name/mimeType/size/date) lives in its own
-// store so listing recordings never has to pay for loading every
-// recording's full video bytes just to show a list -- those live in a
-// separate store, keyed the same way, fetched only when a tutor actually
-// taps Download.
-//
-// UNVERIFIED IN THE BROWSER, but compile-checked: `flutter build web`
-// checks this file's package:web/sembast_web usage for real.
+// Web equivalent of desktop recordings list -- uses native browser IndexedDB
+// directly with native Blob storage so saving, listing, and playback are
+// instantaneous with zero main-thread JSON serialization lag.
 
+import 'dart:async';
 import 'dart:js_interop';
 import 'dart:typed_data';
 
-import 'package:sembast_web/sembast_web.dart';
 import 'package:web/web.dart' as web;
 
 import 'web_recording_meta.dart';
 
-const String _dbName = 'jyamiti_mathpad_web_recordings.db';
-
-final StoreRef<String, Map<String, dynamic>> _metaStore =
-    stringMapStoreFactory.store('recording_meta');
-final StoreRef<String, Map<String, dynamic>> _bytesStore =
-    stringMapStoreFactory.store('recording_bytes');
+const String _dbName = 'jyamiti_mathpad_web_recordings_v2';
+const int _dbVersion = 1;
+const String _metaStoreName = 'recording_meta';
+const String _blobStoreName = 'recording_blobs';
 
 class MathPadWebRecordingsStorageService {
-  Database? _db;
+  web.IDBDatabase? _idb;
 
-  Future<Database> _ensureDb() async {
-    final Database? existing = _db;
+  Future<web.IDBDatabase> _openDb() async {
+    final existing = _idb;
     if (existing != null) return existing;
-    final Database opened = await databaseFactoryWeb.openDatabase(_dbName);
-    _db = opened;
-    // Best-effort, same reasoning/caveats as
-    // MathPadLibraryStorageService_web's identical call -- never allowed
-    // to block or fail actual storage operations.
+
+    final completer = Completer<web.IDBDatabase>();
+    final request = web.window.indexedDB.open(_dbName, _dbVersion);
+
+    request.onupgradeneeded = ((web.IDBVersionChangeEvent event) {
+      final db = request.result as web.IDBDatabase;
+      if (!db.objectStoreNames.contains(_metaStoreName)) {
+        db.createObjectStore(_metaStoreName);
+      }
+      if (!db.objectStoreNames.contains(_blobStoreName)) {
+        db.createObjectStore(_blobStoreName);
+      }
+    }).toJS;
+
+    request.onsuccess = ((web.Event event) {
+      final db = request.result as web.IDBDatabase;
+      _idb = db;
+      completer.complete(db);
+    }).toJS;
+
+    request.onerror = ((web.Event event) {
+      completer.completeError(
+        'Failed to open IndexedDB: ${request.error?.message}',
+      );
+    }).toJS;
+
     try {
-      await web.window.navigator.storage.persist().toDart;
+      unawaited(web.window.navigator.storage.persist().toDart);
     } catch (_) {}
-    return opened;
+
+    return completer.future;
   }
 
+  /// Saves a recording into native IndexedDB.
+  /// Stores binary data directly as a native browser Blob without any
+  /// CPU-heavy JSON serialization so it finishes in milliseconds.
   Future<void> saveRecording({
     required String name,
     required String mimeType,
     required Uint8List bytes,
   }) async {
-    final Database db = await _ensureDb();
+    final db = await _openDb();
     final String id = DateTime.now().microsecondsSinceEpoch.toString();
-    await db.transaction((txn) async {
-      await _metaStore.record(id).put(txn, {
-        'name': name,
-        'mimeType': mimeType,
-        'sizeBytes': bytes.length,
-        'createdAtMillis': DateTime.now().millisecondsSinceEpoch,
-      });
-      await _bytesStore.record(id).put(txn, {'bytes': bytes});
-    });
+    final int nowMillis = DateTime.now().millisecondsSinceEpoch;
+
+    final txn = db.transaction(
+      [_metaStoreName.toJS, _blobStoreName.toJS].toJS,
+      'readwrite',
+    );
+    final metaStore = txn.objectStore(_metaStoreName);
+    final blobStore = txn.objectStore(_blobStoreName);
+
+    final metaJson = {
+      'id': id,
+      'name': name,
+      'mimeType': mimeType,
+      'sizeBytes': bytes.length,
+      'createdAtMillis': nowMillis,
+    }.jsify();
+
+    final web.Blob blob = web.Blob(
+      [bytes.toJS].toJS,
+      web.BlobPropertyBag(type: mimeType),
+    );
+
+    metaStore.put(metaJson, id.toJS);
+    blobStore.put(blob, id.toJS);
+
+    final completer = Completer<void>();
+    txn.oncomplete = ((web.Event _) => completer.complete()).toJS;
+    txn.onerror =
+        ((web.Event _) => completer.completeError('Failed to save recording'))
+            .toJS;
+    await completer.future;
   }
 
   Future<List<WebRecordingMeta>> listRecordings() async {
-    final Database db = await _ensureDb();
-    final List<RecordSnapshot<String, Map<String, dynamic>>> records =
-        await _metaStore.find(db);
-    final List<WebRecordingMeta> result = records.map((record) {
-      final Map<String, dynamic> value = record.value;
-      return WebRecordingMeta(
-        id: record.key,
-        name: value['name'] as String? ?? 'Recording',
-        mimeType: value['mimeType'] as String? ?? 'video/webm',
-        sizeBytes: value['sizeBytes'] as int? ?? 0,
-        createdAt: DateTime.fromMillisecondsSinceEpoch(
-          value['createdAtMillis'] as int? ?? 0,
-        ),
-      );
-    }).toList();
-    // Newest first -- matches the desktop recordings list's own ordering
-    // (TutorRecordingsScreen sorts by lastModifiedSync descending).
-    result.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return result;
-  }
+    try {
+      final db = await _openDb();
+      final txn = db.transaction([_metaStoreName.toJS].toJS, 'readonly');
+      final metaStore = txn.objectStore(_metaStoreName);
+      final request = metaStore.getAll();
 
-  Uint8List? _toUint8List(Object? raw) {
-    if (raw == null) return null;
-    if (raw is Uint8List) return raw;
-    if (raw is ByteBuffer) return raw.asUint8List();
-    if (raw is TypedData) return Uint8List.view(raw.buffer);
-    if (raw is List) {
-      try {
-        return Uint8List.fromList(raw.cast<int>());
-      } catch (_) {
-        return Uint8List.fromList(raw.map((e) => (e as num).toInt()).toList());
-      }
+      final completer = Completer<List<WebRecordingMeta>>();
+      request.onsuccess = ((web.Event _) {
+        final JSArray? results = request.result as JSArray?;
+        if (results == null) {
+          completer.complete([]);
+          return;
+        }
+        final list = <WebRecordingMeta>[];
+        final dartList = results.toDart;
+        for (final item in dartList) {
+          if (item is JSObject) {
+            final id = (item['id'] as JSString?)?.toDart ?? '';
+            final name =
+                (item['name'] as JSString?)?.toDart ?? 'Recording';
+            final mimeType =
+                (item['mimeType'] as JSString?)?.toDart ?? 'video/webm';
+            final sizeBytes =
+                (item['sizeBytes'] as JSNumber?)?.toDartInt ?? 0;
+            final createdAtMillis =
+                (item['createdAtMillis'] as JSNumber?)?.toDartInt ?? 0;
+            list.add(
+              WebRecordingMeta(
+                id: id,
+                name: name,
+                mimeType: mimeType,
+                sizeBytes: sizeBytes,
+                createdAt:
+                    DateTime.fromMillisecondsSinceEpoch(createdAtMillis),
+              ),
+            );
+          }
+        }
+        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        completer.complete(list);
+      }).toJS;
+
+      request.onerror = ((web.Event _) => completer.complete([])).toJS;
+      return completer.future;
+    } catch (_) {
+      return [];
     }
-    return null;
   }
 
   Future<Uint8List?> loadRecordingBytes(String id) async {
     try {
-      final Database db = await _ensureDb();
-      final Map<String, dynamic>? record = await _bytesStore.record(id).get(db);
-      final Object? rawBytes = record?['bytes'];
-      return _toUint8List(rawBytes);
-    } catch (e) {
+      final db = await _openDb();
+      final txn = db.transaction([_blobStoreName.toJS].toJS, 'readonly');
+      final blobStore = txn.objectStore(_blobStoreName);
+      final request = blobStore.get(id.toJS);
+
+      final completer = Completer<Uint8List?>();
+      request.onsuccess = ((web.Event _) async {
+        final result = request.result;
+        if (result == null) {
+          completer.complete(null);
+          return;
+        }
+        if (result is web.Blob) {
+          final JSArrayBuffer arrayBuffer = await result.arrayBuffer().toDart;
+          completer.complete(arrayBuffer.toDart.asUint8List());
+        } else if (result is JSArrayBuffer) {
+          completer.complete(result.toDart.asUint8List());
+        } else {
+          completer.complete(null);
+        }
+      }).toJS;
+
+      request.onerror = ((web.Event _) => completer.complete(null)).toJS;
+      return completer.future;
+    } catch (_) {
       return null;
     }
   }
 
-  /// Loads [id]'s bytes and triggers a browser download of them as
-  /// [filename] -- kept here (not in the recording screen itself) so
-  /// every `package:web` reference for this feature stays behind this
-  /// file's conditional-import barrel; the screen that calls this never
-  /// needs to import `package:web` at all. Returns false if [id] has no
-  /// stored bytes (e.g. already deleted).
   Future<bool> downloadRecording(String id, String filename) async {
     try {
-      final Uint8List? bytes = await loadRecordingBytes(id);
-      if (bytes == null || bytes.isEmpty) return false;
-      final Database db = await _ensureDb();
-      final Map<String, dynamic>? meta = await _metaStore.record(id).get(db);
-      final String mimeType = meta?['mimeType'] as String? ?? 'video/webm';
-      final web.Blob blob = web.Blob(
-        [bytes.toJS].toJS,
-        web.BlobPropertyBag(type: mimeType),
-      );
-      final String url = web.URL.createObjectURL(blob);
-      final web.HTMLAnchorElement anchor = web.HTMLAnchorElement()
-        ..href = url
-        ..download = filename
-        ..style.display = 'none';
-      web.document.body?.append(anchor);
-      anchor.click();
-      anchor.remove();
-      web.URL.revokeObjectURL(url);
-      return true;
-    } catch (e) {
+      final db = await _openDb();
+      final txn = db.transaction([_blobStoreName.toJS].toJS, 'readonly');
+      final blobStore = txn.objectStore(_blobStoreName);
+      final request = blobStore.get(id.toJS);
+
+      final completer = Completer<bool>();
+      request.onsuccess = ((web.Event _) {
+        final result = request.result;
+        if (result == null) {
+          completer.complete(false);
+          return;
+        }
+        web.Blob blob;
+        if (result is web.Blob) {
+          blob = result;
+        } else if (result is JSArrayBuffer) {
+          blob = web.Blob([result].toJS);
+        } else {
+          completer.complete(false);
+          return;
+        }
+
+        final String url = web.URL.createObjectURL(blob);
+        final web.HTMLAnchorElement anchor = web.HTMLAnchorElement()
+          ..href = url
+          ..download = filename
+          ..style.display = 'none';
+        web.document.body?.append(anchor);
+        anchor.click();
+        anchor.remove();
+        web.URL.revokeObjectURL(url);
+        completer.complete(true);
+      }).toJS;
+
+      request.onerror = ((web.Event _) => completer.complete(false)).toJS;
+      return completer.future;
+    } catch (_) {
       return false;
     }
   }
 
   Future<void> deleteRecording(String id) async {
-    final Database db = await _ensureDb();
-    await db.transaction((txn) async {
-      await _metaStore.record(id).delete(txn);
-      await _bytesStore.record(id).delete(txn);
-    });
+    try {
+      final db = await _openDb();
+      final txn = db.transaction(
+        [_metaStoreName.toJS, _blobStoreName.toJS].toJS,
+        'readwrite',
+      );
+      txn.objectStore(_metaStoreName).delete(id.toJS);
+      txn.objectStore(_blobStoreName).delete(id.toJS);
+    } catch (_) {}
   }
 
   /// Creates a temporary Blob Object URL for playing the recording in an HTML video element.
   Future<String?> getRecordingBlobUrl(String id) async {
     try {
-      final Uint8List? bytes = await loadRecordingBytes(id);
-      if (bytes == null || bytes.isEmpty) return null;
-      final Database db = await _ensureDb();
-      final Map<String, dynamic>? meta = await _metaStore.record(id).get(db);
-      final String mimeType = meta?['mimeType'] as String? ?? 'video/webm';
-      final web.Blob blob = web.Blob(
-        [bytes.toJS].toJS,
-        web.BlobPropertyBag(type: mimeType),
-      );
-      return web.URL.createObjectURL(blob);
-    } catch (e) {
+      final db = await _openDb();
+      final txn = db.transaction([_blobStoreName.toJS].toJS, 'readonly');
+      final blobStore = txn.objectStore(_blobStoreName);
+      final request = blobStore.get(id.toJS);
+
+      final completer = Completer<String?>();
+      request.onsuccess = ((web.Event _) {
+        final result = request.result;
+        if (result == null) {
+          completer.complete(null);
+          return;
+        }
+        if (result is web.Blob) {
+          final url = web.URL.createObjectURL(result);
+          completer.complete(url);
+        } else if (result is JSArrayBuffer) {
+          final blob = web.Blob([result].toJS);
+          final url = web.URL.createObjectURL(blob);
+          completer.complete(url);
+        } else {
+          completer.complete(null);
+        }
+      }).toJS;
+
+      request.onerror = ((web.Event _) => completer.complete(null)).toJS;
+      return completer.future;
+    } catch (_) {
       return null;
     }
   }
@@ -181,3 +274,4 @@ class MathPadWebRecordingsStorageService {
     } catch (_) {}
   }
 }
+

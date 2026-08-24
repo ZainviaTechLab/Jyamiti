@@ -2058,7 +2058,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_webRecordingBusy || !_webRecording) return;
     final MathPadWebRecordingService? service = _webRecordingService;
     if (service == null) return;
-    setState(() => _webRecordingBusy = true);
+    setState(() {
+      _webRecording = false;
+      _webRecordingBusy = true;
+    });
     try {
       final MathPadWebRecordingResult result = await service.stop();
       await MathPadWebRecordingsStorageService().saveRecording(
@@ -2067,15 +2070,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         bytes: result.bytes,
       );
       if (!mounted) return;
-      setState(() {
-        _webRecording = false;
-        _webRecordingBusy = false;
-      });
+      setState(() => _webRecordingBusy = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Recording saved -- find it in My Recordings.'),
           backgroundColor: Color(0xFF10B981),
-          duration: Duration(seconds: 5),
+          duration: Duration(seconds: 4),
         ),
       );
     } on MathPadWebRecordingException catch (e) {
