@@ -178,7 +178,7 @@ final class ExternalCompositor: NSObject, SCStreamOutput, AVCaptureVideoDataOutp
 
             let outPath = self.outputPath
             let ok = exited && outPath != nil && FileManager.default.fileExists(atPath: outPath!)
-                && ((try? FileManager.default.attributesOfItem(atPath: outPath!)[.size] as? Int) ?? 0 ?? 0) > 0
+                && ((try? FileManager.default.attributesOfItem(atPath: outPath!)[.size] as? Int) ?? 0) > 0
             completion(ok)
         }
     }
@@ -250,15 +250,16 @@ final class ExternalCompositor: NSObject, SCStreamOutput, AVCaptureVideoDataOutp
         self.outputPath = outputPath
         self.liveCropRect = cropRect
 
-        guard let targetWindow = MainFlutterWindow.sharedInstance else {
+        guard let targetWindow = await MainActor.run(body: { MainFlutterWindow.sharedInstance }) else {
             throw CompositorError.message("Could not find the app's own window")
         }
 
         // This app's own on-screen window, in points -- multiplied by the
         // backing scale factor below to get real pixel dimensions (Retina
         // displays report points, not pixels, for window frames).
-        let windowFrameInPoints = targetWindow.frame
-        let scale = targetWindow.backingScaleFactor
+        let (windowFrameInPoints, scale, windowNumber) = await MainActor.run {
+            (targetWindow.frame, targetWindow.backingScaleFactor, targetWindow.windowNumber)
+        }
         let fullPixelWidth = Int(windowFrameInPoints.width * scale)
         let fullPixelHeight = Int(windowFrameInPoints.height * scale)
         initialWindowSize = CGSize(width: fullPixelWidth, height: fullPixelHeight)
@@ -280,7 +281,7 @@ final class ExternalCompositor: NSObject, SCStreamOutput, AVCaptureVideoDataOutp
         // CGWindowID, so no PID-enumeration dance is needed the way
         // Windows' FindOwnWindow() needs one.
         guard let scWindow = content.windows.first(where: {
-            $0.windowID == CGWindowID(targetWindow.windowNumber)
+            $0.windowID == CGWindowID(windowNumber)
         }) else {
             throw CompositorError.message("Could not find this app's window in ScreenCaptureKit's window list -- Screen Recording permission may not be granted yet (System Settings > Privacy & Security > Screen Recording), or the app needs restarting after granting it")
         }
@@ -297,7 +298,7 @@ final class ExternalCompositor: NSObject, SCStreamOutput, AVCaptureVideoDataOutp
         let newStream = SCStream(filter: filter, configuration: config, delegate: nil)
         try newStream.addStreamOutput(
             self, type: .screen,
-            sampleBufferQueue: DispatchQueue(label: "jyamiti.compositor.screen")
+            sampleHandlerQueue: DispatchQueue(label: "jyamiti.compositor.screen")
         )
         try await newStream.startCapture()
         stream = newStream
@@ -322,8 +323,12 @@ final class ExternalCompositor: NSObject, SCStreamOutput, AVCaptureVideoDataOutp
         // Best-effort only -- a camera failure here costs just the overlay,
         // never the recording, same "camera trouble costs the camera, not
         // the recording" philosophy as everywhere else in this app.
-        guard let device = AVCaptureDevice.devices(for: .video)
-            .first(where: { $0.localizedName == deviceName })
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            mediaType: .video,
+            position: .unspecified
+        )
+        guard let device = discovery.devices.first(where: { $0.localizedName == deviceName })
             ?? AVCaptureDevice.default(for: .video)
         else { return }
         guard let input = try? AVCaptureDeviceInput(device: device) else { return }
@@ -346,11 +351,22 @@ final class ExternalCompositor: NSObject, SCStreamOutput, AVCaptureVideoDataOutp
     }
 
     private func spawnFfmpeg(outputPath: String) throws {
-        let ffmpegURL = Bundle.main.executableURL!
+        var ffmpegURL = Bundle.main.executableURL!
             .deletingLastPathComponent()
             .appendingPathComponent("ffmpeg")
-        guard FileManager.default.fileExists(atPath: ffmpegURL.path) else {
-            throw CompositorError.message("ffmpeg not found next to the app bundle's executable")
+        if !FileManager.default.fileExists(atPath: ffmpegURL.path) {
+            let homebrewURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg")
+            let intelURL = URL(fileURLWithPath: "/usr/local/bin/ffmpeg")
+            let usrURL = URL(fileURLWithPath: "/usr/bin/ffmpeg")
+            if FileManager.default.fileExists(atPath: homebrewURL.path) {
+                ffmpegURL = homebrewURL
+            } else if FileManager.default.fileExists(atPath: intelURL.path) {
+                ffmpegURL = intelURL
+            } else if FileManager.default.fileExists(atPath: usrURL.path) {
+                ffmpegURL = usrURL
+            } else {
+                throw CompositorError.message("ffmpeg not found next to the app bundle's executable or in /opt/homebrew/bin/ffmpeg")
+            }
         }
 
         let process = Process()
