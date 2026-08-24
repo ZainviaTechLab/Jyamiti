@@ -26,4 +26,8 @@ class MathPadWebRecordingsStorageService {
   Future<bool> downloadRecording(String id, String filename) async => false;
 
   Future<void> deleteRecording(String id) async {}
+
+  Future<String?> getRecordingBlobUrl(String id) async => null;
+
+  void revokeBlobUrl(String url) {}
 }

@@ -90,11 +90,30 @@ class MathPadWebRecordingsStorageService {
     return result;
   }
 
+  Uint8List? _toUint8List(Object? raw) {
+    if (raw == null) return null;
+    if (raw is Uint8List) return raw;
+    if (raw is ByteBuffer) return raw.asUint8List();
+    if (raw is TypedData) return Uint8List.view(raw.buffer);
+    if (raw is List) {
+      try {
+        return Uint8List.fromList(raw.cast<int>());
+      } catch (_) {
+        return Uint8List.fromList(raw.map((e) => (e as num).toInt()).toList());
+      }
+    }
+    return null;
+  }
+
   Future<Uint8List?> loadRecordingBytes(String id) async {
-    final Database db = await _ensureDb();
-    final Map<String, dynamic>? record = await _bytesStore.record(id).get(db);
-    final Object? bytes = record?['bytes'];
-    return bytes is Uint8List ? bytes : null;
+    try {
+      final Database db = await _ensureDb();
+      final Map<String, dynamic>? record = await _bytesStore.record(id).get(db);
+      final Object? rawBytes = record?['bytes'];
+      return _toUint8List(rawBytes);
+    } catch (e) {
+      return null;
+    }
   }
 
   /// Loads [id]'s bytes and triggers a browser download of them as
@@ -104,27 +123,29 @@ class MathPadWebRecordingsStorageService {
   /// needs to import `package:web` at all. Returns false if [id] has no
   /// stored bytes (e.g. already deleted).
   Future<bool> downloadRecording(String id, String filename) async {
-    final Database db = await _ensureDb();
-    final Map<String, dynamic>? bytesRecord = await _bytesStore.record(id).get(db);
-    final Object? rawBytes = bytesRecord?['bytes'];
-    if (rawBytes is! Uint8List) return false;
-    final Uint8List bytes = rawBytes;
-    final Map<String, dynamic>? meta = await _metaStore.record(id).get(db);
-    final String mimeType = meta?['mimeType'] as String? ?? 'video/webm';
-    final web.Blob blob = web.Blob(
-      [bytes.toJS].toJS,
-      web.BlobPropertyBag(type: mimeType),
-    );
-    final String url = web.URL.createObjectURL(blob);
-    final web.HTMLAnchorElement anchor = web.HTMLAnchorElement()
-      ..href = url
-      ..download = filename
-      ..style.display = 'none';
-    web.document.body?.append(anchor);
-    anchor.click();
-    anchor.remove();
-    web.URL.revokeObjectURL(url);
-    return true;
+    try {
+      final Uint8List? bytes = await loadRecordingBytes(id);
+      if (bytes == null || bytes.isEmpty) return false;
+      final Database db = await _ensureDb();
+      final Map<String, dynamic>? meta = await _metaStore.record(id).get(db);
+      final String mimeType = meta?['mimeType'] as String? ?? 'video/webm';
+      final web.Blob blob = web.Blob(
+        [bytes.toJS].toJS,
+        web.BlobPropertyBag(type: mimeType),
+      );
+      final String url = web.URL.createObjectURL(blob);
+      final web.HTMLAnchorElement anchor = web.HTMLAnchorElement()
+        ..href = url
+        ..download = filename
+        ..style.display = 'none';
+      web.document.body?.append(anchor);
+      anchor.click();
+      anchor.remove();
+      web.URL.revokeObjectURL(url);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<void> deleteRecording(String id) async {
@@ -133,5 +154,30 @@ class MathPadWebRecordingsStorageService {
       await _metaStore.record(id).delete(txn);
       await _bytesStore.record(id).delete(txn);
     });
+  }
+
+  /// Creates a temporary Blob Object URL for playing the recording in an HTML video element.
+  Future<String?> getRecordingBlobUrl(String id) async {
+    try {
+      final Uint8List? bytes = await loadRecordingBytes(id);
+      if (bytes == null || bytes.isEmpty) return null;
+      final Database db = await _ensureDb();
+      final Map<String, dynamic>? meta = await _metaStore.record(id).get(db);
+      final String mimeType = meta?['mimeType'] as String? ?? 'video/webm';
+      final web.Blob blob = web.Blob(
+        [bytes.toJS].toJS,
+        web.BlobPropertyBag(type: mimeType),
+      );
+      return web.URL.createObjectURL(blob);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Revokes a previously created Blob Object URL to free browser memory.
+  void revokeBlobUrl(String url) {
+    try {
+      web.URL.revokeObjectURL(url);
+    } catch (_) {}
   }
 }

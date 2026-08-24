@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis/youtube/v3.dart' as youtube;
@@ -34,7 +34,7 @@ class UploadService {
       throw Exception('Failed to get token: ${response.body}');
     } catch (e) {
       // Fallback for testing if backend is not set up
-      print('Using fallback dummy token. Error: $e');
+      debugPrint('Using fallback dummy token. Error: $e');
       await Future.delayed(const Duration(seconds: 1));
       return 'dummy_access_token_from_backend';
     }
@@ -79,8 +79,8 @@ class UploadService {
     }
   }
 
-  /// Uploads a video file to Google Drive.
-  Future<void> uploadToDrive(File video, String fileName, {String? folderId}) async {
+  /// Uploads video bytes to Google Drive.
+  Future<void> uploadBytesToDrive(Uint8List bytes, String fileName, {String? folderId}) async {
     final token = await _getAccessToken('drive');
     final client = GoogleAuthClient(token);
     
@@ -91,7 +91,7 @@ class UploadService {
         ..name = fileName
         ..parents = [folderId ?? 'root'];
         
-      final media = drive.Media(video.openRead(), video.lengthSync());
+      final media = drive.Media(Stream.value(bytes), bytes.length);
       
       // Mocking the actual upload to prevent unauthorized errors with dummy token
       if (token == 'dummy_access_token_from_backend') {
@@ -105,9 +105,20 @@ class UploadService {
     }
   }
 
-  /// Uploads a video file to YouTube and returns the video ID.
-  Future<String> uploadToYouTube({
-    required File video,
+  /// Uploads a video file or bytes to Google Drive.
+  Future<void> uploadToDrive(dynamic video, String fileName, {String? folderId}) async {
+    Uint8List bytes;
+    if (video is Uint8List) {
+      bytes = video;
+    } else {
+      bytes = await (video as dynamic).readAsBytes();
+    }
+    return uploadBytesToDrive(bytes, fileName, folderId: folderId);
+  }
+
+  /// Uploads video bytes to YouTube and returns the video ID.
+  Future<String> uploadBytesToYouTube({
+    required Uint8List bytes,
     required String title,
     required String description,
     required String privacyStatus,
@@ -131,7 +142,7 @@ class UploadService {
           ..privacyStatus = privacyStatus.toLowerCase()
           ..madeForKids = madeForKids);
           
-      final media = youtube.Media(video.openRead(), video.lengthSync());
+      final media = youtube.Media(Stream.value(bytes), bytes.length);
       
       // Mocking the actual upload to prevent unauthorized errors with dummy token
       if (token == 'dummy_access_token_from_backend') {
@@ -150,4 +161,32 @@ class UploadService {
       client.close();
     }
   }
+
+  /// Uploads a video file or bytes to YouTube and returns the video ID.
+  Future<String> uploadToYouTube({
+    required dynamic video,
+    required String title,
+    required String description,
+    required String privacyStatus,
+    required String categoryId,
+    required List<String> tags,
+    required bool madeForKids,
+  }) async {
+    Uint8List bytes;
+    if (video is Uint8List) {
+      bytes = video;
+    } else {
+      bytes = await (video as dynamic).readAsBytes();
+    }
+    return uploadBytesToYouTube(
+      bytes: bytes,
+      title: title,
+      description: description,
+      privacyStatus: privacyStatus,
+      categoryId: categoryId,
+      tags: tags,
+      madeForKids: madeForKids,
+    );
+  }
 }
+
