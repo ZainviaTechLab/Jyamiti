@@ -1240,6 +1240,18 @@ class MathPadRecordingService extends ChangeNotifier {
     // 0.0 default, same as it always did before this feature existed.
   }
 
+  bool get isCameraActive => _cameraEnabled || _isOnCanvasCameraActive || _externalCompositor != null;
+
+  /// Updates the canvas key when switching between pages or rebuilding the widget tree
+  /// so that ongoing recording snapshots the new page's canvas boundary seamlessly.
+  void updateCanvasKey(GlobalKey canvasKey) {
+    _canvasKey = canvasKey;
+    if (_activeCameraEncodeMode == CameraEncodeMode.externalCompositor &&
+        _activeExternalCompositorCropToCanvas) {
+      unawaited(_externalCompositor?.setCropRect(_measureCanvasCropRect(_canvasKey)));
+    }
+  }
+
   /// [canvasKey] must point at a `RepaintBoundary` that already paints a
   /// fully opaque background itself (Math Pad's capture area does) --
   /// this service just snapshots it as-is, no post-capture compositing.
@@ -1252,9 +1264,9 @@ class MathPadRecordingService extends ChangeNotifier {
   /// prevents or aborts the recording itself the way a mic failure does.
   Future<void> start(GlobalKey canvasKey, {bool includeCamera = false}) async {
     if (_state != MathPadRecordingState.idle) return;
-    if (!Platform.isWindows) {
+    if (!Platform.isWindows && !Platform.isMacOS) {
       throw MathPadRecordingException(
-        'Recording is only available on Windows right now.',
+        'Recording is only available on Windows and macOS right now.',
       );
     }
 

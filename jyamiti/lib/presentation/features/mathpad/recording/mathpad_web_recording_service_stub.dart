@@ -20,7 +20,16 @@ class MathPadWebRecordingException implements Exception {
 }
 
 class MathPadWebRecordingService {
+  static final MathPadWebRecordingService _instance = MathPadWebRecordingService();
+  static MathPadWebRecordingService get instance => _instance;
+
   bool get isRecording => false;
+  bool get isCameraActive => false;
+  Duration get elapsed => Duration.zero;
+
+  void updateCaptureCanvasFrame(
+    Future<ui.Image?> Function({bool forceRefresh})? callback,
+  ) {}
 
   Future<void> start({
     int fps = 30,

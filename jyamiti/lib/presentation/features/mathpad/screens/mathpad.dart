@@ -1877,6 +1877,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
     _recordingState = _recordingService.state;
     if (_recordingState == MathPadRecordingState.recording) {
+      _recordWithCamera = _recordingService.isCameraActive;
       _recordingService.updateCanvasKey(_canvasCaptureKey);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
@@ -1884,6 +1885,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           _recordingService.updateCanvasKey(_canvasCaptureKey);
         }
       });
+    }
+
+    if (kIsWeb) {
+      _webRecordingService = MathPadWebRecordingService.instance;
+      if (_webRecordingService!.isRecording) {
+        _webRecording = true;
+        _webRecordWithCamera = _webRecordingService!.isCameraActive;
+        _webRecordingService!.updateCaptureCanvasFrame(_captureCanvasFrameForWeb);
+        _webRecordingElapsed.value = _webRecordingService!.elapsed;
+        _webRecordingTimer?.cancel();
+        _webRecordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          _webRecordingElapsed.value = _webRecordingService!.elapsed;
+        });
+      }
     }
 
     _recordingService.addListener(_onRecordingServiceChanged);
@@ -1962,12 +1977,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _recordingService.removeListener(_onRecordingServiceChanged);
     _webRecordingTimer?.cancel();
     _webRecordingElapsed.dispose();
-    // Releases any still-active screen/camera share if the tutor
-    // navigates away mid-recording -- see `cancelSync`'s doc comment for
-    // why this deliberately abandons the recording rather than trying to
-    // salvage a download from here. A no-op if nothing was recording (and
-    // a genuine no-op on every non-web platform -- see the stub).
-    _webRecordingService?.cancelSync();
     _laserFadeTimer?.cancel();
     _selectionGlowTimer?.cancel();
     super.dispose();

@@ -179,7 +179,24 @@ class MathPadWebRecordingService {
   bool _drawLoopActive = false;
   Completer<web.Blob>? _stopCompleter;
 
+  static MathPadWebRecordingService? _instance;
+  static MathPadWebRecordingService get instance =>
+      _instance ??= MathPadWebRecordingService();
+
   bool get isRecording => _recorder != null;
+  bool get isCameraActive => _cameraStream != null;
+
+  DateTime? _startedAt;
+  Duration get elapsed =>
+      _startedAt == null ? Duration.zero : DateTime.now().difference(_startedAt!);
+
+  Future<ui.Image?> Function({bool forceRefresh})? _activeCaptureCanvasFrame;
+
+  void updateCaptureCanvasFrame(
+    Future<ui.Image?> Function({bool forceRefresh})? callback,
+  ) {
+    _activeCaptureCanvasFrame = callback;
+  }
 
   /// Starts recording with either:
   /// 1. [WebRecordingTarget.canvasOnly] -- records purely the whiteboard canvas (no toolbars, no screen picker)
@@ -191,6 +208,7 @@ class MathPadWebRecordingService {
     Future<ui.Image?> Function({bool forceRefresh})? captureCanvasFrame,
   }) async {
     if (isRecording) return;
+    _activeCaptureCanvasFrame = captureCanvasFrame;
 
     final web.MediaDevices mediaDevices = web.window.navigator.mediaDevices;
 
@@ -208,6 +226,8 @@ class MathPadWebRecordingService {
     if (includeCamera) {
       await _startCamera(mediaDevices);
     }
+
+    _startedAt = DateTime.now();
 
     if (target == WebRecordingTarget.canvasOnly) {
       await _startCanvasOnly(
@@ -281,6 +301,7 @@ class MathPadWebRecordingService {
     required bool includeCamera,
     required Future<ui.Image?> Function({bool forceRefresh})? captureCanvasFrame,
   }) async {
+    _activeCaptureCanvasFrame = captureCanvasFrame;
     final web.HTMLCanvasElement canvas = web.HTMLCanvasElement()
       ..width = width
       ..height = height;
@@ -309,9 +330,10 @@ class MathPadWebRecordingService {
         final bool forceRefresh = idleTicks >= 30;
 
         try {
-          if (captureCanvasFrame != null) {
+          final captureFn = _activeCaptureCanvasFrame;
+          if (captureFn != null) {
             final ui.Image? image =
-                await captureCanvasFrame(forceRefresh: forceRefresh);
+                await captureFn(forceRefresh: forceRefresh);
             if (image != null) {
               lastCaptureTime = time;
               idleTicks = 0;
@@ -624,6 +646,8 @@ class MathPadWebRecordingService {
     _cameraVideo = null;
     _worker = null;
     _stopCompleter = null;
+    _startedAt = null;
+    _activeCaptureCanvasFrame = null;
   }
 
   /// `MediaRecorder` needs an explicit, browser-supported mimeType --
