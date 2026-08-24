@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:jyamiti/providers/theme_provider.dart';
 import '../../recording/mathpad_recording_service.dart';
+import '../../recording/mathpad_web_recording_service.dart';
 
 import '../../screens/mathpad.dart';
 import '../models/mathpad_library_models.dart';
@@ -817,7 +819,63 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
           ],
         ),
       ),
-    );
+  Future<bool> _confirmExitWhileRecording() async {
+    final recordingService =
+        Provider.of<MathPadRecordingService>(context, listen: false);
+    final webRecordingService = MathPadWebRecordingService.instance;
+    final bool isRecordingActive =
+        recordingService.state == MathPadRecordingState.recording ||
+        (kIsWeb && webRecordingService.isRecording);
+
+    if (isRecordingActive) {
+      final isDark = context.isDark;
+      final bool? confirmClose = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          title: Text(
+            'Recording in Progress',
+            style: TextStyle(
+              color: isDark ? Colors.white : Colors.black,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Text(
+            'You have an active recording. If you exit now, the recording will be discarded. Are you sure you want to exit?',
+            style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: context.textColor60),
+              ),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Exit Anyway'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmClose != true) return false;
+
+      if (kIsWeb) {
+        webRecordingService.cancelSync();
+      } else {
+        await recordingService.cancel();
+      }
+    }
+    return true;
   }
 
   @override
@@ -826,12 +884,22 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final pageTitle = '$_nodeTitle › ${_pages[_currentIndex].title}';
-    return Scaffold(
-      key: _scaffoldKey,
-      drawer: _buildLibraryDrawer(context),
-      endDrawer: _buildPagePreviewDrawer(context),
-      body: SafeArea(
-        child: Stack(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        if (!await _confirmExitWhileRecording()) return;
+        await _saveCurrentLive(captureThumbnail: true);
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: _buildLibraryDrawer(context),
+        endDrawer: _buildPagePreviewDrawer(context),
+        body: SafeArea(
+          child: Stack(
           children: [
             MathsPadWidget(
               key: ValueKey(_pages[_currentIndex].id),
@@ -887,7 +955,13 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
                     });
                     return _pendingSave;
                   },
-              onClose: () => Navigator.of(context).pop(),
+              onClose: () async {
+                if (!await _confirmExitWhileRecording()) return;
+                await _saveCurrentLive(captureThumbnail: true);
+                if (mounted) {
+                  Navigator.of(context).pop();
+                }
+              },
               onCanvasOnlyModeChanged: (isCanvasOnly) {
                 setState(() {
                   _isPadCanvasOnly = isCanvasOnly;
@@ -964,6 +1038,7 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
           ],
         ),
       ),
+    ),
     );
   }
 }

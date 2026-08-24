@@ -12330,7 +12330,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Future<bool> _onWillPop() async {
-    if (_recordingState == MathPadRecordingState.recording) {
+    final bool isWebRecordingActive =
+        kIsWeb && (_webRecording || (_webRecordingService?.isRecording ?? false));
+    final bool isRecordingActive =
+        _recordingState == MathPadRecordingState.recording ||
+        isWebRecordingActive;
+    if (isRecordingActive) {
       final bool? confirmClose = await showDialog<bool>(
         context: context,
         builder: (ctx) {
@@ -12373,8 +12378,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       );
 
       if (confirmClose == true) {
-        final recordingService = context.read<MathPadRecordingService>();
-        await recordingService.cancel();
+        if (kIsWeb) {
+          _webRecordingService?.cancelSync();
+          _webRecording = false;
+        } else {
+          final recordingService = context.read<MathPadRecordingService>();
+          await recordingService.cancel();
+        }
         return true;
       }
       return false;
