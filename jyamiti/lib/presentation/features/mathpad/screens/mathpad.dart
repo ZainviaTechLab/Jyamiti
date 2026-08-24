@@ -1539,6 +1539,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // recording doesn't need this same guard since its richer state machine
   // (MathPadRecordingState) already prevents it structurally.
   bool _webRecordingBusy = false;
+  bool _webRecordWithCamera = false;
+  Timer? _webRecordingTimer;
+  final ValueNotifier<Duration> _webRecordingElapsed =
+      ValueNotifier<Duration>(Duration.zero);
   WebRecordingTarget _webRecordingTarget = WebRecordingTarget.canvasOnly;
   int _webCanvasDirtyGeneration = 0;
   int _lastCapturedWebCanvasGeneration = -1;
@@ -1950,6 +1954,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _frictionController?.dispose();
 
     _recordingService.removeListener(_onRecordingServiceChanged);
+    _webRecordingTimer?.cancel();
+    _webRecordingElapsed.dispose();
     // Releases any still-active screen/camera share if the tutor
     // navigates away mid-recording -- see `cancelSync`'s doc comment for
     // why this deliberately abandons the recording rather than trying to
@@ -2065,7 +2071,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// recording via `getDisplayMedia`.
   Future<void> _startWebRecording({required bool includeCamera}) async {
     if (_webRecordingBusy || _webRecording) return;
-    setState(() => _webRecordingBusy = true);
+    setState(() {
+      _webRecordingBusy = true;
+      _webRecordWithCamera = includeCamera;
+    });
     final MathPadWebRecordingService service =
         _webRecordingService ??= MathPadWebRecordingService();
     try {
@@ -2079,6 +2088,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         captureCanvasFrame: _captureCanvasFrameForWeb,
       );
       if (!mounted) return;
+      _webRecordingElapsed.value = Duration.zero;
+      final DateTime startTime = DateTime.now();
+      _webRecordingTimer?.cancel();
+      _webRecordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        _webRecordingElapsed.value = DateTime.now().difference(startTime);
+      });
       setState(() {
         _webRecording = true;
         _webRecordingBusy = false;
@@ -2103,6 +2118,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (_webRecordingBusy || !_webRecording) return;
     final MathPadWebRecordingService? service = _webRecordingService;
     if (service == null) return;
+    _webRecordingTimer?.cancel();
+    _webRecordingTimer = null;
     setState(() {
       _webRecording = false;
       _webRecordingBusy = true;
@@ -2115,6 +2132,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         bytes: result.bytes,
       );
       if (!mounted) return;
+      _webRecordingElapsed.value = Duration.zero;
       setState(() => _webRecordingBusy = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -2123,7 +2141,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
           duration: Duration(seconds: 4),
         ),
       );
-    } on MathPadWebRecordingException catch (e) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _webRecording = false;
@@ -2131,9 +2149,8 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(e.message),
+          content: Text('Error saving web recording: $e'),
           backgroundColor: Colors.redAccent,
-          duration: const Duration(seconds: 10),
         ),
       );
     }
@@ -8532,6 +8549,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   Widget _buildCanvasStack(BuildContext context, bool isDark, Color bgColor) {
+    final bool isRecordingActive = kIsWeb
+        ? _webRecording
+        : _recordingState == MathPadRecordingState.recording;
+    final bool showCameraIcon = kIsWeb
+        ? _webRecordWithCamera
+        : _recordWithCamera;
+
     return ClipRRect(
       // Full screen: the canvas touches all four edges of the
       // outer rounded container directly (no adjacent toolbar
@@ -8544,12 +8568,96 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       child: Stack(
         children: [
           _buildCanvasCaptureArea(context, isDark, bgColor),
-          if (_recordingState == MathPadRecordingState.recording)
-            _RecordingNeonBorder(showCameraIcon: _recordWithCamera),
-          if (_recordingState != MathPadRecordingState.idle)
-            _buildRecordingBadge(context),
+          if (isRecordingActive)
+            _RecordingNeonBorder(showCameraIcon: showCameraIcon),
+          if (kIsWeb) ...[
+            if (_webRecording || _webRecordingBusy)
+              _buildWebRecordingBadge(context),
+          ] else ...[
+            if (_recordingState != MathPadRecordingState.idle)
+              _buildRecordingBadge(context),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _buildWebRecordingBadge(BuildContext context) {
+    return ValueListenableBuilder<Duration>(
+      valueListenable: _webRecordingElapsed,
+      builder: (context, elapsed, _) {
+        final bool busy = _webRecordingBusy;
+        // The live "REC 00:15" timer peeks in for the first 5 seconds
+        // of every hour and stays faded out the rest of the time.
+        final bool timerPeek = elapsed.inSeconds % 3600 <= 5;
+        final bool visible = busy || timerPeek;
+
+        final Widget badgeContent = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (busy)
+              const SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            else
+              const Icon(
+                Icons.fiber_manual_record_rounded,
+                size: 14,
+                color: Colors.redAccent,
+              ),
+            const SizedBox(width: 8),
+            Text(
+              busy
+                  ? 'Saving Recording…'
+                  : 'REC ${_formatRecordingElapsed(elapsed)}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        );
+
+        return Positioned(
+          top: 16,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            ignoring: !visible,
+            child: AnimatedOpacity(
+              opacity: visible ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 700),
+              curve: Curves.easeInOut,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.75),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: badgeContent,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
