@@ -1658,38 +1658,6 @@ class _WebRecordingsScreenState extends State<WebRecordingsScreen> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            PopupMenuButton<String>(
-              icon: Icon(
-                Icons.more_vert_rounded,
-                size: 20,
-                color: isDark ? Colors.white70 : Colors.black54,
-              ),
-              tooltip: 'Options',
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              onSelected: handleMenuSelect,
-              itemBuilder: (context) => buildMenuItems(),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              onPressed: busy ? null : () => _download(meta),
-              icon: Icon(
-                Icons.download_rounded,
-                color: isDark ? Colors.white70 : Colors.black54,
-              ),
-              tooltip: 'Download',
-            ),
-            IconButton(
-              onPressed: busy ? null : () => _delete(meta),
-              icon: Icon(
-                Icons.delete_outline_rounded,
-                color: isDark ? Colors.white54 : Colors.black45,
-              ),
-              tooltip: 'Delete',
-            ),
-            const SizedBox(width: 8),
             FilledButton.icon(
               onPressed: busy ? null : () => _playRecording(meta, isDark),
               style: FilledButton.styleFrom(
@@ -1709,6 +1677,21 @@ class _WebRecordingsScreenState extends State<WebRecordingsScreen> {
                     )
                   : const Icon(Icons.play_arrow_rounded, size: 18),
               label: const Text('Play'),
+            ),
+            const SizedBox(width: 8),
+            PopupMenuButton<String>(
+              icon: Icon(
+                Icons.more_vert_rounded,
+                size: 20,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
+              tooltip: 'Options',
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              onSelected: handleMenuSelect,
+              itemBuilder: (context) => buildMenuItems(),
             ),
           ],
         ),
