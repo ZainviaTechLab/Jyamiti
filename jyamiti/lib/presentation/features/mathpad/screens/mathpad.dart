@@ -1540,6 +1540,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // (MathPadRecordingState) already prevents it structurally.
   bool _webRecordingBusy = false;
   WebRecordingTarget _webRecordingTarget = WebRecordingTarget.canvasOnly;
+  int _webCanvasDirtyGeneration = 0;
+  int _lastCapturedWebCanvasGeneration = -1;
+
+  void _markWebCanvasDirty() {
+    _webCanvasDirtyGeneration++;
+  }
 
   // A small pixel ratio, not the device's real one -- this is only ever
   // displayed at ~120px tall in the Math Pad Library's pages sidebar, so a
@@ -1829,6 +1835,12 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _finishedStrokesNotifier = ValueNotifier<int>(0);
     _bakedStrokesNotifier = ValueNotifier<int>(0);
     _activeDrawingNotifier = ValueNotifier<int>(0);
+
+    _activeDrawingNotifier.addListener(_markWebCanvasDirty);
+    _finishedStrokesNotifier.addListener(_markWebCanvasDirty);
+    _panNotifier.addListener(_markWebCanvasDirty);
+    _scaleNotifier.addListener(_markWebCanvasDirty);
+
     _frictionController = AnimationController(vsync: this);
     // Drives the selected-stroke neon outline's marching-dash motion.
     // Runs for the widget's whole lifetime but only does any real work
@@ -1925,6 +1937,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _rightToolbarHideTimer?.cancel();
     _textEditorController?.dispose();
     _canvasFocusNode.dispose();
+    _activeDrawingNotifier.removeListener(_markWebCanvasDirty);
+    _finishedStrokesNotifier.removeListener(_markWebCanvasDirty);
+    _panNotifier.removeListener(_markWebCanvasDirty);
+    _scaleNotifier.removeListener(_markWebCanvasDirty);
+
     _panNotifier.dispose();
     _scaleNotifier.dispose();
     _finishedStrokesNotifier.dispose();
@@ -2028,12 +2045,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   }
 
   /// Captures a high-performance 1.0 DPR snapshot of the whiteboard canvas for web recording.
-  Future<ui.Image?> _captureCanvasFrameForWeb() async {
+  /// Skips capturing when the board is idle (unchanged) to eliminate GPU readback overhead.
+  Future<ui.Image?> _captureCanvasFrameForWeb({bool forceRefresh = false}) async {
+    if (!forceRefresh &&
+        _webCanvasDirtyGeneration == _lastCapturedWebCanvasGeneration) {
+      return null;
+    }
     final RenderObject? renderObject =
         _canvasCaptureKey.currentContext?.findRenderObject();
     if (renderObject is! RenderRepaintBoundary || !renderObject.attached) {
       return null;
     }
+    _lastCapturedWebCanvasGeneration = _webCanvasDirtyGeneration;
     return await renderObject.toImage(pixelRatio: 1.0);
   }
 

@@ -203,7 +203,7 @@ class MathPadWebRecordingService {
     WebRecordingTarget target = WebRecordingTarget.canvasOnly,
     int? canvasWidth,
     int? canvasHeight,
-    Future<ui.Image?> Function()? captureCanvasFrame,
+    Future<ui.Image?> Function({bool forceRefresh})? captureCanvasFrame,
   }) async {
     if (isRecording) return;
 
@@ -296,14 +296,14 @@ class MathPadWebRecordingService {
   }
 
   /// Pure whiteboard canvas recording path -- streams directly from an
-  /// HTML5 `<canvas>` populated by [captureCanvasFrame] with zero toolbars and zero
-  /// screen-share popups.
+  /// HTML5 `<canvas>` populated by [captureCanvasFrame] with zero toolbars, zero
+  /// screen-share popups, and dirty-state deduplication (skips capturing when the board is idle).
   Future<void> _startCanvasOnly({
     required int width,
     required int height,
     required int fps,
     required bool includeCamera,
-    required Future<ui.Image?> Function()? captureCanvasFrame,
+    required Future<ui.Image?> Function({bool forceRefresh})? captureCanvasFrame,
   }) async {
     final web.HTMLCanvasElement canvas = web.HTMLCanvasElement()
       ..width = width
@@ -318,6 +318,8 @@ class MathPadWebRecordingService {
 
     _drawLoopActive = true;
     bool inFlight = false;
+    int idleTicks = 0;
+    final int forceRefreshTicks = fps.clamp(15, 60);
 
     final int intervalMs = (1000 / fps).round().clamp(16, 100);
     Timer.periodic(Duration(milliseconds: intervalMs), (timer) async {
@@ -327,10 +329,15 @@ class MathPadWebRecordingService {
       }
       if (inFlight) return;
       inFlight = true;
+      idleTicks++;
+      final bool forceRefresh = idleTicks >= forceRefreshTicks;
+
       try {
         if (captureCanvasFrame != null) {
-          final ui.Image? image = await captureCanvasFrame();
+          final ui.Image? image =
+              await captureCanvasFrame(forceRefresh: forceRefresh);
           if (image != null) {
+            idleTicks = 0;
             final int imgW = image.width;
             final int imgH = image.height;
             final ByteData? byteData =

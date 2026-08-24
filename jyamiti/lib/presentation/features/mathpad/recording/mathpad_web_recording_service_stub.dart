@@ -30,7 +30,7 @@ class MathPadWebRecordingService {
     WebRecordingTarget target = WebRecordingTarget.canvasOnly,
     int? canvasWidth,
     int? canvasHeight,
-    Future<ui.Image?> Function()? captureCanvasFrame,
+    Future<ui.Image?> Function({bool forceRefresh})? captureCanvasFrame,
   }) async {
     throw MathPadWebRecordingException(
       'Web recording is not available on this platform.',
