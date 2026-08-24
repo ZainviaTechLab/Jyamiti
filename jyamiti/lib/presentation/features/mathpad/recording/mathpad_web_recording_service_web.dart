@@ -101,10 +101,12 @@ import 'dart:async';
 import 'dart:js_interop';
 import 'dart:math';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:web/web.dart' as web;
 
 import 'mathpad_web_recording_result.dart';
+import 'mathpad_web_recording_service.dart';
 
 class MathPadWebRecordingException implements Exception {
   MathPadWebRecordingException(this.message);
@@ -192,33 +194,17 @@ class MathPadWebRecordingService {
 
   bool get isRecording => _recorder != null;
 
-  /// Requests the microphone FIRST (see this file's header comment,
-  /// "AUDIO"), before ever showing the screen/tab/window picker (see
-  /// this file's header comment -- unavoidable, every time), optionally
-  /// starts a camera feed for the PIP overlay, then starts compositing
-  /// onto an internal canvas and encoding via `MediaRecorder` -- off the
-  /// main thread via [_startOffThread] when the browser supports it,
-  /// [_startMainThreadFallback] otherwise. [fps] controls both the
-  /// composite rate and the canvas capture stream's rate.
-  ///
-  /// [cropRect], if given, is only actually applied when the shared
-  /// source's `displaySurface` reports `'browser'` (see this file's header
-  /// comment for why).
-  ///
-  /// Throws [MathPadWebRecordingException] if microphone access is
-  /// denied/unavailable, the user cancels the screen-share picker, the
-  /// browser doesn't support the required APIs, or no codec
-  /// `MediaRecorder` will accept could be found. A camera failure is
-  /// never fatal to the recording -- see [_startCamera]. Microphone
-  /// failure IS fatal, unlike camera -- matches
-  /// `MathPadRecordingService.start`'s same "no mic, no recording"
-  /// stance on desktop (this feature exists to capture narration; a
-  /// silent recording would defeat the point, not just be a lesser
-  /// version of it).
+  /// Starts recording with either:
+  /// 1. [WebRecordingTarget.canvasOnly] -- records purely the whiteboard canvas (no toolbars, no screen picker)
+  /// 2. [WebRecordingTarget.screenTab] -- records the chosen tab/window via `getDisplayMedia`
   Future<void> start({
     int fps = 30,
     bool includeCamera = false,
     Rectangle<int>? cropRect,
+    WebRecordingTarget target = WebRecordingTarget.canvasOnly,
+    int? canvasWidth,
+    int? canvasHeight,
+    Future<ui.Image?> Function()? captureCanvasFrame,
   }) async {
     if (isRecording) return;
 
@@ -233,6 +219,23 @@ class MathPadWebRecordingService {
         'Microphone access is needed to record narration -- please allow '
         'microphone access and try again.',
       );
+    }
+
+    if (includeCamera) {
+      await _startCamera(mediaDevices);
+    }
+
+    if (target == WebRecordingTarget.canvasOnly) {
+      final int width = canvasWidth ?? cropRect?.width ?? 1920;
+      final int height = canvasHeight ?? cropRect?.height ?? 1080;
+      await _startCanvasOnly(
+        width: width,
+        height: height,
+        fps: fps,
+        includeCamera: includeCamera,
+        captureCanvasFrame: captureCanvasFrame,
+      );
+      return;
     }
 
     late web.MediaStream screenStream;
@@ -266,20 +269,10 @@ class MathPadWebRecordingService {
     final int width = effectiveCrop?.width ?? fullWidth;
     final int height = effectiveCrop?.height ?? fullHeight;
 
-    web.MediaStreamTrack? cameraTrack;
-    if (includeCamera) {
-      cameraTrack = await _startCamera(mediaDevices);
-    }
+    final web.MediaStreamTrack? cameraTrack = _cameraStream?.getVideoTracks().toDart.isNotEmpty == true
+        ? _cameraStream!.getVideoTracks().toDart.first
+        : null;
 
-    // Deliberately no up-front "does this browser support
-    // MediaStreamTrackProcessor" feature check -- there's no
-    // sufficiently-reliable-and-simple way to ask that question directly
-    // via package:web/dart:js_interop's stable API surface, so this just
-    // tries the off-thread path and falls back on ANY failure
-    // (constructing a nonexistent JS class throws a catchable exception
-    // either way). More robust than a separate check could be anyway:
-    // it also catches setup failures on browsers that DO have the API but
-    // fail for some other reason, not just ones that lack it outright.
     try {
       await _startOffThread(
         screenTrack: screenTrack,
@@ -291,10 +284,6 @@ class MathPadWebRecordingService {
       );
       return;
     } catch (_) {
-      // Fall through to the main-thread path below -- a worker/
-      // Insertable-Streams setup failure shouldn't lose the recording
-      // entirely when the ordinary path is right there and already
-      // proven to work.
       _worker?.terminate();
       _worker = null;
     }
@@ -306,6 +295,69 @@ class MathPadWebRecordingService {
       fps: fps,
     );
   }
+
+  /// Pure whiteboard canvas recording path -- streams directly from an
+  /// HTML5 `<canvas>` populated by [captureCanvasFrame] with zero toolbars and zero
+  /// screen-share popups.
+  Future<void> _startCanvasOnly({
+    required int width,
+    required int height,
+    required int fps,
+    required bool includeCamera,
+    required Future<ui.Image?> Function()? captureCanvasFrame,
+  }) async {
+    final web.HTMLCanvasElement canvas = web.HTMLCanvasElement()
+      ..width = width
+      ..height = height;
+    final web.CanvasRenderingContext2D ctx =
+        canvas.getContext('2d') as web.CanvasRenderingContext2D;
+
+    ctx.fillStyle = '#0F2B52'.toJS;
+    ctx.fillRect(0, 0, width, height);
+
+    await _finishSetupAndStartRecorder(canvas: canvas, fps: fps);
+
+    _drawLoopActive = true;
+    bool inFlight = false;
+
+    final int intervalMs = (1000 / fps).round().clamp(16, 100);
+    Timer.periodic(Duration(milliseconds: intervalMs), (timer) async {
+      if (!_drawLoopActive) {
+        timer.cancel();
+        return;
+      }
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        if (captureCanvasFrame != null) {
+          final ui.Image? image = await captureCanvasFrame();
+          if (image != null) {
+            final int imgW = image.width;
+            final int imgH = image.height;
+            final ByteData? byteData =
+                await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+            image.dispose();
+            if (byteData != null) {
+              if (canvas.width != imgW || canvas.height != imgH) {
+                canvas.width = imgW;
+                canvas.height = imgH;
+              }
+              final Uint8ClampedList clamped =
+                  byteData.buffer.asUint8ClampedList();
+              final web.ImageData imgData =
+                  web.ImageData(clamped.toJS, imgW, imgH);
+              ctx.putImageData(imgData, 0, 0);
+            }
+          }
+        }
+        if (includeCamera) {
+          _drawCameraOverlay(ctx, canvas.width, canvas.height);
+        }
+      } catch (_) {}
+      inFlight = false;
+    });
+  }
+
 
   Future<void> _startOffThread({
     required web.MediaStreamTrack screenTrack,

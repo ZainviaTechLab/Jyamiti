@@ -8,8 +8,10 @@
 // Android/iOS builds at all.
 
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'mathpad_web_recording_result.dart';
+import 'mathpad_web_recording_service.dart';
 
 class MathPadWebRecordingException implements Exception {
   MathPadWebRecordingException(this.message);
@@ -25,6 +27,10 @@ class MathPadWebRecordingService {
     int fps = 30,
     bool includeCamera = false,
     Rectangle<int>? cropRect,
+    WebRecordingTarget target = WebRecordingTarget.canvasOnly,
+    int? canvasWidth,
+    int? canvasHeight,
+    Future<ui.Image?> Function()? captureCanvasFrame,
   }) async {
     throw MathPadWebRecordingException(
       'Web recording is not available on this platform.',

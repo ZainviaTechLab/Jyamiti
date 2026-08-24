@@ -12,3 +12,11 @@
 export 'mathpad_web_recording_result.dart';
 export 'mathpad_web_recording_service_web.dart'
     if (dart.library.io) 'mathpad_web_recording_service_stub.dart';
+
+enum WebRecordingTarget {
+  /// Records strictly the whiteboard canvas and drawing area (no toolbars, no screen-share dialog)
+  canvasOnly,
+
+  /// Records the full browser tab or window (using browser screen-share picker)
+  screenTab,
+}

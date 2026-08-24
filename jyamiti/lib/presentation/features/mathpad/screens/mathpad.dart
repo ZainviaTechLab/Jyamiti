@@ -729,6 +729,11 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _isDarkTheme ? Colors.white60 : _darkPanelColor.withOpacity(0.6);
   MathsPadLine? _currentLine;
 
+  bool _webRecording = false;
+  bool _webRecordingBusy = false;
+  WebRecordingTarget _webRecordingTarget = WebRecordingTarget.canvasOnly;
+  MathPadWebRecordingService? _webRecordingService;
+
   MouseCursor get _canvasCursor {
     switch (_toolMode) {
       case CanvasToolMode.pan:
@@ -1787,11 +1792,18 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         }
       }
       final savedPanLocked = prefs.getBool('mathpad_pan_locked');
+      final savedWebTarget = prefs.getString('mathpad_web_recording_target');
       setState(() {
         _panLocked = savedPanLocked ?? true;
         _panLockWorldTopLeft = _panLocked
             ? Offset(-_panOffset.dx / _scale, -_panOffset.dy / _scale)
             : null;
+        if (savedWebTarget != null) {
+          _webRecordingTarget = WebRecordingTarget.values.firstWhere(
+            (e) => e.name == savedWebTarget,
+            orElse: () => WebRecordingTarget.canvasOnly,
+          );
+        }
       });
     });
     if (widget.initialInstruments != null) {
@@ -2019,19 +2031,33 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
-  /// Web counterpart to `_startRecording` -- see
-  /// `MathPadWebRecordingService`'s doc comment for the whole picture
-  /// (getDisplayMedia's picker prompt is unavoidable here; expect it to
-  /// show up the instant this is called, not after some other warm-up).
+  /// Captures a high-performance 1.0 DPR snapshot of the whiteboard canvas for web recording.
+  Future<ui.Image?> _captureCanvasFrameForWeb() async {
+    final RenderObject? renderObject =
+        _canvasCaptureKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderRepaintBoundary || !renderObject.attached) {
+      return null;
+    }
+    return await renderObject.toImage(pixelRatio: 1.0);
+  }
+
+  /// Web counterpart to `_startRecording` -- supports both pure whiteboard
+  /// canvas recording (no toolbars, no screen-share dialog) and full tab/screen
+  /// recording via `getDisplayMedia`.
   Future<void> _startWebRecording({required bool includeCamera}) async {
     if (_webRecordingBusy || _webRecording) return;
     setState(() => _webRecordingBusy = true);
     final MathPadWebRecordingService service =
         _webRecordingService ??= MathPadWebRecordingService();
     try {
+      final Rectangle<int>? cropRect = _measureWebCropRect();
       await service.start(
         includeCamera: includeCamera,
-        cropRect: _measureWebCropRect(),
+        cropRect: cropRect,
+        target: _webRecordingTarget,
+        canvasWidth: cropRect?.width,
+        canvasHeight: cropRect?.height,
+        captureCanvasFrame: _captureCanvasFrameForWeb,
       );
       if (!mounted) return;
       setState(() {
@@ -11295,9 +11321,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               size: 20,
                               color: _webRecordingBusy ? _textColor60 : _textColor,
                             ),
-                            tooltip:
-                                'Start Recording -- your browser will ask '
-                                'you to choose a window/tab/screen to share',
+                            tooltip: _webRecordingTarget == WebRecordingTarget.canvasOnly
+                                ? 'Start Recording (Whiteboard Canvas Only)'
+                                : 'Start Recording (Tab / Screen Share)',
                             onPressed: _webRecordingBusy
                                 ? null
                                 : () => controller.isOpen
@@ -11311,7 +11337,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             icon: Icons.videocam_off_rounded,
                             iconColor: _textColor,
                             label: 'Without Camera',
-                            description: 'Record the shared screen only',
+                            description: _webRecordingTarget == WebRecordingTarget.canvasOnly
+                                ? 'Record whiteboard canvas & audio only (no toolbars)'
+                                : 'Record the shared screen & audio only',
                             onSelected: (includeCamera) =>
                                 _startWebRecording(includeCamera: includeCamera),
                           ),
@@ -11320,9 +11348,41 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                             icon: Icons.videocam_rounded,
                             iconColor: const Color(0xFF6366F1),
                             label: 'With Camera',
-                            description: 'Adds a webcam overlay PIP box',
+                            description: _webRecordingTarget == WebRecordingTarget.canvasOnly
+                                ? 'Record canvas, audio & webcam overlay PIP'
+                                : 'Record shared screen, audio & webcam overlay',
                             onSelected: (includeCamera) =>
                                 _startWebRecording(includeCamera: includeCamera),
+                          ),
+                          const Divider(height: 1),
+                          _recordingSettingsSubmenu<WebRecordingTarget>(
+                            isDark: isDark,
+                            icon: Icons.crop_rounded,
+                            label: 'Recording Mode',
+                            selectedValue: _webRecordingTarget,
+                            onSelected: (target) => setState(() {
+                              _webRecordingTarget = target;
+                              SharedPreferences.getInstance().then(
+                                (prefs) => prefs.setString(
+                                  'mathpad_web_recording_target',
+                                  target.name,
+                                ),
+                              );
+                            }),
+                            options: const [
+                              (
+                                value: WebRecordingTarget.canvasOnly,
+                                label: 'Whiteboard Canvas Only (Recommended)',
+                                description:
+                                    'Records strictly the drawing area without toolbars or screen-share prompts',
+                              ),
+                              (
+                                value: WebRecordingTarget.screenTab,
+                                label: 'Tab / Screen Share',
+                                description:
+                                    'Prompts browser picker to record full tab or window',
+                              ),
+                            ],
                           ),
                         ],
                       ),
