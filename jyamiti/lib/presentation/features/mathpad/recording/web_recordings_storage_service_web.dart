@@ -15,6 +15,22 @@ const int _dbVersion = 1;
 const String _metaStoreName = 'recording_meta';
 const String _blobStoreName = 'recording_blobs';
 
+extension type _RecordingMetaRecord._(JSObject _) implements JSObject {
+  external factory _RecordingMetaRecord({
+    String id,
+    String name,
+    String mimeType,
+    int sizeBytes,
+    int createdAtMillis,
+  });
+
+  external JSString? get id;
+  external JSString? get name;
+  external JSString? get mimeType;
+  external JSNumber? get sizeBytes;
+  external JSNumber? get createdAtMillis;
+}
+
 class MathPadWebRecordingsStorageService {
   web.IDBDatabase? _idb;
 
@@ -73,27 +89,29 @@ class MathPadWebRecordingsStorageService {
     final metaStore = txn.objectStore(_metaStoreName);
     final blobStore = txn.objectStore(_blobStoreName);
 
-    final metaJson = {
-      'id': id,
-      'name': name,
-      'mimeType': mimeType,
-      'sizeBytes': bytes.length,
-      'createdAtMillis': nowMillis,
-    }.jsify();
+    final metaRecord = _RecordingMetaRecord(
+      id: id,
+      name: name,
+      mimeType: mimeType,
+      sizeBytes: bytes.length,
+      createdAtMillis: nowMillis,
+    );
 
     final web.Blob blob = web.Blob(
       [bytes.toJS].toJS,
       web.BlobPropertyBag(type: mimeType),
     );
 
-    metaStore.put(metaJson, id.toJS);
+    metaStore.put(metaRecord, id.toJS);
     blobStore.put(blob, id.toJS);
 
     final completer = Completer<void>();
-    txn.oncomplete = ((web.Event _) => completer.complete()).toJS;
-    txn.onerror =
-        ((web.Event _) => completer.completeError('Failed to save recording'))
-            .toJS;
+    txn.oncomplete = ((web.Event _) {
+      completer.complete();
+    }).toJS;
+    txn.onerror = ((web.Event _) {
+      completer.completeError('Failed to save recording');
+    }).toJS;
     await completer.future;
   }
 
@@ -114,16 +132,13 @@ class MathPadWebRecordingsStorageService {
         final list = <WebRecordingMeta>[];
         final dartList = results.toDart;
         for (final item in dartList) {
-          if (item is JSObject) {
-            final id = (item['id'] as JSString?)?.toDart ?? '';
-            final name =
-                (item['name'] as JSString?)?.toDart ?? 'Recording';
-            final mimeType =
-                (item['mimeType'] as JSString?)?.toDart ?? 'video/webm';
-            final sizeBytes =
-                (item['sizeBytes'] as JSNumber?)?.toDartInt ?? 0;
-            final createdAtMillis =
-                (item['createdAtMillis'] as JSNumber?)?.toDartInt ?? 0;
+          if (item.isA<JSObject>()) {
+            final meta = _RecordingMetaRecord._(item as JSObject);
+            final id = meta.id?.toDart ?? '';
+            final name = meta.name?.toDart ?? 'Recording';
+            final mimeType = meta.mimeType?.toDart ?? 'video/webm';
+            final sizeBytes = meta.sizeBytes?.toDartInt ?? 0;
+            final createdAtMillis = meta.createdAtMillis?.toDartInt ?? 0;
             list.add(
               WebRecordingMeta(
                 id: id,
@@ -140,7 +155,9 @@ class MathPadWebRecordingsStorageService {
         completer.complete(list);
       }).toJS;
 
-      request.onerror = ((web.Event _) => completer.complete([])).toJS;
+      request.onerror = ((web.Event _) {
+        completer.complete([]);
+      }).toJS;
       return completer.future;
     } catch (_) {
       return [];
@@ -155,23 +172,34 @@ class MathPadWebRecordingsStorageService {
       final request = blobStore.get(id.toJS);
 
       final completer = Completer<Uint8List?>();
-      request.onsuccess = ((web.Event _) async {
+      request.onsuccess = ((web.Event _) {
         final result = request.result;
         if (result == null) {
           completer.complete(null);
           return;
         }
-        if (result is web.Blob) {
-          final JSArrayBuffer arrayBuffer = await result.arrayBuffer().toDart;
-          completer.complete(arrayBuffer.toDart.asUint8List());
-        } else if (result is JSArrayBuffer) {
-          completer.complete(result.toDart.asUint8List());
+        if (result.isA<web.Blob>()) {
+          final blob = result as web.Blob;
+          unawaited(() async {
+            try {
+              final JSArrayBuffer arrayBuffer =
+                  await blob.arrayBuffer().toDart;
+              completer.complete(arrayBuffer.toDart.asUint8List());
+            } catch (_) {
+              completer.complete(null);
+            }
+          }());
+        } else if (result.isA<JSArrayBuffer>()) {
+          final buffer = result as JSArrayBuffer;
+          completer.complete(buffer.toDart.asUint8List());
         } else {
           completer.complete(null);
         }
       }).toJS;
 
-      request.onerror = ((web.Event _) => completer.complete(null)).toJS;
+      request.onerror = ((web.Event _) {
+        completer.complete(null);
+      }).toJS;
       return completer.future;
     } catch (_) {
       return null;
@@ -193,10 +221,10 @@ class MathPadWebRecordingsStorageService {
           return;
         }
         web.Blob blob;
-        if (result is web.Blob) {
-          blob = result;
-        } else if (result is JSArrayBuffer) {
-          blob = web.Blob([result].toJS);
+        if (result.isA<web.Blob>()) {
+          blob = result as web.Blob;
+        } else if (result.isA<JSArrayBuffer>()) {
+          blob = web.Blob([result as JSArrayBuffer].toJS);
         } else {
           completer.complete(false);
           return;
@@ -214,7 +242,9 @@ class MathPadWebRecordingsStorageService {
         completer.complete(true);
       }).toJS;
 
-      request.onerror = ((web.Event _) => completer.complete(false)).toJS;
+      request.onerror = ((web.Event _) {
+        completer.complete(false);
+      }).toJS;
       return completer.future;
     } catch (_) {
       return false;
@@ -248,11 +278,11 @@ class MathPadWebRecordingsStorageService {
           completer.complete(null);
           return;
         }
-        if (result is web.Blob) {
-          final url = web.URL.createObjectURL(result);
+        if (result.isA<web.Blob>()) {
+          final url = web.URL.createObjectURL(result as web.Blob);
           completer.complete(url);
-        } else if (result is JSArrayBuffer) {
-          final blob = web.Blob([result].toJS);
+        } else if (result.isA<JSArrayBuffer>()) {
+          final blob = web.Blob([result as JSArrayBuffer].toJS);
           final url = web.URL.createObjectURL(blob);
           completer.complete(url);
         } else {
@@ -260,7 +290,9 @@ class MathPadWebRecordingsStorageService {
         }
       }).toJS;
 
-      request.onerror = ((web.Event _) => completer.complete(null)).toJS;
+      request.onerror = ((web.Event _) {
+        completer.complete(null);
+      }).toJS;
       return completer.future;
     } catch (_) {
       return null;
@@ -274,4 +306,3 @@ class MathPadWebRecordingsStorageService {
     } catch (_) {}
   }
 }
-
