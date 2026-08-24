@@ -1730,6 +1730,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   @override
   void initState() {
     super.initState();
+    if (kIsWeb) {
+      BrowserContextMenu.disableContextMenu();
+    }
 
     _loadLogoImage();
     if (widget.initialLines != null) {
@@ -1932,6 +1935,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
 
   @override
   void dispose() {
+    if (kIsWeb) {
+      BrowserContextMenu.enableContextMenu();
+    }
     StylusPredictionService.instance.predictedDelta.removeListener(
       _onStylusPredictedDelta,
     );
