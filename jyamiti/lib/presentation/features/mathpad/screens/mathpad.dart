@@ -11374,6 +11374,41 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                                 _startWebRecording(includeCamera: includeCamera),
                           ),
                           const Divider(height: 1),
+                          MenuItemButton(
+                            onPressed: () =>
+                                _showWebRecordingSettingsGuide(context),
+                            leadingIcon: Icon(
+                              Icons.help_outline_rounded,
+                              size: 18,
+                              color: _textColor,
+                            ),
+                            child: SizedBox(
+                              width: 240,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'About Settings',
+                                    style: TextStyle(
+                                      color: _textColor,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Guide to recording modes & hardware recommendations',
+                                    style: TextStyle(
+                                      color: _textColor60,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const Divider(height: 1),
                           _recordingSettingsSubmenu<WebRecordingTarget>(
                             isDark: isDark,
                             icon: Icons.crop_rounded,
@@ -11554,6 +11589,174 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         );
       }).toList(),
       child: Text(label, style: TextStyle(color: _textColor, fontSize: 13)),
+    );
+  }
+
+  /// Opens a scrollable reference dialog explaining every web recording
+  /// mode -- pure whiteboard canvas vs screen/tab share, dirty-state dedup,
+  /// webcam PIP overlay, and which hardware combinations are ideal.
+  void _showWebRecordingSettingsGuide(BuildContext context) {
+    final bool isDark = _isDarkTheme;
+    final Color heading = isDark ? Colors.white : Colors.black;
+    final Color body = isDark ? Colors.white70 : Colors.black87;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: isDark ? _darkPanelColor : Colors.white,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640, maxHeight: 720),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Web Recording Settings Guide',
+                          style: TextStyle(
+                            color: heading,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 17,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          Icons.close_rounded,
+                          color: body,
+                          size: 20,
+                        ),
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  Expanded(
+                    child: Scrollbar(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _guideP(
+                              'Web recording uses browser-native hardware acceleration '
+                              '(MediaRecorder + HTML5 Canvas Streams + IndexedDB). Finished '
+                              'recordings save instantly without freezing the browser and '
+                              'can be played, downloaded, or shared from "My Recordings".',
+                              body,
+                            ),
+                            _guideH('Quick picks by hardware & system', heading),
+                            _guideSub('Low-end Laptop / Chromebook / Older CPU', heading),
+                            _guideBullet(
+                              'Recording Mode: Whiteboard Canvas Only (Recommended)',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Camera: Without Camera',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Why: Pure canvas mode with dirty-state deduplication drops '
+                              'CPU & GPU usage to 0% during pauses, ensuring zero pen lag and '
+                              'smooth handwriting on even the lightest devices.',
+                              body,
+                            ),
+                            _guideSub(
+                              'Modern Laptop / Desktop / MacBook / Chromebook',
+                              heading,
+                            ),
+                            _guideBullet(
+                              'Recording Mode: Whiteboard Canvas Only (Recommended)',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Camera: With Camera (PIP Webcam Overlay) or Without Camera',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Why: Delivers crisp full-HD canvas video, synchronized microphone '
+                              'narration, and an optional corner webcam overlay.',
+                              body,
+                            ),
+                            _guideSub(
+                              'Multi-Tab / Presentation / Slides Tutorial',
+                              heading,
+                            ),
+                            _guideBullet(
+                              'Recording Mode: Tab / Screen Share',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Why: Prompts the browser screen-sharing picker so you can switch '
+                              'between whiteboard drawings, external PDFs, websites, or slides.',
+                              body,
+                            ),
+                            _guideH('What each setting does', heading),
+                            _guideSub('Recording Mode', heading),
+                            _guideP(
+                              'Controls which part of the screen is captured into your video.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Whiteboard Canvas Only (Recommended): Captures strictly the '
+                              'drawing area (grid, math strokes, geometric shapes, equations, '
+                              'and instruments). Excludes top toolbars and browser chrome. '
+                              'Starts immediately with no screen-sharing prompts, and '
+                              'intelligently skips processing when the board is idle to save battery.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Tab / Screen Share: Prompts the browser picker to capture your '
+                              'current tab, an app window, or the entire screen. Great for '
+                              'lessons involving other browser tabs or third-party apps.',
+                              body,
+                            ),
+                            _guideSub('Camera Options', heading),
+                            _guideP(
+                              'Controls whether a webcam video feed is composited into the recording.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Without Camera: Records only the whiteboard canvas (or shared screen) '
+                              'plus microphone audio. Produces the smallest file size and lowest resource usage.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'With Camera: Adds a live picture-in-picture (PIP) webcam overlay '
+                              'box in the lower-right corner of the video.',
+                              body,
+                            ),
+                            _guideSub('Storage & Playback', heading),
+                            _guideP(
+                              'Where and how your recordings are stored.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'IndexedDB Storage: Videos are stored safely in high-performance '
+                              'browser storage without filling up RAM or freezing the page.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'In-App Player & Sharing: Open "My Recordings" from the dashboard '
+                              'to play back videos in full quality, download WebM/MP4 files, or '
+                              'share directly to Google Drive, YouTube, and WhatsApp.',
+                              body,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
