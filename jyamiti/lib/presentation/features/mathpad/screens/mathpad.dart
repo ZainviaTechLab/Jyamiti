@@ -2050,7 +2050,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     );
   }
 
-  /// Captures a high-performance 1.0 DPR snapshot of the whiteboard canvas for web recording.
+  /// Captures a crisp Full HD / High-DPI snapshot of the whiteboard canvas for web recording.
   /// Skips capturing when the board is idle (unchanged) to eliminate GPU readback overhead.
   Future<ui.Image?> _captureCanvasFrameForWeb({bool forceRefresh = false}) async {
     if (!forceRefresh &&
@@ -2063,7 +2063,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       return null;
     }
     _lastCapturedWebCanvasGeneration = _webCanvasDirtyGeneration;
-    return await renderObject.toImage(pixelRatio: 1.0);
+    final double rawDpr =
+        ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
+    final double captureDpr = rawDpr.clamp(1.25, 1.75);
+    return await renderObject.toImage(pixelRatio: captureDpr);
   }
 
   /// Web counterpart to `_startRecording` -- supports both pure whiteboard

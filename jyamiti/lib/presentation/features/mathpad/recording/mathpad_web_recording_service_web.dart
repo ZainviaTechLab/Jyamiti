@@ -319,49 +319,57 @@ class MathPadWebRecordingService {
     _drawLoopActive = true;
     bool inFlight = false;
     int idleTicks = 0;
-    final int forceRefreshTicks = fps.clamp(15, 60);
+    num lastCaptureTime = 0;
+    // Pacing: limit captures to ~25-30 fps (every ~35ms) so the UI thread has plenty
+    // of continuous frame budget for smooth stylus events and ink flow.
+    const num minIntervalMs = 35.0;
 
-    final int intervalMs = (1000 / fps).round().clamp(16, 100);
-    Timer.periodic(Duration(milliseconds: intervalMs), (timer) async {
-      if (!_drawLoopActive) {
-        timer.cancel();
-        return;
-      }
-      if (inFlight) return;
-      inFlight = true;
-      idleTicks++;
-      final bool forceRefresh = idleTicks >= forceRefreshTicks;
+    void frameLoop(num time) async {
+      if (!_drawLoopActive) return;
 
-      try {
-        if (captureCanvasFrame != null) {
-          final ui.Image? image =
-              await captureCanvasFrame(forceRefresh: forceRefresh);
-          if (image != null) {
-            idleTicks = 0;
-            final int imgW = image.width;
-            final int imgH = image.height;
-            final ByteData? byteData =
-                await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-            image.dispose();
-            if (byteData != null) {
-              if (canvas.width != imgW || canvas.height != imgH) {
-                canvas.width = imgW;
-                canvas.height = imgH;
+      if (!inFlight && (time - lastCaptureTime >= minIntervalMs)) {
+        inFlight = true;
+        idleTicks++;
+        final bool forceRefresh = idleTicks >= 30;
+
+        try {
+          if (captureCanvasFrame != null) {
+            final ui.Image? image =
+                await captureCanvasFrame(forceRefresh: forceRefresh);
+            if (image != null) {
+              lastCaptureTime = time;
+              idleTicks = 0;
+              final int imgW = image.width;
+              final int imgH = image.height;
+              final ByteData? byteData =
+                  await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+              image.dispose();
+              if (byteData != null) {
+                if (canvas.width != imgW || canvas.height != imgH) {
+                  canvas.width = imgW;
+                  canvas.height = imgH;
+                }
+                final Uint8ClampedList clamped =
+                    byteData.buffer.asUint8ClampedList();
+                final web.ImageData imgData =
+                    web.ImageData(clamped.toJS, imgW, imgH.toJS);
+                ctx.putImageData(imgData, 0, 0);
               }
-              final Uint8ClampedList clamped =
-                  byteData.buffer.asUint8ClampedList();
-              final web.ImageData imgData =
-                  web.ImageData(clamped.toJS, imgW, imgH.toJS);
-              ctx.putImageData(imgData, 0, 0);
             }
           }
-        }
-        if (includeCamera) {
-          _drawCameraOverlay(ctx, canvas.width, canvas.height);
-        }
-      } catch (_) {}
-      inFlight = false;
-    });
+          if (includeCamera) {
+            _drawCameraOverlay(ctx, canvas.width, canvas.height);
+          }
+        } catch (_) {}
+        inFlight = false;
+      }
+
+      if (_drawLoopActive) {
+        web.window.requestAnimationFrame(frameLoop.toJS);
+      }
+    }
+
+    web.window.requestAnimationFrame(frameLoop.toJS);
   }
 
 
@@ -502,7 +510,11 @@ class MathPadWebRecordingService {
     _chunks.clear();
     final web.MediaRecorder recorder = web.MediaRecorder(
       recordingStream,
-      web.MediaRecorderOptions(mimeType: mimeType),
+      web.MediaRecorderOptions(
+        mimeType: mimeType,
+        videoBitsPerSecond: 6000000,
+        audioBitsPerSecond: 128000,
+      ),
     );
     recorder.ondataavailable = ((web.Event e) {
       final web.Blob data = (e as web.BlobEvent).data;
