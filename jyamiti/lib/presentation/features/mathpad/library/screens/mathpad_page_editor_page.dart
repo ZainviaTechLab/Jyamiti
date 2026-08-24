@@ -819,6 +819,9 @@ class _MathPadPageEditorPageState extends State<MathPadPageEditorPage> {
           ],
         ),
       ),
+    );
+  }
+
   Future<bool> _confirmExitWhileRecording() async {
     final recordingService =
         Provider.of<MathPadRecordingService>(context, listen: false);
