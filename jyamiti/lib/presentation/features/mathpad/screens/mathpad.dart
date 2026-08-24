@@ -2022,34 +2022,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     }
   }
 
-  /// [canvasCaptureKey]'s `RenderRepaintBoundary` rect in physical pixels
-  /// -- passed to `MathPadWebRecordingService.start` as a CANDIDATE crop
-  /// rect, only actually applied if the shared source turns out to be a
-  /// browser tab (see that service's doc comment, "CROP-TO-CANVAS", for
-  /// why this can't be trusted blindly). Same technique the Windows
-  /// compositor's `_measureCanvasCropRect` uses -- raw devicePixelRatio,
-  /// not `_maxCapturePixelRatio` (that clamp exists only to bound
-  /// Flutter's own `toImage()` cost, irrelevant here since this never
-  /// goes through Flutter's rasterizer at all).
-  Rectangle<int>? _measureWebCropRect() {
-    final RenderObject? renderObject = _canvasCaptureKey.currentContext?.findRenderObject();
-    if (renderObject is! RenderRepaintBoundary || !renderObject.attached) {
-      return null;
-    }
-    final double dpr = ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
-    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
-    final Size size = renderObject.size;
-    final int width = (size.width * dpr).round();
-    final int height = (size.height * dpr).round();
-    if (width <= 0 || height <= 0) return null;
-    return Rectangle<int>(
-      (topLeft.dx * dpr).round(),
-      (topLeft.dy * dpr).round(),
-      width,
-      height,
-    );
-  }
-
   /// Captures a crisp Full HD / High-DPI snapshot of the whiteboard canvas for web recording.
   /// Skips capturing when the board is idle (unchanged) to eliminate GPU readback overhead.
   Future<ui.Image?> _captureCanvasFrameForWeb({bool forceRefresh = false}) async {
@@ -2081,16 +2053,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final MathPadWebRecordingService service =
         _webRecordingService ??= MathPadWebRecordingService();
     try {
-      final Rectangle<int>? cropRect =
-          _webRecordingTarget == WebRecordingTarget.canvasOnly
-              ? _measureWebCropRect()
-              : null;
       await service.start(
         includeCamera: includeCamera,
-        cropRect: cropRect,
         target: _webRecordingTarget,
-        canvasWidth: cropRect?.width,
-        canvasHeight: cropRect?.height,
         captureCanvasFrame: _captureCanvasFrameForWeb,
       );
       if (!mounted) return;

@@ -99,7 +99,6 @@
 
 import 'dart:async';
 import 'dart:js_interop';
-import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -131,13 +130,7 @@ extension type _DisplayMediaStreamOptionsPreferCurrentTab._(JSObject _)
   });
 }
 
-/// Reads `MediaTrackSettings.displaySurface` -- not in package:web's typed
-/// bindings (a newer/optional part of the Screen Capture spec) -- via a
-/// small custom extension type over the same underlying JSObject, rather
-/// than needing the older, now-discouraged `dart:js_util`.
-extension type _DisplaySurfaceSettings._(JSObject _) implements JSObject {
-  external JSString? get displaySurface;
-}
+
 
 /// `MediaStreamTrackProcessor` (Insertable Streams / WebCodecs-adjacent) --
 /// also not in package:web's typed bindings. `readable` is a
@@ -160,12 +153,7 @@ extension type _WorkerStartMessage._(JSObject _) implements JSObject {
     web.ReadableStream? cameraStream,
     int outputWidth,
     int outputHeight,
-    _WorkerCropRect? cropRect,
   });
-}
-
-extension type _WorkerCropRect._(JSObject _) implements JSObject {
-  external factory _WorkerCropRect({num x, num y, num w, num h});
 }
 
 extension type _WorkerStopMessage._(JSObject _) implements JSObject {
@@ -199,10 +187,7 @@ class MathPadWebRecordingService {
   Future<void> start({
     int fps = 30,
     bool includeCamera = false,
-    Rectangle<int>? cropRect,
     WebRecordingTarget target = WebRecordingTarget.canvasOnly,
-    int? canvasWidth,
-    int? canvasHeight,
     Future<ui.Image?> Function({bool forceRefresh})? captureCanvasFrame,
   }) async {
     if (isRecording) return;
@@ -225,11 +210,9 @@ class MathPadWebRecordingService {
     }
 
     if (target == WebRecordingTarget.canvasOnly) {
-      final int width = canvasWidth ?? cropRect?.width ?? 1920;
-      final int height = canvasHeight ?? cropRect?.height ?? 1080;
       await _startCanvasOnly(
-        width: width,
-        height: height,
+        width: 1920,
+        height: 1080,
         fps: fps,
         includeCamera: includeCamera,
         captureCanvasFrame: captureCanvasFrame,
@@ -255,18 +238,13 @@ class MathPadWebRecordingService {
 
     final web.MediaStreamTrack screenTrack = screenStream.getVideoTracks().toDart.first;
     final web.MediaTrackSettings screenSettings = screenTrack.getSettings();
-    final int fullWidth = screenSettings.width.toInt();
-    final int fullHeight = screenSettings.height.toInt();
-    if (fullWidth == 0 || fullHeight == 0) {
+    final int width = screenSettings.width.toInt();
+    final int height = screenSettings.height.toInt();
+    if (width == 0 || height == 0) {
       throw MathPadWebRecordingException(
         'The shared source reported no video dimensions -- try sharing again.',
       );
     }
-
-    final Rectangle<int>? effectiveCrop =
-        _resolveCropRect(screenTrack, cropRect, fullWidth, fullHeight);
-    final int width = effectiveCrop?.width ?? fullWidth;
-    final int height = effectiveCrop?.height ?? fullHeight;
 
     final web.MediaStreamTrack? cameraTrack = _cameraStream?.getVideoTracks().toDart.isNotEmpty == true
         ? _cameraStream!.getVideoTracks().toDart.first
@@ -278,7 +256,6 @@ class MathPadWebRecordingService {
         cameraTrack: cameraTrack,
         width: width,
         height: height,
-        effectiveCrop: effectiveCrop,
         fps: fps,
       );
       return;
@@ -290,7 +267,6 @@ class MathPadWebRecordingService {
     await _startMainThreadFallback(
       width: width,
       height: height,
-      effectiveCrop: effectiveCrop,
       fps: fps,
     );
   }
@@ -378,7 +354,6 @@ class MathPadWebRecordingService {
     required web.MediaStreamTrack? cameraTrack,
     required int width,
     required int height,
-    required Rectangle<int>? effectiveCrop,
     required int fps,
   }) async {
     final web.ReadableStream screenReadable =
@@ -416,14 +391,6 @@ class MathPadWebRecordingService {
       cameraStream: cameraReadable,
       outputWidth: width,
       outputHeight: height,
-      cropRect: effectiveCrop != null
-          ? _WorkerCropRect(
-              x: effectiveCrop.left,
-              y: effectiveCrop.top,
-              w: effectiveCrop.width,
-              h: effectiveCrop.height,
-            )
-          : null,
     );
     final List<JSObject> transferList = [screenReadable, ?cameraReadable];
     worker.postMessage(startMessage, transferList.toJS);
@@ -440,7 +407,6 @@ class MathPadWebRecordingService {
   Future<void> _startMainThreadFallback({
     required int width,
     required int height,
-    required Rectangle<int>? effectiveCrop,
     required int fps,
   }) async {
     final web.HTMLVideoElement video = _screenVideo ??= (web.HTMLVideoElement()
@@ -459,21 +425,7 @@ class MathPadWebRecordingService {
     _drawLoopActive = true;
     void drawFrame(num _) {
       if (!_drawLoopActive) return;
-      if (effectiveCrop != null) {
-        ctx.drawImage(
-          video,
-          effectiveCrop.left,
-          effectiveCrop.top,
-          effectiveCrop.width,
-          effectiveCrop.height,
-          0,
-          0,
-          width,
-          height,
-        );
-      } else {
-        ctx.drawImage(video, 0, 0);
-      }
+      ctx.drawImage(video, 0, 0);
       _drawCameraOverlay(ctx, width, height);
       web.window.requestAnimationFrame(drawFrame.toJS);
     }
@@ -589,34 +541,7 @@ class MathPadWebRecordingService {
     ctx.strokeRect(destX, destY, boxSize, boxSize);
   }
 
-  /// See this file's header comment ("CROP-TO-CANVAS") for the full
-  /// reasoning -- only returns [candidate] back out (clamped to the
-  /// captured frame's own bounds, in case it was measured a moment before/
-  /// after a resize) when the shared source's `displaySurface` reports
-  /// `'browser'`; null (meaning "don't crop") in every other case,
-  /// including any failure to read that setting at all.
-  Rectangle<int>? _resolveCropRect(
-    web.MediaStreamTrack screenTrack,
-    Rectangle<int>? candidate,
-    int fullWidth,
-    int fullHeight,
-  ) {
-    if (candidate == null || candidate.width <= 0 || candidate.height <= 0) return null;
-    try {
-      final web.MediaTrackSettings settings = screenTrack.getSettings();
-      final String? displaySurface = (settings as _DisplaySurfaceSettings).displaySurface?.toDart;
-      if (displaySurface != 'browser') return null;
-    } catch (_) {
-      return null;
-    }
 
-    final int x0 = candidate.left.clamp(0, fullWidth);
-    final int y0 = candidate.top.clamp(0, fullHeight);
-    final int x1 = (candidate.left + candidate.width).clamp(x0, fullWidth);
-    final int y1 = (candidate.top + candidate.height).clamp(y0, fullHeight);
-    if (x1 <= x0 || y1 <= y0) return null;
-    return Rectangle<int>(x0, y0, x1 - x0, y1 - y0);
-  }
 
   /// Stops capture/compositing/encoding and returns the finished
   /// recording's raw bytes -- NOT an automatic download. The caller (see

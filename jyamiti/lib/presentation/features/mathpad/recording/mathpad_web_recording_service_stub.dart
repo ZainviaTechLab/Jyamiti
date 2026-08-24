@@ -7,7 +7,6 @@
 // pulling package:web/dart:js_interop into the Windows/macOS/Linux/
 // Android/iOS builds at all.
 
-import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'mathpad_web_recording_result.dart';
@@ -26,10 +25,7 @@ class MathPadWebRecordingService {
   Future<void> start({
     int fps = 30,
     bool includeCamera = false,
-    Rectangle<int>? cropRect,
     WebRecordingTarget target = WebRecordingTarget.canvasOnly,
-    int? canvasWidth,
-    int? canvasHeight,
     Future<ui.Image?> Function({bool forceRefresh})? captureCanvasFrame,
   }) async {
     throw MathPadWebRecordingException(

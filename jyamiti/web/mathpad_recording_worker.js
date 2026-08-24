@@ -24,7 +24,6 @@
 
 let screenReader = null;
 let cameraReader = null;
-let cropRect = null;
 let outputWidth = 0;
 let outputHeight = 0;
 let running = false;
@@ -38,7 +37,6 @@ self.onmessage = function (e) {
     try {
       screenReader = msg.screenStream.getReader();
       cameraReader = msg.cameraStream ? msg.cameraStream.getReader() : null;
-      cropRect = msg.cropRect || null;
       outputWidth = msg.outputWidth;
       outputHeight = msg.outputHeight;
       canvas = new OffscreenCanvas(outputWidth, outputHeight);
@@ -109,15 +107,7 @@ async function runScreenLoop() {
 }
 
 function drawFrame(screenFrame) {
-  if (cropRect) {
-    ctx.drawImage(
-      screenFrame,
-      cropRect.x, cropRect.y, cropRect.w, cropRect.h,
-      0, 0, outputWidth, outputHeight
-    );
-  } else {
-    ctx.drawImage(screenFrame, 0, 0, outputWidth, outputHeight);
-  }
+  ctx.drawImage(screenFrame, 0, 0, outputWidth, outputHeight);
 
   if (latestCameraFrame) {
     const camW = latestCameraFrame.displayWidth || latestCameraFrame.codedWidth;
