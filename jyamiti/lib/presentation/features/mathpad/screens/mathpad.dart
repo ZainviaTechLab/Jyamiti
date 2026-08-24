@@ -11730,6 +11730,32 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
                               'box in the lower-right corner of the video.',
                               body,
                             ),
+                            _guideH('Output File Sizes & Compression', heading),
+                            _guideP(
+                              'Because browser hardware video encoders (VP9 / H.264) use intelligent temporal '
+                              'compression, file sizes vary significantly based on your selected mode:',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Whiteboard Canvas Only (Without Camera): ~1 to 3 MB per 10 minutes (Ultra Compact) '
+                              '-- Vector strokes on a solid background compress with near-zero overhead during pauses.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Whiteboard Canvas Only (With Camera): ~8 to 20 MB per 10 minutes (Compact) '
+                              '-- High compression on the whiteboard area with smooth 30fps webcam motion in the corner PIP.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Tab / Screen Share (Without Camera): ~15 to 40 MB per 10 minutes (Standard) '
+                              '-- Full-frame tab/window pixels with browser scrolling and text.',
+                              body,
+                            ),
+                            _guideBullet(
+                              'Tab / Screen Share (With Camera): ~25 to 60 MB per 10 minutes (Detailed) '
+                              '-- Encodes both full-resolution desktop screen sharing and live webcam video.',
+                              body,
+                            ),
                             _guideSub('Storage & Playback', heading),
                             _guideP(
                               'Where and how your recordings are stored.',
