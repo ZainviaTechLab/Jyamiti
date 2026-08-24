@@ -6,6 +6,7 @@ on:
       - main
       - master
       - mathpad-session-updates
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
@@ -13,7 +14,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: 🎯 Setup Flutter
         uses: subosito/flutter-action@v2
