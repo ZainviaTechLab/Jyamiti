@@ -2081,7 +2081,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     final MathPadWebRecordingService service =
         _webRecordingService ??= MathPadWebRecordingService();
     try {
-      final Rectangle<int>? cropRect = _measureWebCropRect();
+      final Rectangle<int>? cropRect =
+          _webRecordingTarget == WebRecordingTarget.canvasOnly
+              ? _measureWebCropRect()
+              : null;
       await service.start(
         includeCamera: includeCamera,
         cropRect: cropRect,
