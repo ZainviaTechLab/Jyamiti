@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -3222,7 +3222,18 @@ class MathPadRecordingService extends ChangeNotifier {
     // other ffmpeg-based path in this file) to find ffmpeg at all once
     // Linux support becomes reachable.
     if (Platform.isMacOS || Platform.isLinux) {
-      return p.join(exeDir, 'ffmpeg');
+      final String bundled = p.join(exeDir, 'ffmpeg');
+      if (File(bundled).existsSync()) return bundled;
+      if (File('/opt/homebrew/bin/ffmpeg').existsSync()) {
+        return '/opt/homebrew/bin/ffmpeg';
+      }
+      if (File('/usr/local/bin/ffmpeg').existsSync()) {
+        return '/usr/local/bin/ffmpeg';
+      }
+      if (File('/usr/bin/ffmpeg').existsSync()) {
+        return '/usr/bin/ffmpeg';
+      }
+      return bundled;
     }
     return p.join(exeDir, 'ffmpeg.exe');
   }
