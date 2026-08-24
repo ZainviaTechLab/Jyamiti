@@ -729,11 +729,6 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       _isDarkTheme ? Colors.white60 : _darkPanelColor.withOpacity(0.6);
   MathsPadLine? _currentLine;
 
-  bool _webRecording = false;
-  bool _webRecordingBusy = false;
-  WebRecordingTarget _webRecordingTarget = WebRecordingTarget.canvasOnly;
-  MathPadWebRecordingService? _webRecordingService;
-
   MouseCursor get _canvasCursor {
     switch (_toolMode) {
       case CanvasToolMode.pan:
@@ -1544,6 +1539,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // recording doesn't need this same guard since its richer state machine
   // (MathPadRecordingState) already prevents it structurally.
   bool _webRecordingBusy = false;
+  WebRecordingTarget _webRecordingTarget = WebRecordingTarget.canvasOnly;
 
   // A small pixel ratio, not the device's real one -- this is only ever
   // displayed at ~120px tall in the Math Pad Library's pages sidebar, so a

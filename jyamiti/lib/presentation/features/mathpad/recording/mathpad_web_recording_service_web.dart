@@ -105,7 +105,6 @@ import 'dart:ui' as ui;
 
 import 'package:web/web.dart' as web;
 
-import 'mathpad_web_recording_result.dart';
 import 'mathpad_web_recording_service.dart';
 
 class MathPadWebRecordingException implements Exception {
@@ -345,7 +344,7 @@ class MathPadWebRecordingService {
               final Uint8ClampedList clamped =
                   byteData.buffer.asUint8ClampedList();
               final web.ImageData imgData =
-                  web.ImageData(clamped.toJS, imgW, imgH);
+                  web.ImageData(clamped.toJS, imgW, imgH.toJS);
               ctx.putImageData(imgData, 0, 0);
             }
           }
