@@ -24,7 +24,7 @@ import '../../../widgets/writing_pad_widget.dart';
 import '../../competitions/screens/tutor_competition_host_screen.dart';
 import '../../competitions/screens/tutor_arena_history_screen.dart';
 import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
-import '../../meetings/screens/parent_meeting_room_screen.dart';
+import '../../meetings/screens/class_meeting_room_screen.dart';
 import '../../../../services/class_meeting_service.dart';
 import '../../robo_drawing/screens/robo_drawing_screen.dart';
 import 'tutor_recordings_screen.dart';
@@ -90,10 +90,9 @@ class _TutorDashboardState extends State<TutorDashboard> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ParentMeetingRoomScreen(
+          builder: (_) => ClassMeetingRoomScreen(
             meeting: meeting,
             isHost: true,
-            meetingType: 'class',
           ),
         ),
       );

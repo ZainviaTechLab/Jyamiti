@@ -21,6 +21,7 @@ import 'student_settings_screen.dart';
 import 'student_detailed_attendance_screen.dart';
 import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
 import '../../meetings/screens/parent_meeting_room_screen.dart';
+import '../../meetings/screens/class_meeting_room_screen.dart';
 import '../../../../services/parent_meeting_service.dart';
 import '../../../../services/class_meeting_service.dart';
 import '../../../../services/class_meeting_socket_service.dart';
@@ -1518,10 +1519,9 @@ class _StudentDashboardState extends State<StudentDashboard> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => ParentMeetingRoomScreen(
+                  builder: (_) => ClassMeetingRoomScreen(
                     meeting: Map<String, dynamic>.from(m),
                     isHost: false,
-                    meetingType: 'class',
                   ),
                 ),
               );

@@ -5,6 +5,7 @@ import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../../../services/parent_meeting_service.dart';
+import '../../../../services/class_meeting_service.dart';
 
 // The Agora meeting room is embedded via an HTML iframe, which only exists
 // on web -- conditionally import the real dart:html-based controller on web
@@ -13,22 +14,37 @@ import '../../../../services/parent_meeting_service.dart';
 import 'meeting_iframe_controller_stub.dart'
     if (dart.library.html) 'meeting_iframe_controller_web.dart';
 
-class ParentMeetingRoomScreen extends StatefulWidget {
+/// The "Start Class" / "Join Class" live-class video room -- a tutor
+/// instantly starting a video call for a batch's scheduled class, and
+/// students joining it from their dashboard. Backed by the `ClassMeeting`
+/// collection (`backend/routes/classMeetings.js`), NOT `ParentMeeting`.
+///
+/// Deliberately its own screen rather than a parameterized variant of
+/// `ParentMeetingRoomScreen`: the two features are unrelated product
+/// flows (a tutor-student class vs. a tutor-parent meeting) that happen
+/// to reuse the same underlying Agora plumbing today, but are expected to
+/// diverge (attendance, recording, different participant chrome, etc.),
+/// and sharing one widget between them previously caused a real bug --
+/// the shared screen always PUT its "ended" status through
+/// `ParentMeetingService`, which 404s against a `ClassMeeting` id and
+/// left classes stuck showing "live" forever. Keeping them separate on
+/// every platform avoids that whole class of cross-feature coupling bug.
+class ClassMeetingRoomScreen extends StatefulWidget {
   final Map<String, dynamic> meeting;
   final bool isHost;
 
-  const ParentMeetingRoomScreen({
+  const ClassMeetingRoomScreen({
     super.key,
     required this.meeting,
     this.isHost = false,
   });
 
   @override
-  State<ParentMeetingRoomScreen> createState() =>
-      _ParentMeetingRoomScreenState();
+  State<ClassMeetingRoomScreen> createState() =>
+      _ClassMeetingRoomScreenState();
 }
 
-class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
+class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   bool _isMicMuted = false;
   bool _isVideoOff = false;
   bool _isScreenSharing = false;
@@ -85,19 +101,12 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
   void initState() {
     super.initState();
     final channel = widget.meeting['channelName'] ??
-        'meet_${DateTime.now().millisecondsSinceEpoch}';
-    _viewId = 'agora_meet_frame_${channel}_${DateTime.now().millisecondsSinceEpoch}';
+        'class_${DateTime.now().millisecondsSinceEpoch}';
+    _viewId = 'class_meet_frame_${channel}_${DateTime.now().millisecondsSinceEpoch}';
 
-    // Automatically mark meeting as LIVE when host enters -- independent
-    // of whether they've actually tapped "Join Now" yet (see
-    // `_hasJoinedChannel`'s doc comment): this is about the meeting
-    // RECORD's status for listing purposes, not the video call itself.
-    if (widget.isHost && widget.meeting['_id'] != null) {
-      ParentMeetingService.updateMeetingStatus(
-        widget.meeting['_id'].toString(),
-        'live',
-      ).then((_) {}).catchError((_) => null);
-    }
+    // Unlike ParentMeeting, a ClassMeeting is only ever created already
+    // `status: 'live'` (see `POST /class-meetings/start`) and has no
+    // separate "set live" endpoint -- nothing to mark here on entry.
 
     // The elapsed-time badge only starts once the call actually begins
     // -- see `_onChannelJoined` -- not while still in preview.
@@ -108,6 +117,10 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     final String channel = widget.meeting['channelName'] ?? 'test_channel';
     String? token;
     try {
+      // Token minting is generic (channelName + isHost, doesn't care which
+      // collection the meeting record lives in) and intentionally reused
+      // as-is from the parent-meetings route rather than duplicated here
+      // -- see `backend/routes/classMeetings.js`'s header comment.
       token = await ParentMeetingService.getRtcToken(
         channelName: channel,
         isHost: widget.isHost,
@@ -247,18 +260,18 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
   /// Fired the moment any remote participant is seen (native:
   /// `onUserJoined`; web: the iframe's `user_joined` message) --
   /// cancels the no-show timer, since the whole point of it is "did
-  /// anyone actually show up."
+  /// any student actually show up."
   void _onRemoteUserJoined() {
     _remoteUserSeen = true;
     _noShowTimer?.cancel();
     _noShowTimer = null;
   }
 
-  /// The 5-minute no-show safety net firing: no remote participant ever
-  /// joined this host's class. Shows a popup, then leaves automatically
-  /// -- via the same `_performLeave` teardown the normal Leave/End
-  /// button uses, just without asking for confirmation first (the
-  /// timeout itself already establishes that this class should end).
+  /// The 5-minute no-show safety net firing: no student ever joined this
+  /// host's class. Shows a popup, then leaves automatically -- via the
+  /// same `_performLeave` teardown the normal Leave/End button uses,
+  /// just without asking for confirmation first (the timeout itself
+  /// already establishes that this class should end).
   Future<void> _handleNoShowTimeout() async {
     if (!mounted || _remoteUserSeen || _isLeaving) return;
     await showDialog<void>(
@@ -300,9 +313,8 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     final String channel = widget.meeting['channelName'] ?? 'test_channel';
     final String appId =
         widget.meeting['agoraAppId'] ?? '2bd28ff5ea124b5982b6ef930c49998d';
-    final String hostName = widget.meeting['hostName'] ?? 'Host';
-    final String roleName =
-        widget.isHost ? 'Host ($hostName)' : 'Parent / Participant';
+    final String hostName = widget.meeting['hostName'] ?? 'Tutor';
+    final String roleName = widget.isHost ? 'Host ($hostName)' : 'Student';
     final String tokenJs =
         _rtcToken != null ? '"$_rtcToken"' : 'null';
 
@@ -313,7 +325,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agora Parent Meeting</title>
+  <title>Agora Live Class</title>
   <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.22.0.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -423,7 +435,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 </head>
 <body>
   <div id="status-banner">
-    <span id="status-text">⏳ Initializing Agora Video Room & Requesting Camera/Microphone...</span>
+    <span id="status-text">⏳ Initializing Live Class & Requesting Camera/Microphone...</span>
   </div>
 
   <div id="video-grid">
@@ -462,14 +474,14 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     // ahead of (and be missed by) a listener that's only attached after
     // join()+publish() finish awaiting. A plain EventEmitter never
     // replays a missed event, so whoever joins second would be stuck
-    // seeing "waiting for other participants" forever while the first
-    // joiner (whose listener was already live) sees them fine -- exactly
-    // the asymmetric "one side sees both, the other sees no one" bug.
+    // seeing "waiting for students" forever while the first joiner
+    // (whose listener was already live) sees them fine -- exactly the
+    // asymmetric "one side sees both, the other sees no one" bug.
     client.on("user-published", async (user, mediaType) => {
       try {
         await client.subscribe(user, mediaType);
         const count = client.remoteUsers.length + 1;
-        updateStatus("👥 " + count + " participant(s) connected");
+        updateStatus("👥 " + count + " connected");
         if (!hasNotifiedUserJoined) {
           hasNotifiedUserJoined = true;
           window.parent.postMessage({ type: "user_joined" }, "*");
@@ -485,7 +497,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
             card.innerHTML = \`<div id="\${remoteContainerId}" class="player"></div>
               <div class="name-tag">
                 <span class="status-badge"></span>
-                <span>Participant (\${user.uid})</span>
+                <span>Student (\${user.uid})</span>
               </div>\`;
             grid.appendChild(card);
           }
@@ -511,7 +523,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     client.on("user-left", (user) => {
       const card = document.getElementById("card-" + user.uid);
       if (card) card.remove();
-      updateStatus("🟢 Meeting Live — Waiting for participants...");
+      updateStatus("🟢 Class Live — Waiting for students...");
     });
 
     client.on("connection-state-change", (curState, prevState, reason) => {
@@ -586,7 +598,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     // the "joinChannel" message action below), never automatically.
     async function joinAndPublish() {
       try {
-        updateStatus("🔑 Connecting to Agora Video Channel: " + CHANNEL + "...");
+        updateStatus("🔑 Connecting to Live Class: " + CHANNEL + "...");
         await client.join(APP_ID, CHANNEL, TOKEN, null);
         isJoined = true;
         window.parent.postMessage({ type: "joined" }, "*");
@@ -595,7 +607,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
         if (tracksToPublish.length > 0) {
           await client.publish(tracksToPublish);
         }
-        updateStatus("🟢 Live! Waiting for other participants...");
+        updateStatus("🟢 Class Live — Waiting for students...");
         // Remote-user event listeners are already registered above (right
         // after client creation) -- see the comment there for why they
         // must NOT be attached here, after join()/publish() have already
@@ -610,7 +622,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     async function leaveChannel() {
       if (isLeaving) return;
       isLeaving = true;
-      updateStatus("👋 Leaving meeting...");
+      updateStatus("👋 Leaving class...");
       try {
         for (let trackName in localTracks) {
           const track = localTracks[trackName];
@@ -767,13 +779,13 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
         backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(
-          isHost ? 'End Parent Meeting?' : 'Leave Meeting?',
+          isHost ? 'End Class?' : 'Leave Class?',
           style: TextStyle(color: context.textColor),
         ),
         content: Text(
           isHost
-              ? 'This will end the meeting for all parents and participants.'
-              : 'Are you sure you want to leave the parent meeting call?',
+              ? 'This will end the class for all students.'
+              : 'Are you sure you want to leave the class?',
           style: TextStyle(color: context.textColor70),
         ),
         actions: [
@@ -789,7 +801,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                   borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(isHost ? 'End Meeting' : 'Leave'),
+            child: Text(isHost ? 'End Class' : 'Leave'),
           ),
         ],
       ),
@@ -811,12 +823,13 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     setState(() => _isLeaving = true);
     _noShowTimer?.cancel();
 
-    // Update status in DB first (host only)
+    // Mark the class ended (host only) -- `ClassMeetingService.endClass`
+    // also broadcasts `class_meeting:ended` to the batch's students, so
+    // their dashboards stop showing "Join Class" for this meeting.
     if (widget.isHost && widget.meeting['_id'] != null) {
-      await ParentMeetingService.updateMeetingStatus(
-        widget.meeting['_id'].toString(),
-        'ended',
-      ).then((_) {}).catchError((_) => null);
+      await ClassMeetingService.endClass(widget.meeting['_id'].toString())
+          .then((_) {})
+          .catchError((_) => null);
     }
 
     if (kIsWeb) {
@@ -854,8 +867,8 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 
   /// Native (`!kIsWeb`) counterpart to the web iframe's video grid --
   /// local preview tile first, then one tile per remote participant
-  /// (`_remoteUids`, kept in sync by `_initNativeAgoraEngine`'s event
-  /// handlers).
+  /// (`_remoteUids`, kept in sync by `_initNativeAgoraEnginePreviewOnly`'s
+  /// event handlers).
   Widget _buildNativeVideoArea() {
     if (_nativeMediaError != null) {
       return Center(
@@ -877,7 +890,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
             CircularProgressIndicator(color: Color(0xFF6366F1)),
             SizedBox(height: 16),
             Text(
-              'Connecting to video room...',
+              'Connecting to the class...',
               style: TextStyle(color: Color(0xFF94A3B8)),
             ),
           ],
@@ -885,9 +898,8 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
       );
     }
 
-    final String hostName = widget.meeting['hostName'] ?? 'Host';
-    final String roleName =
-        widget.isHost ? 'Host ($hostName)' : 'Parent / Participant';
+    final String hostName = widget.meeting['hostName'] ?? 'Tutor';
+    final String roleName = widget.isHost ? 'Host ($hostName)' : 'Student';
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -917,7 +929,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                   ),
                 ),
               ),
-              label: 'Participant ($uid)',
+              label: 'Student ($uid)',
             ),
         ],
       ),
@@ -1011,7 +1023,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.meeting['title'] ?? 'Parent Meeting';
+    final title = widget.meeting['title'] ?? 'Live Class';
     final batchName = widget.meeting['batchName'] ?? 'Batch';
     final hostName = widget.meeting['hostName'] ?? 'Tutor';
 
@@ -1067,7 +1079,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                           Text(
-                            '$batchName • Host: $hostName',
+                            '$batchName • Tutor: $hostName',
                             style: const TextStyle(
                               color: Color(0xFF94A3B8),
                               fontSize: 12,
@@ -1145,7 +1157,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                                 color: Color(0xFF6366F1)),
                             SizedBox(height: 16),
                             Text(
-                              'Connecting to video room...',
+                              'Connecting to the class...',
                               style: TextStyle(color: Color(0xFF94A3B8)),
                             ),
                           ],
@@ -1214,7 +1226,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                       ),
                       const SizedBox(width: 16),
 
-                      // Screen Share / Raise Hand Button
+                      // Screen Share (Host/Tutor) / Raise Hand (Student)
                       if (widget.isHost) ...[
                         _buildControlFab(
                           icon: Icons.screen_share_rounded,
@@ -1231,7 +1243,6 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                         ),
                         const SizedBox(width: 16),
                       ] else ...[
-                        // Raise Hand (Parent/Participant Only)
                         _buildControlFab(
                           icon: Icons.back_hand_rounded,
                           label:
@@ -1246,10 +1257,10 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                         const SizedBox(width: 16),
                       ],
 
-                      // End Call / Leave Call Button
+                      // End Class / Leave Class Button
                       _buildControlFab(
                         icon: Icons.call_end_rounded,
-                        label: widget.isHost ? 'End Call' : 'Leave',
+                        label: widget.isHost ? 'End Class' : 'Leave',
                         color: Colors.redAccent,
                         isMainEnd: true,
                         onTap: _isLeaving ? () {} : _handleEndOrLeaveCall,
