@@ -10,7 +10,14 @@ class CompetitionService {
   static void initSocket(String baseUrl) {
     if (_socket != null && _socket!.connected) return;
 
-    final socketUrl = baseUrl.replaceAll('/api', '');
+    // Strip only a trailing "/api" suffix -- NOT baseUrl.replaceAll('/api',
+    // ''), which also mangles the "api" in "https://api.jyamitimath.com"
+    // itself (see ApiService.serverBaseUrl's doc comment for the verified
+    // broken output). Takes `baseUrl` as a param rather than reading
+    // `ApiService.serverBaseUrl` directly to keep this method's existing
+    // signature/testability, but callers always pass `ApiService.baseUrl`.
+    final socketUrl =
+        baseUrl.endsWith('/api') ? baseUrl.substring(0, baseUrl.length - 4) : baseUrl;
     _socket = io.io(
       socketUrl,
       io.OptionBuilder()

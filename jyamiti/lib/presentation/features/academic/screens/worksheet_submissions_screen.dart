@@ -63,8 +63,8 @@ class _WorksheetSubmissionsScreenState extends State<WorksheetSubmissionsScreen>
                       child: InkWell(
                         onTap: () {
                           final url = submission['annotatedFileUrl'] != null 
-                              ? '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['annotatedFileUrl']}'
-                              : '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['fileUrl']}';
+                              ? '${ApiService.serverBaseUrl}/${submission['annotatedFileUrl']}'
+                              : '${ApiService.serverBaseUrl}/${submission['fileUrl']}';
                           final filename = submission['fileUrl'].split('/').last;
                           Navigator.push(context, MaterialPageRoute(builder: (_) => FileViewerScreen(url: url, filename: filename)));
                         },
@@ -80,8 +80,8 @@ class _WorksheetSubmissionsScreenState extends State<WorksheetSubmissionsScreen>
                       label: Text('Annotate', style: TextStyle(color: context.textColor)),
                       onPressed: () async {
                         final url = submission['annotatedFileUrl'] != null 
-                            ? '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['annotatedFileUrl']}'
-                            : '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['fileUrl']}';
+                            ? '${ApiService.serverBaseUrl}/${submission['annotatedFileUrl']}'
+                            : '${ApiService.serverBaseUrl}/${submission['fileUrl']}';
                         final filename = submission['fileUrl'].split('/').last;
                         
                         final result = await Navigator.push(

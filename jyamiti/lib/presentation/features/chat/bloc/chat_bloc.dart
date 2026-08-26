@@ -30,7 +30,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
 
     currentUserId = event.userId;
-    final serverUrl = ApiService.baseUrl.replaceAll('/api', '');
+    final serverUrl = ApiService.serverBaseUrl;
 
     socket = IO.io(serverUrl, <String, dynamic>{
       'transports': ['websocket'],

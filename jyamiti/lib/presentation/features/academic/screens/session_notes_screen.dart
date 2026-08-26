@@ -574,7 +574,7 @@ class _SessionNotesScreenState extends State<SessionNotesScreen> {
                     InkWell(
                       onTap: () {
                         final url =
-                            '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['fileUrl']}';
+                            '${ApiService.serverBaseUrl}/${submission['fileUrl']}';
                         final filename = submission['fileUrl'].split('/').last;
                         Navigator.push(
                           context,
@@ -724,7 +724,7 @@ class _SessionNotesScreenState extends State<SessionNotesScreen> {
               InkWell(
                 onTap: () {
                   final url =
-                      '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['fileUrl']}';
+                      '${ApiService.serverBaseUrl}/${submission['fileUrl']}';
                   final filename = submission['fileUrl'].split('/').last;
                   Navigator.push(
                     context,
@@ -841,7 +841,7 @@ class _SessionNotesScreenState extends State<SessionNotesScreen> {
                 InkWell(
                   onTap: () {
                     final url =
-                        '${ApiService.baseUrl.replaceAll('/api', '')}/${note['fileUrl']}';
+                        '${ApiService.serverBaseUrl}/${note['fileUrl']}';
                     final filename = note['fileUrl'].split('/').last;
                     Navigator.push(
                       context,

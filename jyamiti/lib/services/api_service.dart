@@ -8,6 +8,23 @@ class ApiService {
 
   // static const String baseUrl = 'http://10.51.176.77:5000/api';
 
+  /// `baseUrl` without its trailing `/api` suffix -- for building Socket.io
+  /// connection URLs or direct file links (`/uploads/...`) that live on the
+  /// same host but outside the `/api` prefix.
+  ///
+  /// Deliberately NOT `baseUrl.replaceAll('/api', '')` (the pattern this
+  /// replaced everywhere it was copied) -- `replaceAll` removes every
+  /// occurrence of the literal substring "/api" anywhere in the string, and
+  /// since the API host itself is literally named "api.jyamitimath.com",
+  /// the "/" from "https://" immediately followed by "api" ALSO reads as
+  /// "/api" and gets stripped too. `'https://api.jyamitimath.com/api'
+  /// .replaceAll('/api', '')` produces the mangled `'https:/.jyamitimath.com'`
+  /// (verified directly with `dart run`) -- a URL with no "api" host segment
+  /// left and a single stray slash, which sockets/browsers can't connect
+  /// to. This only strips a trailing "/api" suffix, if present.
+  static String get serverBaseUrl =>
+      baseUrl.endsWith('/api') ? baseUrl.substring(0, baseUrl.length - 4) : baseUrl;
+
 
   static Future<Map<String, dynamic>> fetchMyAttendanceSummary() async {
     final response = await http.get(

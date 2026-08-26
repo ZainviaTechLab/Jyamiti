@@ -63,7 +63,7 @@ class _NoteSubmissionsScreenState extends State<NoteSubmissionsScreen> {
                   children: [
                     InkWell(
                       onTap: () {
-                        final url = '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['fileUrl']}';
+                        final url = '${ApiService.serverBaseUrl}/${submission['fileUrl']}';
                         final filename = submission['fileUrl'].split('/').last;
                         Navigator.push(context, MaterialPageRoute(builder: (_) => FileViewerScreen(url: url, filename: filename)));
                       },

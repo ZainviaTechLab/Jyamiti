@@ -772,7 +772,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
                 InkWell(
                   onTap: () {
                     final url =
-                        '${ApiService.baseUrl.replaceAll('/api', '')}/${Worksheet['fileUrl']}';
+                        '${ApiService.serverBaseUrl}/${Worksheet['fileUrl']}';
                     final filename = Worksheet['fileUrl'].split('/').last;
                     Navigator.push(
                       context,
@@ -811,7 +811,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
                   InkWell(
                     onTap: () {
                       final url =
-                          '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['fileUrl']}';
+                          '${ApiService.serverBaseUrl}/${submission['fileUrl']}';
                       final filename = submission['fileUrl'].split('/').last;
                       Navigator.push(
                         context,
@@ -846,7 +846,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
                   InkWell(
                     onTap: () {
                       final url =
-                          '${ApiService.baseUrl.replaceAll('/api', '')}/${submission['annotatedFileUrl']}';
+                          '${ApiService.serverBaseUrl}/${submission['annotatedFileUrl']}';
                       final filename = submission['annotatedFileUrl']
                           .split('/')
                           .last;
@@ -1160,7 +1160,7 @@ class _BatchWorksheetsScreenState extends State<BatchWorksheetsScreen> {
                                                   ),
                                                   onPressed: () {
                                                     final url =
-                                                        '${ApiService.baseUrl.replaceAll('/api', '')}/${a['fileUrl']}';
+                                                        '${ApiService.serverBaseUrl}/${a['fileUrl']}';
                                                     final filename =
                                                         a['fileUrl']
                                                             .split('/')

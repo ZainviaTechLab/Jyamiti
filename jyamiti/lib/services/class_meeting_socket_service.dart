@@ -32,7 +32,7 @@ class ClassMeetingSocketService {
     _socket?.dispose();
 
     _connectedUserId = userId;
-    final String serverUrl = ApiService.baseUrl.replaceAll('/api', '');
+    final String serverUrl = ApiService.serverBaseUrl;
     _socket = IO.io(serverUrl, <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
