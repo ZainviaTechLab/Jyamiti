@@ -1707,6 +1707,22 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   DateTime? _lastPanZoomNotifyTime;
   static const Duration _kPanZoomNotifyInterval = Duration(milliseconds: 16);
 
+  // Feeds `_onTrackpadPanZoomUpdate`'s cumulative `event.pan` samples so
+  // `_onTrackpadPanZoomEnd` can hand a real measured velocity to
+  // `_startInertialFling` -- unlike `ScaleEndDetails.velocity` (used by
+  // the OLDER touch/Hand-Tool fling path), `PointerPanZoomEndEvent` carries
+  // no velocity of its own. Same estimator (`VelocityTracker`) Flutter's
+  // own gesture recognizers use internally, so the feel matches.
+  VelocityTracker? _panZoomVelocityTracker;
+
+  // Rolling buffer of recent mouse-wheel/wheel-emulated-touchpad pan
+  // deltas -- a single `PointerScrollEvent` tick has no velocity of its
+  // own (unlike a real drag/fling gesture), so `_flingFromRecentWheelTicks`
+  // reconstructs one from how fast/far the last few ticks moved, once
+  // `_wheelScrollEndTimer` fires (meaning the burst of ticks has stopped).
+  final List<({Duration time, Offset delta})> _recentWheelSamples = [];
+  Timer? _wheelScrollEndTimer;
+
   CanvasToolMode _toolMode = CanvasToolMode.pen;
   bool _isMagicPenMode = false;
   Color _selectedColor = const Color(0xFF6366F1);
@@ -1989,6 +2005,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _longPressPasteTimer?.cancel();
     _rightToolbarHoverTimer?.cancel();
     _rightToolbarHideTimer?.cancel();
+    _wheelScrollEndTimer?.cancel();
     _textEditorController?.dispose();
     _canvasFocusNode.dispose();
     _activeDrawingNotifier.removeListener(_markWebCanvasDirty);
@@ -5436,8 +5453,48 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
             Offset(-event.scrollDelta.dx, -event.scrollDelta.dy) * 1.35;
         _panOffset = _clampPanIfLocked(_panOffset + delta);
         _panNotifier.value = _panOffset;
+        _recordWheelSampleForMomentum(delta);
       }
     }
+  }
+
+  /// Buffers this wheel tick's pan delta and (re)arms a short debounce
+  /// timer -- a single `PointerScrollEvent` has no velocity of its own
+  /// (unlike a real drag/fling gesture, which Flutter reports one for),
+  /// so this reconstructs one from how fast/far the last few ticks moved,
+  /// once the debounce timer actually fires (meaning no new tick arrived
+  /// within its window -- the burst of ticks has stopped). Restarting the
+  /// timer on every tick means it only ever fires once per burst, right
+  /// after the LAST one.
+  void _recordWheelSampleForMomentum(Offset delta) {
+    final Duration now = Duration(
+      microseconds: DateTime.now().microsecondsSinceEpoch,
+    );
+    _recentWheelSamples.add((time: now, delta: delta));
+    while (_recentWheelSamples.length > 8) {
+      _recentWheelSamples.removeAt(0);
+    }
+    _wheelScrollEndTimer?.cancel();
+    _wheelScrollEndTimer = Timer(
+      const Duration(milliseconds: 150),
+      _flingFromRecentWheelSamples,
+    );
+  }
+
+  void _flingFromRecentWheelSamples() {
+    final List<({Duration time, Offset delta})> samples = List.of(
+      _recentWheelSamples,
+    );
+    _recentWheelSamples.clear();
+    if (samples.length < 2) return;
+    final double seconds =
+        (samples.last.time - samples.first.time).inMicroseconds / 1e6;
+    if (seconds <= 0) return;
+    Offset totalDelta = Offset.zero;
+    for (final sample in samples.skip(1)) {
+      totalDelta += sample.delta;
+    }
+    _startInertialFling(totalDelta / seconds);
   }
 
   /// Trackpad-driven pan/zoom start -- captures the same gesture-start
@@ -5453,6 +5510,9 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // start values.
     _lastPanZoomScale = 1.0;
     _lastPanZoomPan = Offset.zero;
+    // Fed `event.pan` (a cumulative, position-like signal) on every
+    // update below -- see `_onTrackpadPanZoomEnd`'s doc comment for why.
+    _panZoomVelocityTracker = VelocityTracker.withKind(event.kind);
   }
 
   /// Trackpad-driven pan/zoom update. `event.localPosition` is confirmed
@@ -5490,6 +5550,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   /// value so the view never ends a gesture visually stuck mid-throttle.
   void _onTrackpadPanZoomUpdate(PointerPanZoomUpdateEvent event) {
     if (widget.isTransparentBg) return;
+    _panZoomVelocityTracker?.addPosition(event.timeStamp, event.pan);
     final double incrementalScale = event.scale / _lastPanZoomScale;
     final Offset panDelta = event.pan - _lastPanZoomPan;
     _lastPanZoomScale = event.scale;
@@ -5521,6 +5582,20 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     // visibly a frame or two behind where your fingers actually ended up.
     _scaleNotifier.value = _scale;
     _panNotifier.value = _panOffset;
+
+    // Momentum glide on release -- same physics `_startInertialFling`
+    // already gives a Hand-Tool/touch fling (see that method), just fed a
+    // velocity measured from this gesture's own `event.pan` samples
+    // instead of `ScaleEndDetails.velocity` (which this event type
+    // doesn't carry). A near-stationary release naturally measures well
+    // under `_startInertialFling`'s own 80px/s threshold and is a no-op,
+    // so this doesn't need its own separate "was this actually a flick"
+    // check -- including for a pinch-zoom-only release, which never had
+    // much real pan motion to measure a velocity from in the first place.
+    final Velocity velocity =
+        _panZoomVelocityTracker?.getVelocity() ?? Velocity.zero;
+    _panZoomVelocityTracker = null;
+    _startInertialFling(velocity.pixelsPerSecond);
   }
 
   // ─── Native Live-Ink Overlay (Windows, Pen tool only) ──────────────────
