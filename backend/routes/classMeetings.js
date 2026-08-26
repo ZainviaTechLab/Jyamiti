@@ -86,7 +86,17 @@ router.post(
       let justStarted = false;
 
       if (!meeting) {
-        const channelName = `class_${batchId}_${schedule._id}`;
+        // Includes Date.now() -- NOT just `class_${batchId}_${schedule._id}`
+        // -- so restarting a class after ending it gets a fresh channel
+        // name instead of colliding with the just-ended meeting's own
+        // document, which still exists (status: 'ended') and still holds
+        // that exact channelName in the schema's `unique: true` index.
+        // Re-clicking "Start Class" WHILE already live is unaffected --
+        // that's handled by the findOne(status: 'live') lookup above,
+        // which returns the existing document before this branch ever
+        // runs, so it doesn't depend on the channelName being
+        // deterministic at all.
+        const channelName = `class_${batchId}_${schedule._id}_${Date.now()}`;
         meeting = new ClassMeeting({
           title: `${batch.name} — Live Class`,
           batch: batchId,
