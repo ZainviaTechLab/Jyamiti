@@ -4,6 +4,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import Message from './models/Message.js';
 import Chat from './models/Chat.js';
 import Competition from './models/Competition.js';
+import ClassMeeting from './models/ClassMeeting.js';
 
 let io;
 
@@ -331,6 +332,89 @@ export const initSocket = async (httpServer) => {
         });
       } catch (err) {
         console.error('Error handling competition:end_game', err);
+      }
+    });
+
+    // ----------------------------------------------------
+    // LIVE CLASS PRESENTATION (Start Class / Join Class room) -- lets the
+    // host share slides (and, later, other resource types) with everyone
+    // currently in the class. One shared room per meeting (`class_meeting:
+    // <meetingId>`), mirroring the competition-arena room pattern above:
+    // the host's navigation actions persist the new state onto the
+    // ClassMeeting document and broadcast it to the whole room; a student
+    // joining the room gets the CURRENT state read back immediately so a
+    // late join or reconnect doesn't have to wait for the host's next move.
+    // ----------------------------------------------------
+    socket.on('class_meeting:join_room', async ({ meetingId }) => {
+      try {
+        if (!meetingId) return;
+        socket.join(`class_meeting:${meetingId}`);
+
+        const meeting = await ClassMeeting.findById(meetingId).select('presentedContent');
+        socket.emit('class_meeting:presentation_update', {
+          meetingId,
+          presentedContent: meeting?.presentedContent || null,
+        });
+      } catch (err) {
+        console.error('Error handling class_meeting:join_room', err);
+      }
+    });
+
+    socket.on(
+      'class_meeting:present_slide',
+      async ({ meetingId, hostId, deckId, deckTitle, slideIndex, totalSlides }) => {
+        try {
+          if (!meetingId) return;
+          const meeting = await ClassMeeting.findById(meetingId);
+          if (!meeting) return;
+          // Only the actual host may drive the presentation. Same trust
+          // level as the rest of this file -- client-declared ids, no
+          // per-socket JWT verification anywhere else here either -- but
+          // still checked against the persisted hostId rather than trusted
+          // blindly, matching the REST /:id/end route's own check.
+          if (String(meeting.hostId) !== String(hostId)) return;
+
+          meeting.presentedContent = {
+            kind: 'slide',
+            deckId: deckId || null,
+            deckTitle: deckTitle || null,
+            slideIndex: slideIndex || 0,
+            totalSlides: totalSlides || 0,
+          };
+          await meeting.save();
+
+          io.to(`class_meeting:${meetingId}`).emit('class_meeting:presentation_update', {
+            meetingId,
+            presentedContent: meeting.presentedContent,
+          });
+        } catch (err) {
+          console.error('Error handling class_meeting:present_slide', err);
+        }
+      }
+    );
+
+    socket.on('class_meeting:stop_presenting', async ({ meetingId, hostId }) => {
+      try {
+        if (!meetingId) return;
+        const meeting = await ClassMeeting.findById(meetingId);
+        if (!meeting) return;
+        if (String(meeting.hostId) !== String(hostId)) return;
+
+        meeting.presentedContent = {
+          kind: null,
+          deckId: null,
+          deckTitle: null,
+          slideIndex: 0,
+          totalSlides: 0,
+        };
+        await meeting.save();
+
+        io.to(`class_meeting:${meetingId}`).emit('class_meeting:presentation_update', {
+          meetingId,
+          presentedContent: null,
+        });
+      } catch (err) {
+        console.error('Error handling class_meeting:stop_presenting', err);
       }
     });
 

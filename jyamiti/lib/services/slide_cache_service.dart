@@ -51,6 +51,22 @@ class SlideCacheService {
     }
   }
 
+  // Fetch a single slide deck by id, straight from the backend -- used by
+  // the live-class-presentation "follow the tutor's slides" viewer, which
+  // only needs the ONE deck being shared rather than the full catalog
+  // getSlideDecks() returns. No offline fallback here (unlike
+  // getSlideDecks): a student following a live presentation is, by
+  // definition, online and already inside a live video call.
+  Future<SlideDeck?> getDeckById(String deckId) async {
+    try {
+      final res = await ApiService.get('/slide-decks/$deckId');
+      if (res.statusCode == 200) {
+        return SlideDeck.fromMap(json.decode(res.body) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // Save all slide decks
   Future<void> saveSlideDecks(List<SlideDeck> decks) async {
     final prefs = await SharedPreferences.getInstance();

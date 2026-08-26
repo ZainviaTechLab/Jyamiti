@@ -1,12 +1,18 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
+import '../../../../providers/auth_provider.dart';
 import '../../../../services/parent_meeting_service.dart';
 import '../../../../services/class_meeting_service.dart';
+import '../../../../services/class_presentation_socket_service.dart';
+import '../../../../services/slide_cache_service.dart';
+import '../../../../domain/models/slide_deck_models.dart';
+import '../../slides/widgets/slide_block_renderer.dart';
 
 // The Agora meeting room is embedded via an HTML iframe, which only exists
 // on web -- conditionally import the real dart:html-based controller on web
@@ -48,7 +54,6 @@ class ClassMeetingRoomScreen extends StatefulWidget {
 class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   bool _isMicMuted = false;
   bool _isVideoOff = false;
-  bool _isScreenSharing = false;
   bool _isHandRaised = false;
   late String _viewId;
   final MeetingIframeController _iframeController = MeetingIframeController();
@@ -56,6 +61,32 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   bool _isLeaving = false;
 
   String? _rtcToken;
+
+  // Live class presentation (Share Slides) -- a separate, dedicated
+  // socket connection (see ClassPresentationSocketService's doc comment)
+  // scoped to this one meeting room, joined regardless of preview/joined
+  // video state so even someone still in the waiting-room preview can see
+  // whatever's currently being shared, same as Zoom shows a shared screen
+  // before you've unmuted.
+  final ClassPresentationSocketService _presentationSocket =
+      ClassPresentationSocketService();
+
+  // The server's current authoritative "what's being shown" state --
+  // {kind: 'slide', deckId, deckTitle, slideIndex, totalSlides} or null
+  // when nothing is shared. Drives both the host's own view and every
+  // student's, via the same class_meeting:presentation_update broadcast
+  // (the host's own actions round-trip through the server too, rather
+  // than trusting local state to match what actually got persisted).
+  Map<String, dynamic>? _presentedContent;
+
+  // The actual slide content for whatever _presentedContent currently
+  // points at -- host sets this directly (optimistically) the moment they
+  // pick a deck to share, since they already have the full SlideDeck
+  // object in hand; a student fetches it lazily in
+  // _ensureFollowingDeckLoaded once presentedContent tells them which
+  // deckId to load.
+  SlideDeck? _followingDeck;
+  bool _isLoadingFollowingDeck = false;
 
   // Native (Windows/Android/iOS/macOS) video path -- the web build keeps
   // using the Agora Web SDK iframe above unchanged; this is the `!kIsWeb`
@@ -110,6 +141,159 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
     // The elapsed-time badge only starts once the call actually begins
     // -- see `_onChannelJoined` -- not while still in preview.
     _initAgoraTokenAndIframe();
+
+    final String? meetingId = widget.meeting['_id']?.toString();
+    if (meetingId != null) {
+      _presentationSocket.onPresentationUpdate = _onPresentationUpdate;
+      _presentationSocket.connect(meetingId);
+    }
+  }
+
+  /// Fired whenever the server's `class_meeting:presentation_update`
+  /// arrives -- on initial room join (current state, possibly null), and
+  /// on every subsequent host navigation action (including the host's OWN
+  /// actions, which round-trip through the server the same as everyone
+  /// else's rather than trusting local state to match what got persisted).
+  void _onPresentationUpdate(Map<String, dynamic>? content) {
+    if (!mounted) return;
+    final bool isSlide = content != null && content['kind'] == 'slide';
+    setState(() => _presentedContent = isSlide ? content : null);
+    if (isSlide) {
+      _ensureFollowingDeckLoaded(content['deckId']?.toString());
+    } else {
+      _followingDeck = null;
+    }
+  }
+
+  /// Lazily fetches the deck content behind `_presentedContent`'s deckId
+  /// -- a no-op if it's already loaded (true for the host's own deck,
+  /// which `_startPresentingDeck` sets directly before this could ever be
+  /// called for it).
+  Future<void> _ensureFollowingDeckLoaded(String? deckId) async {
+    if (deckId == null || _followingDeck?.id == deckId || _isLoadingFollowingDeck) {
+      return;
+    }
+    _isLoadingFollowingDeck = true;
+    final deck = await SlideCacheService.instance.getDeckById(deckId);
+    _isLoadingFollowingDeck = false;
+    if (mounted && _presentedContent?['deckId']?.toString() == deckId) {
+      setState(() => _followingDeck = deck);
+    }
+  }
+
+  /// Host-only: opens a picker over the catalog of slide decks (the same
+  /// backend `GET /slide-decks` the Slide Decks manager uses) and starts
+  /// presenting whichever one is picked.
+  Future<void> _openShareSlidesPicker() async {
+    final decks = await SlideCacheService.instance.getSlideDecks();
+    if (!mounted) return;
+    final SlideDeck? picked = await showModalBottomSheet<SlideDeck>(
+      context: context,
+      backgroundColor: const Color(0xFF1E293B),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => _buildDeckPickerSheet(ctx, decks),
+    );
+    if (picked != null) _startPresentingDeck(picked);
+  }
+
+  Widget _buildDeckPickerSheet(BuildContext ctx, List<SlideDeck> decks) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Share Slides',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (decks.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  'No slide decks available yet.',
+                  style: TextStyle(color: Color(0xFF94A3B8)),
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: decks.length,
+                  itemBuilder: (context, i) {
+                    final deck = decks[i];
+                    return ListTile(
+                      leading: const Icon(
+                        Icons.slideshow_rounded,
+                        color: Color(0xFF6366F1),
+                      ),
+                      title: Text(
+                        deck.title,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        '${deck.slides.length} slides',
+                        style: const TextStyle(color: Color(0xFF94A3B8)),
+                      ),
+                      onTap: () => Navigator.pop(ctx, deck),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _startPresentingDeck(SlideDeck deck) {
+    setState(() => _followingDeck = deck);
+    _presentSlideAt(0);
+  }
+
+  /// Host-only: broadcasts "show slide `index` of `_followingDeck`" --
+  /// used both by _startPresentingDeck (index 0) and the Prev/Next
+  /// controls in the shared panel.
+  void _presentSlideAt(int index) {
+    final deck = _followingDeck;
+    final String? meetingId = widget.meeting['_id']?.toString();
+    final String? myUserId =
+        Provider.of<AuthProvider>(context, listen: false).userId;
+    if (deck == null || meetingId == null || myUserId == null) return;
+
+    _presentationSocket.presentSlide(
+      meetingId: meetingId,
+      hostId: myUserId,
+      deckId: deck.id,
+      deckTitle: deck.title,
+      slideIndex: index,
+      totalSlides: deck.slides.length,
+    );
+  }
+
+  void _stopSharingSlides() {
+    final String? meetingId = widget.meeting['_id']?.toString();
+    final String? myUserId =
+        Provider.of<AuthProvider>(context, listen: false).userId;
+    if (meetingId == null || myUserId == null) return;
+
+    _presentationSocket.stopPresenting(meetingId: meetingId, hostId: myUserId);
+    // Optimistic -- the server's own broadcast (which reaches this same
+    // socket too) will confirm this shortly after, but there's no reason
+    // to make the host wait for that round-trip to see the share end.
+    setState(() {
+      _presentedContent = null;
+      _followingDeck = null;
+    });
   }
 
   Future<void> _initAgoraTokenAndIframe() async {
@@ -746,6 +930,7 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   @override
   void dispose() {
     _noShowTimer?.cancel();
+    _presentationSocket.disconnect();
     if (kIsWeb) {
       // Only send leave if we're not already in the leave flow
       if (!_isLeaving) {
@@ -880,6 +1065,140 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   /// local preview tile first, then one tile per remote participant
   /// (`_remoteUids`, kept in sync by `_initNativeAgoraEnginePreviewOnly`'s
   /// event handlers).
+  /// Chooses between the plain video area (nothing shared) and the split
+  /// "shared content + video strip" layout (host is presenting slides) --
+  /// see the field doc comments on `_presentedContent`/`_followingDeck`.
+  Widget _buildMainContentArea() {
+    final Widget videoArea =
+        !kIsWeb ? _buildNativeVideoArea() : HtmlElementView(viewType: _viewId);
+
+    if (_presentedContent == null || _followingDeck == null) {
+      return videoArea;
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool isWide = constraints.maxWidth >= 700;
+        final Widget sharedPanel = _buildSharedSlidePanel();
+        final Widget videoStrip =
+            Container(color: const Color(0xFF0F172A), child: videoArea);
+
+        if (isWide) {
+          return Row(
+            children: [
+              Expanded(flex: 3, child: sharedPanel),
+              Container(width: 1, color: const Color(0xFF334155)),
+              SizedBox(width: 260, child: videoStrip),
+            ],
+          );
+        }
+        return Column(
+          children: [
+            Expanded(flex: 3, child: sharedPanel),
+            Container(height: 1, color: const Color(0xFF334155)),
+            SizedBox(height: 140, child: videoStrip),
+          ],
+        );
+      },
+    );
+  }
+
+  /// The shared-slide viewer -- renders the current slide's content
+  /// blocks via the same `SlideBlockRenderer` the student's standalone
+  /// slide viewer uses, so it looks identical to viewing the deck
+  /// directly. Host gets Prev/Next/Stop controls in the header; a student
+  /// just follows along read-only, driven entirely by
+  /// `_presentedContent['slideIndex']` from the server.
+  Widget _buildSharedSlidePanel() {
+    final SlideDeck deck = _followingDeck!;
+    final int rawIndex = (_presentedContent?['slideIndex'] as num?)?.toInt() ?? 0;
+    final int index = deck.slides.isEmpty
+        ? 0
+        : rawIndex.clamp(0, deck.slides.length - 1);
+    final SlideItem? slide = deck.slides.isEmpty ? null : deck.slides[index];
+
+    return Container(
+      color: const Color(0xFF111827),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1E293B),
+              border: Border(bottom: BorderSide(color: Color(0xFF334155))),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.slideshow_rounded,
+                    color: Color(0xFF6366F1), size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    slide?.title ?? deck.title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (deck.slides.isNotEmpty)
+                  Text(
+                    '${index + 1}/${deck.slides.length}',
+                    style: const TextStyle(
+                        color: Color(0xFF94A3B8), fontSize: 12),
+                  ),
+                if (widget.isHost) ...[
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left_rounded,
+                        color: Colors.white),
+                    onPressed:
+                        index > 0 ? () => _presentSlideAt(index - 1) : null,
+                    tooltip: 'Previous slide',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right_rounded,
+                        color: Colors.white),
+                    onPressed: index < deck.slides.length - 1
+                        ? () => _presentSlideAt(index + 1)
+                        : null,
+                    tooltip: 'Next slide',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded,
+                        color: Colors.redAccent),
+                    onPressed: _stopSharingSlides,
+                    tooltip: 'Stop sharing',
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Expanded(
+            child: slide == null
+                ? const Center(
+                    child: Text(
+                      'No slides in this deck',
+                      style: TextStyle(color: Color(0xFF94A3B8)),
+                    ),
+                  )
+                : SingleChildScrollView(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: slide.blocks
+                          .map((b) => SlideBlockRenderer(block: b, isDark: true))
+                          .toList(),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildNativeVideoArea() {
     if (_nativeMediaError != null) {
       return Center(
@@ -1121,7 +1440,12 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                 ),
               ),
 
-              // Video Frame (Agora Web Stream)
+              // Main content area -- just the video when nothing's being
+              // shared (unchanged from before); when the host is
+              // presenting slides, this becomes a split view with the
+              // shared content dominant and video collapsed to a strip,
+              // matching standard "screen share" video-call layout -- see
+              // _buildMainContentArea.
               Expanded(
                 child: _rtcToken == null
                     ? const Center(
@@ -1138,9 +1462,7 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                           ],
                         ),
                       )
-                    : !kIsWeb
-                    ? _buildNativeVideoArea()
-                    : HtmlElementView(viewType: _viewId),
+                    : _buildMainContentArea(),
               ),
 
               // Bottom Action Controls Toolbar -- preview (waiting room)
@@ -1206,20 +1528,19 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                       ),
                       const SizedBox(width: 16),
 
-                      // Screen Share (Host/Tutor) / Raise Hand (Student)
+                      // Share Slides (Host/Tutor) / Raise Hand (Student)
                       if (widget.isHost) ...[
                         _buildControlFab(
-                          icon: Icons.screen_share_rounded,
-                          label: _isScreenSharing
-                              ? 'Stop Share'
-                              : 'Screen Share',
-                          color: _isScreenSharing
+                          icon: Icons.slideshow_rounded,
+                          label: _presentedContent != null
+                              ? 'Stop Sharing'
+                              : 'Share Slides',
+                          color: _presentedContent != null
                               ? const Color(0xFF10B981)
                               : const Color(0xFF334155),
-                          onTap: () {
-                            setState(() =>
-                                _isScreenSharing = !_isScreenSharing);
-                          },
+                          onTap: _presentedContent != null
+                              ? _stopSharingSlides
+                              : _openShareSlidesPicker,
                         ),
                         const SizedBox(width: 16),
                       ] else ...[

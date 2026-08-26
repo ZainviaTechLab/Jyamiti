@@ -68,6 +68,25 @@ const classMeetingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // What the host is currently presenting to everyone in the class, if
+    // anything -- e.g. a SlideDeck page. `kind: null` means nothing is
+    // being shared right now (the default/idle state). Persisted here
+    // (rather than only living in socket.js's in-memory broadcast) so a
+    // student who joins mid-presentation, or reconnects, gets the current
+    // state immediately instead of waiting for the host's next navigation
+    // action -- see socket.js's `class_meeting:join_room` handler, which
+    // reads this back to the joining socket.
+    //
+    // `deckId` is a plain String, NOT an ObjectId ref -- SlideDeck's own
+    // `id` field (see models/SlideDeck.js) is an app-generated string
+    // ("deck_<timestamp>"), separate from its Mongo `_id`.
+    presentedContent: {
+      kind: { type: String, enum: ['slide', null], default: null },
+      deckId: { type: String, default: null },
+      deckTitle: { type: String, default: null },
+      slideIndex: { type: Number, default: 0 },
+      totalSlides: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 );
