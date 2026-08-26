@@ -2224,19 +2224,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _frictionController?.dispose();
     _frictionController = null;
 
-    final Offset targetDelta = velocity * 0.36;
+    final Offset targetDelta = velocity * 0.35;
     final Offset startPan = _panOffset;
     final Offset endPan = _panOffset + targetDelta;
 
     _frictionController = AnimationController(
       duration: Duration(
-        milliseconds: (targetDelta.distance * 1.5).clamp(320, 600).toInt(),
+        milliseconds: (targetDelta.distance * 1.25).clamp(280, 520).toInt(),
       ),
       vsync: this,
     );
 
     _frictionAnimation = Tween<Offset>(begin: startPan, end: endPan).animate(
-      CurvedAnimation(parent: _frictionController!, curve: Curves.easeOutCubic),
+      CurvedAnimation(parent: _frictionController!, curve: Curves.decelerate),
     );
 
     _frictionAnimation!.addListener(() {
@@ -13291,16 +13291,17 @@ class _MathsPadFinishedStrokesPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (!isVisible) return;
+    if (!isVisible || lines.isEmpty) return;
     // No camera transform here -- an ancestor `Transform` (see `build`'s
     // Layer 1a/1b) positions this whole layer in world space instead, so
     // panning/zooming is a GPU compositor operation that reuses this
     // layer's already-rasterized content instead of re-running these
-    // paint calls on every pan/zoom frame. `lines` is always a small,
-    // bounded list (one sealed chunk, or the capped "recent" tail -- see
-    // `_kBakeThreshold`), so drawing it unconditionally (no viewport
-    // culling) is cheap; culling existed only to bound cost against a
-    // page's ENTIRE history, which chunking already does structurally.
+    // paint calls on every pan/zoom frame. `isVisible` still matters
+    // despite chunking already bounding `lines` to a small, fixed size:
+    // it's what skips the real, measured-expensive part (Skia
+    // recomputing anti-aliased stroke edges on a scale change) for
+    // chunks nowhere near the viewport -- see this class's `isVisible`
+    // doc comment for the diagnostic that motivated it.
 
     // Pass 1: Fill Tool underlays -- always bottom, regardless of when
     // they were actually created (`_lines` itself stays strictly
