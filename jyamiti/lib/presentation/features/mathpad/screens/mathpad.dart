@@ -712,7 +712,7 @@ class MathsPadAction {
 }
 
 class _MathsPadWidgetState extends State<MathsPadWidget>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final List<MathsPadLine> _lines = [];
   final List<MathsPadAction> _undoHistory = [];
   final List<MathsPadAction> _redoHistory = [];
