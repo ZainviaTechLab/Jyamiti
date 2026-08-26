@@ -2210,7 +2210,19 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void _startInertialFling(Offset velocity) {
     if (velocity.distance < 80.0) return;
 
+    // `.stop()` alone leaves the OLD controller's ticker still registered
+    // with this `SingleTickerProviderStateMixin` -- creating another
+    // `AnimationController(vsync: this)` below without disposing this one
+    // first throws "multiple tickers were created" (that mixin only ever
+    // allows ONE ticker for the state's whole lifetime unless the
+    // previous one is properly disposed). Harmless when this was only
+    // reachable from one rare path (Hand-Tool fling-release); now that
+    // momentum fires on nearly every trackpad-pan/wheel-scroll release
+    // too (see `_onTrackpadPanZoomEnd`/`_flingFromRecentWheelSamples`),
+    // it's hit on almost every second fling.
     _frictionController?.stop();
+    _frictionController?.dispose();
+    _frictionController = null;
 
     final Offset targetDelta = velocity * 0.36;
     final Offset startPan = _panOffset;
