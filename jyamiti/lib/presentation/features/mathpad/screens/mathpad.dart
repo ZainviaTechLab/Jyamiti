@@ -30,6 +30,7 @@ import '../instruments/set_square_widget.dart';
 import '../instruments/graph_widget.dart';
 import '../instruments/media_embed_models.dart';
 import '../instruments/media_embed_widget.dart';
+import '../native_ink/live_ink_overlay.dart';
 import '../recording/mathpad_recording_service.dart';
 import '../recording/mathpad_web_recording_service.dart';
 import '../recording/web_recordings_storage_service.dart';
@@ -1208,6 +1209,21 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   // pressure-sensitive stylus.
   double _currentPointerPressure = 1.0;
 
+  // Native low-latency Pen-stroke overlay (see live_ink_overlay.dart /
+  // windows/runner/live_ink_overlay.h) -- Windows-only for now, a safe
+  // no-op everywhere else. `_tryArmNativeInk` decides eligibility per
+  // stroke; `_nativeInkActive` reflects whether THIS gesture actually got
+  // handed off (native's `armStroke` result, arrives asynchronously --
+  // see that method's doc comment). `_nativeInkArmPanOffset`/`Scale` are
+  // snapshotted at arm time so `_commitNativeCapturedStroke`'s
+  // screen-to-world conversion uses the transform that was actually
+  // active while the stroke was being drawn, not whatever it happens to
+  // be whenever the completion callback fires.
+  final LiveInkOverlay _liveInkOverlay = LiveInkOverlay.instance;
+  bool _nativeInkActive = false;
+  Offset _nativeInkArmPanOffset = Offset.zero;
+  double _nativeInkArmScale = 1.0;
+
   // Dedicated to the Pencil tool -- deliberately separate from
   // `_currentPointerPressure` above (the Pen's own fixed-per-stroke-width
   // mechanism). Normalized (0..1) via pressureMin/pressureMax and only
@@ -1741,6 +1757,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     if (kIsWeb) {
       BrowserContextMenu.disableContextMenu();
     }
+    _liveInkOverlay.onStrokeComplete = _commitNativeCapturedStroke;
 
     _loadLogoImage();
     if (widget.initialLines != null) {
@@ -1960,6 +1977,10 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
   void dispose() {
     if (kIsWeb) {
       BrowserContextMenu.enableContextMenu();
+    }
+    _liveInkOverlay.onStrokeComplete = null;
+    if (_nativeInkActive) {
+      unawaited(_liveInkOverlay.cancelStroke());
     }
     StylusPredictionService.instance.predictedDelta.removeListener(
       _onStylusPredictedDelta,
@@ -5502,6 +5523,131 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
     _panNotifier.value = _panOffset;
   }
 
+  // ─── Native Live-Ink Overlay (Windows, Pen tool only) ──────────────────
+  // See live_ink_overlay.dart / windows/runner/live_ink_overlay.h for the
+  // full design: a native Direct2D overlay draws the live stroke directly
+  // from raw OS pointer input, entirely outside Flutter's own engine
+  // pipeline, then hands the finished stroke back to be committed through
+  // the exact same data model every other stroke uses.
+
+  /// The canvas's current on-screen rect, in Flutter's own global
+  /// (== window-client-area-relative) logical-pixel space -- exactly the
+  /// coordinate space `LiveInkOverlay.updateTransform` expects. Reuses
+  /// `_canvasCaptureKey`, the same `RepaintBoundary` key the recording
+  /// feature's own screen-rect measurement
+  /// (`MathPadRecordingService._measureCanvasCropRect`) already reads --
+  /// both are read-only `localToGlobal`/`.size` calls, safe to share.
+  Rect? _measureCanvasScreenRect() {
+    final RenderObject? renderObject = _canvasCaptureKey.currentContext
+        ?.findRenderObject();
+    if (renderObject is! RenderRepaintBoundary || !renderObject.attached) {
+      return null;
+    }
+    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
+    final Size size = renderObject.size;
+    if (size.width <= 0 || size.height <= 0) return null;
+    return topLeft & size;
+  }
+
+  /// Attempts to hand a just-started stroke off to the native
+  /// `LiveInkOverlay` for low-latency drawing. Only eligible for a plain,
+  /// unmodified freehand Pen stroke: Pencil (a completely different
+  /// rendering algorithm -- perfect_freehand), Eraser (a different tool
+  /// entirely), and Magic Pen (an animated gradient shader the native
+  /// side doesn't replicate) are all deliberately excluded and keep
+  /// drawing through the normal Flutter-side path exactly as before,
+  /// completely untouched. A safe no-op on any unsupported platform
+  /// (`LiveInkOverlay.armStroke` itself always resolves to `false` there
+  /// -- see that class's doc comment).
+  ///
+  /// Fire-and-forget: on success, this gesture's further Dart-side
+  /// pointer-move events are simply never seen anyway (native has stolen
+  /// OS pointer capture for the duration of the stroke -- see
+  /// `_onScaleUpdate`/`_onScaleEnd`'s own `_nativeInkActive` guards, kept
+  /// purely as defense-in-depth for that). If arming fails for any
+  /// reason, `_nativeInkActive` simply never becomes true and every
+  /// existing code path continues completely unaffected.
+  void _tryArmNativeInk(Offset screenStart, MathsPadLine line) {
+    final bool eligible =
+        !line.isEraser &&
+        !line.isPencil &&
+        !line.isMagic &&
+        !widget.isTransparentBg;
+    if (!eligible) return;
+    final Rect? screenRect = _measureCanvasScreenRect();
+    if (screenRect == null) return;
+    _liveInkOverlay.updateTransform(
+      left: screenRect.left,
+      top: screenRect.top,
+      width: screenRect.width,
+      height: screenRect.height,
+    );
+    // Snapshotted, not live -- see `_commitNativeCapturedStroke`'s doc
+    // comment for why the eventual screen-to-world conversion must use
+    // whatever pan/scale was actually active while this stroke was being
+    // drawn, not whatever it happens to be whenever the (asynchronous)
+    // completion callback fires.
+    _nativeInkArmPanOffset = _panOffset;
+    _nativeInkArmScale = _scale;
+    unawaited(
+      _liveInkOverlay
+          .armStroke(
+            start: screenStart,
+            startPressure: _lastPencilStylusPressure ?? _currentPointerPressure,
+            color: line.color,
+            strokeWidthPx: line.strokeWidth * _scale,
+          )
+          .then((armed) => _nativeInkActive = armed),
+    );
+  }
+
+  /// Commits a stroke captured entirely by the native `LiveInkOverlay` --
+  /// invoked once the pen lifts (`_liveInkOverlay.onStrokeComplete`, wired
+  /// in `initState`). [screenPoints] are in the same canvas-local
+  /// logical-pixel space `_tryArmNativeInk` used; converted back to world
+  /// space here using the pan/scale SNAPSHOTTED at arm time
+  /// (`_nativeInkArmPanOffset`/`_nativeInkArmScale`) -- a single Pen
+  /// stroke can't itself also pan/zoom (that's a completely different,
+  /// mutually-exclusive gesture path), so in practice these never differ
+  /// from the live values, but snapshotting is what makes that a
+  /// guarantee rather than an assumption. Runs the same commit steps
+  /// `_onScaleEnd`'s normal freehand-Pen path does (build+cache the path,
+  /// add to `_lines`, record undo, bump notifiers, maybe rebake) -- kept
+  /// as its own separate method rather than sharing that inline code, to
+  /// avoid touching the existing, heavily-iterated-on normal path at all.
+  void _commitNativeCapturedStroke(List<Offset> screenPoints, List<double> pressures) {
+    final MathsPadLine? line = _currentLine;
+    _nativeInkActive = false;
+    if (line == null) return;
+    if (screenPoints.length < 2) {
+      // Too short to count as a real stroke (e.g. a stray tap) -- it was
+      // never added to `_lines`, so there's nothing to undo.
+      _currentLine = null;
+      _activeDrawingNotifier.value++;
+      return;
+    }
+    final Offset armPan = _nativeInkArmPanOffset;
+    final double armScale = _nativeInkArmScale;
+    line.points
+      ..clear()
+      ..addAll([
+        for (int i = 0; i < screenPoints.length; i++)
+          MathsPadStrokePoint(
+            (screenPoints[i] - armPan) / armScale,
+            pressures[i],
+          ),
+      ]);
+    line.invalidateCache();
+    _buildAndCachePath(line);
+    _lines.add(line);
+    _recordAction(MathsPadAction(addedLines: [line]));
+    _currentLine = null;
+    _resetPenAutoShape();
+    _finishedStrokesNotifier.value++;
+    _activeDrawingNotifier.value++;
+    _maybeRebakeLines();
+  }
+
   void _onScaleStart(ScaleStartDetails details) {
     _frictionController?.stop();
     if (widget.isTransparentBg) {
@@ -5828,6 +5974,7 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _currentLine = newLine;
         _predictedTailPresent = false;
         _resetPenAutoShape();
+        _tryArmNativeInk(details.localFocalPoint, newLine);
 
         _selectedLines.clear();
         _activeDrawingNotifier.value++;
@@ -6073,6 +6220,15 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
       });
     } else if (_currentLine != null) {
       // 1-finger freehand drawing stroke update
+      //
+      // Defense-in-depth, not the primary mechanism: once
+      // `_tryArmNativeInk` succeeds, native has stolen OS pointer capture
+      // for this gesture, so Flutter's own gesture recognizer shouldn't
+      // even be receiving these move events anymore in the first place.
+      // If it somehow still does (unexpected driver/hardware behaviour),
+      // bail here rather than let Dart and native both mutate the same
+      // in-progress stroke.
+      if (_nativeInkActive) return;
       final worldPos = _screenToWorld(details.localFocalPoint);
 
       // Any speculative predicted tail point (see `_onStylusPredictedDelta`)
@@ -6456,6 +6612,13 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         _resetPenAutoShape();
         _finishedStrokesNotifier.value++;
         _activeDrawingNotifier.value++;
+      } else if (_nativeInkActive) {
+        // Defense-in-depth, not the primary mechanism -- see
+        // `_onScaleUpdate`'s matching guard's doc comment. Deliberately
+        // does nothing here: the native `LiveInkOverlay` independently
+        // detects the pen lifting and commits this stroke itself via
+        // `_commitNativeCapturedStroke`, regardless of whether Flutter's
+        // own gesture recognizer also happens to fire an end event.
       } else {
         // A speculative predicted tail point must never become part of the
         // permanently committed stroke -- see `_onStylusPredictedDelta`.
