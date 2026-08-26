@@ -437,8 +437,77 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     let localTracks = { videoTrack: null, audioTrack: null };
     let isJoined = false;
     let isLeaving = false;
+    let hasNotifiedUserJoined = false;
 
     AgoraRTC.setLogLevel(3); // warnings only
+
+    // Event listeners are registered here -- immediately after the client
+    // is created, well before join()/publish() are ever called -- and NOT
+    // inside joinAndPublish() after those awaits. This matters: if the
+    // other participant already has published tracks in the channel by
+    // the time we join, the SDK can fire "user-published" for their
+    // existing track the moment our join() resolves, which can race
+    // ahead of (and be missed by) a listener that's only attached after
+    // join()+publish() finish awaiting. A plain EventEmitter never
+    // replays a missed event, so whoever joins second would be stuck
+    // seeing "waiting for other participants" forever while the first
+    // joiner (whose listener was already live) sees them fine -- exactly
+    // the asymmetric "one side sees both, the other sees no one" bug.
+    client.on("user-published", async (user, mediaType) => {
+      try {
+        await client.subscribe(user, mediaType);
+        const count = client.remoteUsers.length + 1;
+        updateStatus("👥 " + count + " participant(s) connected");
+        if (!hasNotifiedUserJoined) {
+          hasNotifiedUserJoined = true;
+          window.parent.postMessage({ type: "user_joined" }, "*");
+        }
+
+        if (mediaType === "video") {
+          const remoteContainerId = "player-" + user.uid;
+          if (!document.getElementById("card-" + user.uid)) {
+            const grid = document.getElementById("video-grid");
+            const card = document.createElement("div");
+            card.className = "video-card";
+            card.id = "card-" + user.uid;
+            card.innerHTML = \`<div id="\${remoteContainerId}" class="player"></div>
+              <div class="name-tag">
+                <span class="status-badge"></span>
+                <span>Participant (\${user.uid})</span>
+              </div>\`;
+            grid.appendChild(card);
+          }
+          // Use retry to handle DOM rendering delay
+          playVideoWithRetry(user.videoTrack, remoteContainerId, 8);
+        }
+        if (mediaType === "audio") {
+          user.audioTrack.play();
+        }
+      } catch(subErr) {
+        console.error("Subscribe error:", subErr);
+      }
+    });
+
+    // Re-play video if remote user republishes
+    client.on("user-unpublished", (user, mediaType) => {
+      if (mediaType === "video") {
+        const card = document.getElementById("card-" + user.uid);
+        if (card) card.remove();
+      }
+    });
+
+    client.on("user-left", (user) => {
+      const card = document.getElementById("card-" + user.uid);
+      if (card) card.remove();
+      updateStatus("🟢 Meeting Live — Waiting for participants...");
+    });
+
+    client.on("connection-state-change", (curState, prevState, reason) => {
+      console.log("Connection state:", prevState, "->", curState, reason);
+      if (curState === "DISCONNECTED" && !isLeaving) {
+        updateStatus("⚠️ Connection lost. Reconnecting...");
+      }
+    });
 
     function updateStatus(text) {
       const el = document.getElementById("status-text");
@@ -462,8 +531,6 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
         }
       }
     }
-
-    let hasNotifiedUserJoined = false;
 
     // Local-only camera/mic preview -- captures tracks and plays them
     // locally, but never calls client.join()/client.publish(), so
@@ -517,64 +584,10 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
           await client.publish(tracksToPublish);
         }
         updateStatus("🟢 Live! Waiting for other participants...");
-
-        // Handle remote users joining & publishing video/audio
-        client.on("user-published", async (user, mediaType) => {
-          try {
-            await client.subscribe(user, mediaType);
-            const count = client.remoteUsers.length + 1;
-            updateStatus("👥 " + count + " participant(s) connected");
-            if (!hasNotifiedUserJoined) {
-              hasNotifiedUserJoined = true;
-              window.parent.postMessage({ type: "user_joined" }, "*");
-            }
-
-            if (mediaType === "video") {
-              const remoteContainerId = "player-" + user.uid;
-              if (!document.getElementById("card-" + user.uid)) {
-                const grid = document.getElementById("video-grid");
-                const card = document.createElement("div");
-                card.className = "video-card";
-                card.id = "card-" + user.uid;
-                card.innerHTML = \`<div id="\${remoteContainerId}" class="player"></div>
-                  <div class="name-tag">
-                    <span class="status-badge"></span>
-                    <span>Participant (\${user.uid})</span>
-                  </div>\`;
-                grid.appendChild(card);
-              }
-              // Use retry to handle DOM rendering delay
-              playVideoWithRetry(user.videoTrack, remoteContainerId, 8);
-            }
-            if (mediaType === "audio") {
-              user.audioTrack.play();
-            }
-          } catch(subErr) {
-            console.error("Subscribe error:", subErr);
-          }
-        });
-
-        // Re-play video if remote user republishes
-        client.on("user-unpublished", (user, mediaType) => {
-          if (mediaType === "video") {
-            const card = document.getElementById("card-" + user.uid);
-            if (card) card.remove();
-          }
-        });
-
-        client.on("user-left", (user) => {
-          const card = document.getElementById("card-" + user.uid);
-          if (card) card.remove();
-          updateStatus("🟢 Meeting Live — Waiting for participants...");
-        });
-
-        client.on("connection-state-change", (curState, prevState, reason) => {
-          console.log("Connection state:", prevState, "->", curState, reason);
-          if (curState === "DISCONNECTED" && !isLeaving) {
-            updateStatus("⚠️ Connection lost. Reconnecting...");
-          }
-        });
-
+        // Remote-user event listeners are already registered above (right
+        // after client creation) -- see the comment there for why they
+        // must NOT be attached here, after join()/publish() have already
+        // awaited.
       } catch (err) {
         console.error("Agora Join Error:", err);
         updateStatus("❌ Connection Error: " + (err.message || err));
