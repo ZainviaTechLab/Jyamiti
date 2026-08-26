@@ -60,6 +60,15 @@ dependencies:
   flutter_bloc: ^9.1.1
   equatable: ^2.0.8
   socket_io_client: ^3.1.6
+  # Fixes a well-documented Flutter Web bug (flutter/flutter#166906,
+  # #170873, #54027): an iframe-based HtmlElementView (our Agora meeting
+  # room iframe) keeps capturing pointer events even for Flutter widgets
+  # rendered visually on top of/near it -- dialogs, toolbars -- with no
+  # error, so taps on them silently do nothing. PointerInterceptor wraps
+  # a widget with an invisible platform view that reclaims those events
+  # for Flutter's own gesture system. Safe on non-web platforms -- it's a
+  # transparent no-op passthrough there.
+  pointer_interceptor: ^0.10.1+2
   syncfusion_flutter_pdf: <32.0.0
   webview_flutter: ^4.14.0
   webview_windows: ^0.4.0

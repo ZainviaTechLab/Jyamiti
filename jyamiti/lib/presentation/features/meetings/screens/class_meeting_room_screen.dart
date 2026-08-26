@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 import '../../../../services/parent_meeting_service.dart';
 import '../../../../services/class_meeting_service.dart';
 
@@ -277,27 +278,35 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor:
-            context.isDark ? const Color(0xFF1E293B) : Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('No One Joined', style: TextStyle(color: context.textColor)),
-        content: Text(
-          'No students joined within 5 minutes, so this class is ending '
-          'automatically.',
-          style: TextStyle(color: context.textColor70),
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF6366F1),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
+      // PointerInterceptor: without it, this dialog's OK button silently
+      // eats taps on web -- the Agora video iframe underneath keeps
+      // capturing pointer events even for Flutter content rendered
+      // visually on top of it (a documented Flutter Web platform-view
+      // bug, see the "End Class"/"Leave" dialog below for the full
+      // explanation).
+      builder: (ctx) => PointerInterceptor(
+        child: AlertDialog(
+          backgroundColor:
+              context.isDark ? const Color(0xFF1E293B) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text('No One Joined', style: TextStyle(color: context.textColor)),
+          content: Text(
+            'No students joined within 5 minutes, so this class is ending '
+            'automatically.',
+            style: TextStyle(color: context.textColor70),
           ),
-        ],
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6366F1),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
       ),
     );
     if (mounted) await _performLeave();
@@ -773,37 +782,48 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
     }
 
     final bool isHost = widget.isHost;
+    // PointerInterceptor wraps the dialog because, on web, the Agora video
+    // iframe (HtmlElementView) keeps capturing pointer events even for
+    // Flutter widgets rendered visually on top of it -- a documented
+    // Flutter Web bug (flutter/flutter#166906, #170873, #54027), not
+    // something specific to this dialog. Without it, this confirmation
+    // renders fine but every tap on it -- including its own End Class/
+    // Leave/Cancel buttons -- silently does nothing, because the iframe
+    // underneath swallows the tap before Flutter's own gesture detection
+    // ever sees it. Same reason the bottom toolbar below is wrapped too.
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          isHost ? 'End Class?' : 'Leave Class?',
-          style: TextStyle(color: context.textColor),
-        ),
-        content: Text(
-          isHost
-              ? 'This will end the class for all students.'
-              : 'Are you sure you want to leave the class?',
-          style: TextStyle(color: context.textColor70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel', style: TextStyle(color: context.textColor60)),
+      builder: (ctx) => PointerInterceptor(
+        child: AlertDialog(
+          backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text(
+            isHost ? 'End Class?' : 'Leave Class?',
+            style: TextStyle(color: context.textColor),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
+          content: Text(
+            isHost
+                ? 'This will end the class for all students.'
+                : 'Are you sure you want to leave the class?',
+            style: TextStyle(color: context.textColor70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Cancel', style: TextStyle(color: context.textColor60)),
             ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(isHost ? 'End Class' : 'Leave'),
-          ),
-        ],
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(isHost ? 'End Class' : 'Leave'),
+            ),
+          ],
+        ),
       ),
     );
 
@@ -1169,11 +1189,16 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
               ),
 
               // Bottom Action Controls Toolbar -- preview (waiting room)
-              // toolbar before joining, normal call toolbar after.
-              if (!_hasJoinedChannel)
-                _buildPreviewToolbar()
-              else
-                Container(
+              // toolbar before joining, normal call toolbar after. Wrapped
+              // in PointerInterceptor so its buttons (End Class/Leave
+              // included) actually receive taps on web instead of the
+              // Agora video iframe above silently swallowing them -- see
+              // the confirmation dialog's doc comment in
+              // _handleEndOrLeaveCall for the full explanation.
+              PointerInterceptor(
+                child: !_hasJoinedChannel
+                    ? _buildPreviewToolbar()
+                    : Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 24, vertical: 16),
                   color: const Color(0xFF0F172A),
@@ -1268,6 +1293,7 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                     ],
                   ),
                 ),
+              ),
             ],
           ),
         ),
