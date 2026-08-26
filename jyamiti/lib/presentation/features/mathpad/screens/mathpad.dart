@@ -12897,7 +12897,25 @@ class _MathsPadGridBackgroundPainter extends CustomPainter {
     canvas.scale(scale);
     final gridPaint = Paint()
       ..color = (isDark ? Colors.white : Colors.indigo).withOpacity(0.07)
-      ..strokeWidth = 1.0 / scale;
+      ..strokeWidth = 1.0 / scale
+      // Faint hairline background grid -- doesn't need anti-aliased edges,
+      // and AA is real per-line rasterization cost paid on EVERY pan/zoom
+      // frame (see the batching comment below).
+      ..isAntiAlias = false;
+
+    // Batched into ONE `Path` + ONE `drawPath` call instead of one
+    // `canvas.drawLine` call per grid line. This is the only layer that
+    // genuinely has to repaint on every single pan/zoom frame -- unlike
+    // the baked-stroke layers (Layer 1a/1b), which skip repainting on pan
+    // entirely and just get repositioned by the shared `Transform` (see
+    // that comment). Each `drawLine` is its own Skia call with its own
+    // fixed overhead; at a wide/zoomed-out viewport that was hundreds of
+    // separate calls every frame during a pan gesture -- worse the more
+    // zoomed out you are, since more (smaller) cells fit on screen. A
+    // single `Path` with many disjoint moveTo/lineTo subpaths rasterizes
+    // in one pass -- identical pixels, far less per-frame overhead. This
+    // was the main remaining O(N)-per-frame cost in the pan/scroll path.
+    final Path gridPath = Path();
 
     if (bgMode == CanvasBgMode.grid) {
       const double step = 28.0;
@@ -12907,10 +12925,12 @@ class _MathsPadGridBackgroundPainter extends CustomPainter {
       final double gridEndY = (endY / step).ceil() * step + step;
 
       for (double x = gridStartX; x <= gridEndX; x += step) {
-        canvas.drawLine(Offset(x, gridStartY), Offset(x, gridEndY), gridPaint);
+        gridPath.moveTo(x, gridStartY);
+        gridPath.lineTo(x, gridEndY);
       }
       for (double y = gridStartY; y <= gridEndY; y += step) {
-        canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
+        gridPath.moveTo(gridStartX, y);
+        gridPath.lineTo(gridEndX, y);
       }
     } else if (bgMode == CanvasBgMode.ruled) {
       const double lineStep = 32.0;
@@ -12922,9 +12942,11 @@ class _MathsPadGridBackgroundPainter extends CustomPainter {
       final double lineEndY = (endY / lineStep).ceil() * lineStep + lineStep;
 
       for (double y = lineStartY; y <= lineEndY; y += lineStep) {
-        canvas.drawLine(Offset(gridStartX, y), Offset(gridEndX, y), gridPaint);
+        gridPath.moveTo(gridStartX, y);
+        gridPath.lineTo(gridEndX, y);
       }
     }
+    canvas.drawPath(gridPath, gridPaint);
     canvas.restore();
   }
 
