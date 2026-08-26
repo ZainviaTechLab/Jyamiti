@@ -90,8 +90,11 @@ class _TutorDashboardState extends State<TutorDashboard> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) =>
-              ParentMeetingRoomScreen(meeting: meeting, isHost: true),
+          builder: (_) => ParentMeetingRoomScreen(
+            meeting: meeting,
+            isHost: true,
+            meetingType: 'class',
+          ),
         ),
       );
       // Refresh so the card reflects "ended" (or still-live, if the

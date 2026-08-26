@@ -1521,6 +1521,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
                   builder: (_) => ParentMeetingRoomScreen(
                     meeting: Map<String, dynamic>.from(m),
                     isHost: false,
+                    meetingType: 'class',
                   ),
                 ),
               );

@@ -5,6 +5,7 @@ import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../../../services/parent_meeting_service.dart';
+import '../../../../services/class_meeting_service.dart';
 
 // The Agora meeting room is embedded via an HTML iframe, which only exists
 // on web -- conditionally import the real dart:html-based controller on web
@@ -17,10 +18,23 @@ class ParentMeetingRoomScreen extends StatefulWidget {
   final Map<String, dynamic> meeting;
   final bool isHost;
 
+  /// Which backend collection `meeting['_id']` actually belongs to --
+  /// `'parent'` (default) for a `ParentMeeting` document, `'class'` for a
+  /// `ClassMeeting` document (the "Start Class"/"Join Class" flow). Both
+  /// share the same field names on purpose so this one room screen can
+  /// render either (see `ClassMeetingService`'s doc comment), but their
+  /// status-update endpoints are on two different routers/collections --
+  /// this flag is what lets `_performLeave`/`initState` PUT to the right
+  /// one instead of always calling `ParentMeetingService`, which used to
+  /// silently 404 (swallowed by `.catchError`) against a `ClassMeeting`
+  /// id and leave that class stuck showing "live" forever.
+  final String meetingType;
+
   const ParentMeetingRoomScreen({
     super.key,
     required this.meeting,
     this.isHost = false,
+    this.meetingType = 'parent',
   });
 
   @override
@@ -60,6 +74,18 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
   bool _hasJoinedChannel = false;
   bool _isJoining = false;
 
+  // Guards against popping the screen twice -- both the iframe's graceful
+  // `agora_left` reply (`onLeft` below) and `_performLeave`'s 2-second
+  // fallback timer can fire a `Navigator.pop`; whichever wins first sets
+  // this so the other becomes a no-op. Deliberately separate from
+  // `_isLeaving` (which means "a leave is in progress", set the moment
+  // `_performLeave` starts) -- reusing that flag as the pop-guard used to
+  // make `onLeft`'s pop permanently unreachable, since `_isLeaving` was
+  // already `true` by the time the iframe's reply came back, so every
+  // web leave/end silently fell through to the full 2-second fallback
+  // instead of closing as soon as the iframe actually confirmed.
+  bool _hasNavigatedAway = false;
+
   // Host-only 5-minute no-show safety net -- started the moment the
   // host actually joins (see `_onChannelJoined`), cancelled the moment
   // any remote user is seen (see `_onRemoteUserJoined`). If it fires
@@ -80,7 +106,13 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     // of whether they've actually tapped "Join Now" yet (see
     // `_hasJoinedChannel`'s doc comment): this is about the meeting
     // RECORD's status for listing purposes, not the video call itself.
-    if (widget.isHost && widget.meeting['_id'] != null) {
+    // ClassMeeting documents are only ever created already `status:
+    // 'live'` (see `POST /class-meetings/start`) and have no separate
+    // "set live" endpoint, so there's nothing to call here for those --
+    // this is a `ParentMeeting`-only step.
+    if (widget.meetingType == 'parent' &&
+        widget.isHost &&
+        widget.meeting['_id'] != null) {
       ParentMeetingService.updateMeetingStatus(
         widget.meeting['_id'].toString(),
         'live',
@@ -680,9 +712,12 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
         setState(() => _iframeReady = true);
       },
       onLeft: () {
-        // JS confirmed it left — safe to pop the screen
-        if (mounted && !_isLeaving) {
-          _isLeaving = true;
+        // JS confirmed it left — safe to pop the screen. Guarded by
+        // `_hasNavigatedAway`, NOT `_isLeaving` -- `_performLeave` already
+        // sets `_isLeaving` true before this reply can possibly arrive,
+        // so gating on that would make this pop unreachable.
+        if (mounted && !_hasNavigatedAway) {
+          _hasNavigatedAway = true;
           Navigator.pop(context);
         }
       },
@@ -796,12 +831,28 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     setState(() => _isLeaving = true);
     _noShowTimer?.cancel();
 
-    // Update status in DB first (host only)
+    // Update status in DB first (host only) -- routed to whichever
+    // collection this meeting actually lives in (see `meetingType`'s doc
+    // comment). Using the wrong one here is exactly what used to leave
+    // `ClassMeeting`s stuck showing "live" forever: `PUT
+    // /parent-meetings/:id/status` 404s on a `ClassMeeting` id (different
+    // collection, same ObjectId shape), and that 404 was silently
+    // swallowed by `.catchError((_) => null)` below, so nothing ever
+    // surfaced the failure. `ClassMeetingService.endClass` also broadcasts
+    // `class_meeting:ended` to the batch's students -- `updateMeetingStatus`
+    // has no equivalent broadcast, so ending a class the old way never
+    // notified anyone either.
     if (widget.isHost && widget.meeting['_id'] != null) {
-      await ParentMeetingService.updateMeetingStatus(
-        widget.meeting['_id'].toString(),
-        'ended',
-      ).then((_) {}).catchError((_) => null);
+      final String meetingId = widget.meeting['_id'].toString();
+      if (widget.meetingType == 'class') {
+        await ClassMeetingService.endClass(meetingId)
+            .then((_) {})
+            .catchError((_) => null);
+      } else {
+        await ParentMeetingService.updateMeetingStatus(meetingId, 'ended')
+            .then((_) {})
+            .catchError((_) => null);
+      }
     }
 
     if (kIsWeb) {
@@ -811,9 +862,14 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
       // Set a fallback timer in case the message never comes back.
       _postIframeMessage({'action': 'leave'});
 
-      // Fallback: pop after 2 seconds even if JS doesn't respond
+      // Fallback: pop after 2 seconds even if JS doesn't respond. Guarded
+      // by `_hasNavigatedAway` so this doesn't double-pop on top of a
+      // graceful `onLeft` reply that already closed the screen.
       Timer(const Duration(seconds: 2), () {
-        if (mounted) Navigator.pop(context);
+        if (mounted && !_hasNavigatedAway) {
+          _hasNavigatedAway = true;
+          Navigator.pop(context);
+        }
       });
     } else {
       // No iframe round-trip to wait for on native -- leave the channel
@@ -825,7 +881,10 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
         await _rtcEngine?.release();
       } catch (_) {}
       _rtcEngine = null;
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        _hasNavigatedAway = true;
+        Navigator.pop(context);
+      }
     }
   }
 
