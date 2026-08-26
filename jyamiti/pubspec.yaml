@@ -93,6 +93,14 @@ dependencies:
   ffi: ^2.2.0
   camera: ^0.12.0+2
   camera_windows: ^0.2.6+4
+  # Native video calling for Parent Meetings / Start Class on Windows,
+  # Android, iOS, macOS -- the web build keeps using the existing Agora
+  # Web SDK iframe (parent_meeting_room_screen.dart's
+  # meeting_iframe_controller_web.dart) unchanged; this is ONLY consumed
+  # from the `!kIsWeb` branch there. Same Agora project/App ID as the
+  # existing web integration (backend/models/ParentMeeting.js).
+  agora_rtc_engine: ^6.5.4
+  permission_handler: ^12.0.1
 
 
 dev_dependencies:

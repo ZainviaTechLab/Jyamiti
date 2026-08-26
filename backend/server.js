@@ -26,6 +26,7 @@ import assignmentsRouter from './routes/assignments.js';
 import slideRouter from './routes/slideRoutes.js';
 import competitionsRouter from './routes/competitions.js';
 import parentMeetingsRouter from './routes/parentMeetings.js';
+import classMeetingsRouter from './routes/classMeetings.js';
 import oauthRouter from './routes/oauth.js';
 import { initScheduleCron } from './services/scheduleGenerator.js';
 import { initPaymentCron } from './services/paymentGenerator.js';
@@ -95,6 +96,7 @@ app.use('/api/assignments', assignmentsRouter);
 app.use('/api/slide-decks', slideRouter);
 app.use('/api/competitions', competitionsRouter);
 app.use('/api/parent-meetings', parentMeetingsRouter);
+app.use('/api/class-meetings', classMeetingsRouter);
 app.use('/api/oauth', oauthRouter);
 
 // Serve uploads statically

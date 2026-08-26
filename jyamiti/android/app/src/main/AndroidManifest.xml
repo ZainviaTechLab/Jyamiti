@@ -1,5 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Native Agora video calling (Parent Meetings / Start Class) --
+         camera_windows/camera already request these implicitly on their
+         own capture path, but agora_rtc_engine's native engine (see
+         parent_meeting_room_screen.dart's `_initNativeAgoraEngine`)
+         needs them declared explicitly to be grantable at runtime. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <application
         android:label="Jyamiti"
         android:name="${applicationName}"

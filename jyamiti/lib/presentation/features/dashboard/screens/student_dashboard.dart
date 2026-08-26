@@ -22,6 +22,8 @@ import 'student_detailed_attendance_screen.dart';
 import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
 import '../../meetings/screens/parent_meeting_room_screen.dart';
 import '../../../../services/parent_meeting_service.dart';
+import '../../../../services/class_meeting_service.dart';
+import '../../../../services/class_meeting_socket_service.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../bloc/student_dashboard/student_dashboard_bloc.dart';
 import '../bloc/student_dashboard/student_dashboard_event.dart';
@@ -41,6 +43,13 @@ class _StudentDashboardState extends State<StudentDashboard> {
       0; // 0 = Overview, 1 = Schedules, 2 = Messages, 3 = Performance, 4 = Payments, 5 = Settings
   Widget? _activeInlineSubScreen;
 
+  // "Start Class"'s student-side counterpart -- see
+  // `_buildStudentJoinClassCard`. Loaded once on mount (catches a class
+  // that was already live before this screen opened) and kept live via
+  // `ClassMeetingSocketService` (catches one starting/ending while the
+  // student is already looking at the dashboard).
+  Map<String, dynamic>? _liveClassMeeting;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +59,40 @@ class _StudentDashboardState extends State<StudentDashboard> {
         Provider.of<AuthProvider>(context, listen: false).fetchProfile();
       }
     });
+    _loadLiveClassMeeting();
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    if (auth.userId != null) {
+      ClassMeetingSocketService.instance.connect(auth.userId!);
+    }
+    ClassMeetingSocketService.instance.onClassStarted = (meeting) {
+      if (mounted) setState(() => _liveClassMeeting = meeting);
+    };
+    ClassMeetingSocketService.instance.onClassEnded = (meetingId) {
+      if (mounted &&
+          _liveClassMeeting != null &&
+          _liveClassMeeting!['_id'].toString() == meetingId) {
+        setState(() => _liveClassMeeting = null);
+      }
+    };
+  }
+
+  Future<void> _loadLiveClassMeeting() async {
+    try {
+      final meetings = await ClassMeetingService.getMyLiveMeetings();
+      if (mounted && meetings.isNotEmpty) {
+        setState(() => _liveClassMeeting = meetings.first);
+      }
+    } catch (_) {
+      // Silent -- this is a best-effort live banner, not core dashboard
+      // data; a failed check here shouldn't block/error the rest of the
+      // dashboard.
+    }
+  }
+
+  @override
+  void dispose() {
+    ClassMeetingSocketService.instance.disconnect();
+    super.dispose();
   }
 
   Future<void> _handleLogout(AuthProvider auth) async {
@@ -805,6 +848,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
 
             return Column(
                   children: [
+                    _buildStudentJoinClassCard(context),
                     _buildStudentParentMeetingsCard(context),
                     ActiveAssignmentsPreview(
                       onNavigateToAssignments: () {
@@ -1374,6 +1418,117 @@ class _StudentDashboardState extends State<StudentDashboard> {
         );
       }
     }
+  }
+
+  /// "Start Class"'s student-side banner -- same visual shape as
+  /// `_buildStudentParentMeetingsCard` below, but driven by
+  /// `_liveClassMeeting` (loaded once + kept live via
+  /// `ClassMeetingSocketService`, see `initState`) instead of a
+  /// `FutureBuilder` re-polled only on rebuild, since a class starting
+  /// needs to show up the INSTANT the tutor starts it, not just next
+  /// time this widget happens to rebuild.
+  Widget _buildStudentJoinClassCard(BuildContext context) {
+    final m = _liveClassMeeting;
+    if (m == null) return const SizedBox.shrink();
+
+    final title = m['title'] ?? 'Live Class';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.redAccent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.redAccent, width: 2),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: const BoxDecoration(
+              color: Colors.redAccent,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.school_rounded,
+              color: Colors.white,
+              size: 26,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title.toString(),
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        '🔴 CLASS LIVE NOW',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tutor: ${m['hostName'] ?? 'Tutor'} • ${m['batchName'] ?? 'Batch'}',
+                  style: TextStyle(color: context.textColor70, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            icon: const Icon(Icons.login_rounded, size: 16),
+            label: const Text(
+              'Join Class',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ParentMeetingRoomScreen(
+                    meeting: Map<String, dynamic>.from(m),
+                    isHost: false,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildStudentParentMeetingsCard(BuildContext context) {

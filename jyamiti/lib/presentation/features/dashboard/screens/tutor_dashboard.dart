@@ -24,6 +24,8 @@ import '../../../widgets/writing_pad_widget.dart';
 import '../../competitions/screens/tutor_competition_host_screen.dart';
 import '../../competitions/screens/tutor_arena_history_screen.dart';
 import '../../meetings/screens/parent_meetings_dashboard_screen.dart';
+import '../../meetings/screens/parent_meeting_room_screen.dart';
+import '../../../../services/class_meeting_service.dart';
 import '../../robo_drawing/screens/robo_drawing_screen.dart';
 import 'tutor_recordings_screen.dart';
 import 'web_recordings_screen.dart';
@@ -43,6 +45,14 @@ class _TutorDashboardState extends State<TutorDashboard> {
 
   static const Color _roleColor = Color(0xFFF43F5E);
 
+  // "Start Class" button state -- keyed by batch id, one fetch per
+  // dashboard load feeds every batch card at once (see
+  // `ClassMeetingService.getMyTodayStatus`) rather than a request per
+  // card. `null` value = still loading for that batch (button disabled);
+  // absent key = hasn't loaded/failed (also disabled, safe default).
+  final Map<String, Map<String, dynamic>> _classStatusByBatch = {};
+  bool _classStatusLoaded = false;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +61,51 @@ class _TutorDashboardState extends State<TutorDashboard> {
         Provider.of<AuthProvider>(context, listen: false).fetchProfile();
       }
     });
+    _loadClassStatus();
+  }
+
+  Future<void> _loadClassStatus() async {
+    try {
+      final batches = await ClassMeetingService.getMyTodayStatus();
+      if (!mounted) return;
+      setState(() {
+        _classStatusByBatch.clear();
+        for (final b in batches) {
+          _classStatusByBatch[b['batchId'].toString()] = b;
+        }
+        _classStatusLoaded = true;
+      });
+    } catch (_) {
+      // Silent -- Start Class stays disabled (safe default) rather than
+      // erroring the whole dashboard over a best-effort status check.
+      if (mounted) setState(() => _classStatusLoaded = true);
+    }
+  }
+
+  Future<void> _startClass(Map<String, dynamic> batch) async {
+    final String batchId = batch['_id'].toString();
+    try {
+      final meeting = await ClassMeetingService.startClass(batchId);
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              ParentMeetingRoomScreen(meeting: meeting, isHost: true),
+        ),
+      );
+      // Refresh so the card reflects "ended" (or still-live, if the
+      // tutor just backed out without ending it) once they return.
+      _loadClassStatus();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Future<void> _handleLogout(AuthProvider auth) async {
@@ -418,6 +473,72 @@ class _TutorDashboardState extends State<TutorDashboard> {
   }
 
   // ─── Batch Card ──────────────────────────────────────────────────────────────
+  /// "Start Class" -- enabled only when this batch actually has a
+  /// Schedule entry for today (`_classStatusByBatch`, one fetch per
+  /// dashboard load feeds every batch card -- see `_loadClassStatus`).
+  /// Label/color switch to "Rejoin Class" once a meeting is already
+  /// live for today (tapping again is safe either way -- the backend's
+  /// `/start` is idempotent, rejoining the same meeting rather than
+  /// creating a duplicate).
+  Widget _buildStartClassButton(Map<String, dynamic> b) {
+    final String batchId = b['_id'].toString();
+    final status = _classStatusByBatch[batchId];
+    final bool hasScheduleToday = status?['hasScheduleToday'] == true;
+    final bool isLive = status?['liveMeeting'] != null;
+    final bool enabled = _classStatusLoaded && hasScheduleToday;
+
+    final Color color = isLive
+        ? Colors.redAccent
+        : (enabled ? const Color(0xFF10B981) : context.textColor.withValues(alpha: 0.15));
+    final Color fg = enabled ? Colors.white : context.textColor.withValues(alpha: 0.4);
+
+    return InkWell(
+      onTap: enabled ? () => _startClass(b) : null,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: enabled
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.3),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isLive
+                  ? Icons.sensors_rounded
+                  : Icons.arrow_circle_right_rounded,
+              color: fg,
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                isLive ? 'Rejoin Class' : 'Start Class',
+                style: TextStyle(
+                  color: fg,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  letterSpacing: 0.5,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBatchCard(Map<String, dynamic> b) {
     final students = b['students'] as List?;
     final isLargeScreen = MediaQuery.of(context).size.width > 900;
@@ -672,68 +793,82 @@ class _TutorDashboardState extends State<TutorDashboard> {
                           const SizedBox(height: 20),
                         ],
 
-                        // Explore Syllabus Button
-                        InkWell(
-                          onTap: () {
-                            final isLargeScreen =
-                                MediaQuery.of(context).size.width > 900;
-                            if (isLargeScreen) {
-                              setState(() {
-                                _activeInlineSubScreen =
-                                    StudentLearningPathScreen(
-                                      batch: b,
-                                      isInline: true,
-                                      onBack: () => setState(
-                                        () => _activeInlineSubScreen = null,
+                        // Explore Syllabus + Start Class Buttons
+                        Row(
+                          children: [
+                            Expanded(
+                              child: InkWell(
+                                onTap: () {
+                                  final isLargeScreen =
+                                      MediaQuery.of(context).size.width > 900;
+                                  if (isLargeScreen) {
+                                    setState(() {
+                                      _activeInlineSubScreen =
+                                          StudentLearningPathScreen(
+                                            batch: b,
+                                            isInline: true,
+                                            onBack: () => setState(
+                                              () => _activeInlineSubScreen =
+                                                  null,
+                                            ),
+                                          );
+                                    });
+                                  } else {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            StudentLearningPathScreen(
+                                              batch: b,
+                                            ),
                                       ),
                                     );
-                              });
-                            } else {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      StudentLearningPathScreen(batch: b),
-                                ),
-                              );
-                            }
-                          },
-                          borderRadius: BorderRadius.circular(12),
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            decoration: BoxDecoration(
-                              color: _roleColor,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: _roleColor.withValues(alpha: 0.3),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(
-                                  Icons.explore_rounded,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  'Explore Syllabus',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                    letterSpacing: 0.5,
+                                  }
+                                },
+                                borderRadius: BorderRadius.circular(12),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 14,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _roleColor,
+                                    borderRadius: BorderRadius.circular(12),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: _roleColor.withValues(
+                                          alpha: 0.3,
+                                        ),
+                                        blurRadius: 12,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(
+                                        Icons.explore_rounded,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Explore Syllabus',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
+                              ),
                             ),
-                          ),
+                            const SizedBox(width: 12),
+                            Expanded(child: _buildStartClassButton(b)),
+                          ],
                         ),
                         const SizedBox(height: 16),
 
