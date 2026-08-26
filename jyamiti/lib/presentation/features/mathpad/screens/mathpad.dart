@@ -145,6 +145,14 @@ class MathsPadLine {
   // from `cachedPath` above instead.
   int liveBakedPointCount = 0;
 
+  // The actual accumulated Path backing `liveBakedPointCount` above --
+  // extended incrementally, one new bake-worth of points at a time (see
+  // the bake site in `_onScaleUpdate`), rather than rebuilt from point 0
+  // on every bake event. Null until the first bake. Same lifetime/scope
+  // as `liveBakedPointCount`: live-drawing-only scratch state, never
+  // serialized, meaningless once the stroke is committed.
+  Path? liveBakedPath;
+
   MathsPadLine({
     required this.points,
     required this.color,
@@ -6138,7 +6146,32 @@ class _MathsPadWidgetState extends State<MathsPadWidget>
         if (!_currentLine!.isPencil &&
             _currentLine!.points.length - _currentLine!.liveBakedPointCount >=
                 _kLiveBakeEvery) {
-          _currentLine!.liveBakedPointCount = _currentLine!.points.length;
+          final int oldBaked = _currentLine!.liveBakedPointCount;
+          final int newBaked = _currentLine!.points.length;
+          // Extend the accumulated path with just the NEW segment instead
+          // of rebuilding the whole stroke-so-far from point 0 on every
+          // bake event -- that was the actual bug behind "one long stroke
+          // gets progressively slower to draw the longer it runs": baking
+          // only reduced how OFTEN this ran, not how much work each run
+          // did, so cost still grew unboundedly with total stroke length.
+          // One point of overlap with the previous bake (`oldBaked - 1`)
+          // gives the new segment's independent Chaikin-smoothing pass the
+          // same seam trade-off `_buildLivePathRange`'s own doc comment
+          // already accepts between adjacent ranges -- imperceptible at
+          // this point density, and the overlap point's coordinates match
+          // exactly, so `addPath`'s leading `moveTo` repositions the "pen"
+          // to where the path already ends, with no visible gap.
+          final Path segment = _buildLivePathRange(
+            _currentLine!,
+            oldBaked == 0 ? 0 : oldBaked - 1,
+            newBaked,
+          );
+          if (_currentLine!.liveBakedPath == null) {
+            _currentLine!.liveBakedPath = segment;
+          } else {
+            _currentLine!.liveBakedPath!.addPath(segment, Offset.zero);
+          }
+          _currentLine!.liveBakedPointCount = newBaked;
         }
         _activeDrawingNotifier.value++;
       }
@@ -13085,32 +13118,51 @@ class _MathsPadFinishedStrokesPainter extends CustomPainter {
     }
   }
 
+  /// True if [a] and [b] contain the exact same `MathsPadLine` OBJECTS, in
+  /// the same order -- NOT `identical(a, b)` on the `List` wrapper itself.
+  /// A sealed baked chunk passes the exact same `List` instance in on
+  /// every rebuild (see `_bakedChunks`), so `identical()` alone already
+  /// caught that cheaply -- but the "recent" sub-layer's list is a fresh
+  /// `sublist()` on every single rebuild BY CONSTRUCTION, including on
+  /// pan/zoom frames where nothing about `_lines` actually changed (see
+  /// `build`'s Layer 1a/1b comment on why the inner `ValueListenableBuilder`
+  /// runs its builder every pan/zoom frame too) -- `sublist()` never
+  /// returns the same `List` object twice, so a plain `identical()` check
+  /// forced a real repaint of the ENTIRE recent tail on every pan/zoom
+  /// frame regardless, cheap enough to not notice for a handful of short
+  /// strokes but genuinely expensive the moment even one of them is long
+  /// (thousands of points). Comparing the underlying line OBJECTS instead
+  /// correctly recognizes "still the same strokes, just a new List
+  /// wrapper" as no real change -- safe because nothing in this codebase
+  /// mutates an already-rendered line's content in place without also
+  /// calling `_resetBaking()`/bumping `_finishedStrokesNotifier` (see the
+  /// class-level doc comment on `_bakedChunks` for that invariant).
+  static bool _sameLineList(List<MathsPadLine> a, List<MathsPadLine> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (!identical(a[i], b[i])) return false;
+    }
+    return true;
+  }
+
   @override
   bool shouldRepaint(covariant _MathsPadFinishedStrokesPainter oldDelegate) {
-    // A sealed baked chunk passes the EXACT SAME `List<MathsPadLine>`
-    // instance in on every rebuild (see `_bakedChunks`) -- `identical()`
-    // catches that cheaply (no need to diff contents) and lets the
-    // compositor keep reusing that chunk's already-rasterized layer
-    // instead of re-running every stroke's paint calls each time a later
-    // chunk/rebuild touches an unrelated sibling. The "recent" sub-layer's
-    // list is a fresh `sublist()` every time by design (it's the one
-    // that's actually supposed to redraw on every new commit), so this
-    // still repaints it as before. No `panOffset`/`scale` fields to
-    // compare -- an ancestor `Transform` handles positioning now (see
-    // `build`'s Layer 1a/1b), so this painter is never re-run just because
-    // the user panned or zoomed. `isVisible` DOES need comparing: a chunk
-    // whose viewport-overlap status flips between frames genuinely needs
-    // to actually draw (or actually stop drawing) its content -- but a
-    // chunk that STAYS visible (or stays invisible) across consecutive
-    // frames, with the same `lines`, still correctly skips repainting.
-    // `selectedInThisLayer` (via `setEquals`, see its own doc comment for
-    // why a plain identity/bool check isn't precise enough) covers a
-    // selection change that adds/removes one of THIS chunk's own lines --
-    // including throughout an active move/rotate/resize drag, which no
-    // longer touches `lines`/`isVisible` at all (see `_onScaleUpdate`),
-    // so without this the chunk would never repaint to actually hide a
-    // freshly-selected line.
-    return !identical(oldDelegate.lines, lines) ||
+    // No `panOffset`/`scale` fields to compare -- an ancestor `Transform`
+    // handles positioning now (see `build`'s Layer 1a/1b), so this painter
+    // is never re-run just because the user panned or zoomed. `isVisible`
+    // DOES need comparing: a chunk whose viewport-overlap status flips
+    // between frames genuinely needs to actually draw (or actually stop
+    // drawing) its content -- but a chunk that STAYS visible (or stays
+    // invisible) across consecutive frames, with the same `lines`, still
+    // correctly skips repainting. `selectedInThisLayer` (via `setEquals`,
+    // see its own doc comment for why a plain identity/bool check isn't
+    // precise enough) covers a selection change that adds/removes one of
+    // THIS chunk's own lines -- including throughout an active move/
+    // rotate/resize drag, which no longer touches `lines`/`isVisible` at
+    // all (see `_onScaleUpdate`), so without this the chunk would never
+    // repaint to actually hide a freshly-selected line.
+    return !_sameLineList(oldDelegate.lines, lines) ||
         oldDelegate.isVisible != isVisible ||
         !setEquals(oldDelegate.selectedInThisLayer, selectedInThisLayer);
   }
@@ -13218,8 +13270,15 @@ void _paintInkLine(Canvas canvas, MathsPadLine line) {
 /// within one still-in-progress stroke: `shouldRepaint` only returns true
 /// when `bakedPointCount` actually changes (every `_kLiveBakeEvery` new
 /// points), so this only pays real rasterization cost once per bake, not
-/// on every single drawing frame. The rest of the still-changing tail is
-/// drawn separately, live, by `_MathsPadActiveOverlayPainter` below.
+/// on every single drawing frame. Just draws `line.liveBakedPath` as-is --
+/// that path is itself built INCREMENTALLY at the bake site in
+/// `_onScaleUpdate` (extended by one new segment per bake, not rebuilt
+/// from point 0 every time), so a bake event's cost stays bounded to
+/// roughly `_kLiveBakeEvery` points regardless of how long the whole
+/// stroke has gotten -- painting it here is then just a plain
+/// `canvas.drawPath` on whatever's already there. The rest of the
+/// still-changing tail is drawn separately, live, by
+/// `_MathsPadActiveOverlayPainter` below.
 class _MathsPadLiveStrokeBakedPainter extends CustomPainter {
   final MathsPadLine? line;
   final int bakedPointCount;
@@ -13232,9 +13291,9 @@ class _MathsPadLiveStrokeBakedPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final MathsPadLine? l = line;
-    if (l == null || bakedPointCount < 2) return;
+    final Path? path = l?.liveBakedPath;
+    if (l == null || path == null) return;
 
-    final Path path = _buildLivePathRange(l, 0, bakedPointCount);
     final paint = Paint()
       ..isAntiAlias = true
       ..strokeCap = StrokeCap.round
