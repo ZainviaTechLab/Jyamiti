@@ -34,8 +34,6 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
   bool _isVideoOff = false;
   bool _isScreenSharing = false;
   bool _isHandRaised = false;
-  int _elapsedSeconds = 0;
-  Timer? _timer;
   late String _viewId;
   final MeetingIframeController _iframeController = MeetingIframeController();
   bool _iframeReady = false;
@@ -228,17 +226,11 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 
   /// Fired once the call actually starts (native: `onJoinChannelSuccess`;
   /// web: the iframe's `joined` message -- see `_registerAgoraWebIframe`)
-  /// -- shared by both platforms. Starts the elapsed-time badge fresh
-  /// from 0 (not from when the room screen first opened, since nothing
-  /// was happening during preview) and, for the host only, arms the
-  /// 5-minute no-show timer.
+  /// -- shared by both platforms. For the host only, arms the 5-minute
+  /// no-show timer. The elapsed-time badge starts itself automatically --
+  /// see `_ElapsedTimeBadge` -- once `_hasJoinedChannel` makes it appear
+  /// in the tree for the first time; nothing to kick off here for it.
   void _onChannelJoined() {
-    _timer?.cancel();
-    _elapsedSeconds = 0;
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) setState(() => _elapsedSeconds++);
-    });
-
     if (widget.isHost) {
       _noShowTimer?.cancel();
       _noShowTimer = Timer(_kNoShowTimeout, _handleNoShowTimeout);
@@ -741,7 +733,6 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 
   @override
   void dispose() {
-    _timer?.cancel();
     _noShowTimer?.cancel();
     if (kIsWeb) {
       // Only send leave if we're not already in the leave flow
@@ -1023,11 +1014,6 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     );
   }
 
-  String _formatDuration(int seconds) {
-    final m = (seconds ~/ 60).toString().padLeft(2, '0');
-    final s = (seconds % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1118,38 +1104,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                         ),
                       )
                     else
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.redAccent.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                              color: Colors.redAccent.withValues(alpha: 0.4)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: const BoxDecoration(
-                                color: Colors.redAccent,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _formatDuration(_elapsedSeconds),
-                              style: const TextStyle(
-                                color: Colors.redAccent,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      const _ElapsedTimeBadge(),
                   ],
                 ),
               ),
@@ -1445,6 +1400,86 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The "LIVE hh:mm" duration badge shown in the top bar once the call has
+/// actually started. Deliberately its OWN small StatefulWidget with its
+/// own Timer/setState, rather than an `_elapsedSeconds` field ticking on
+/// the room screen's own State every second -- that State's build() also
+/// contains the Agora video iframe and, via PointerInterceptor, a second
+/// overlapping platform view for the toolbar/dialogs (see
+/// _handleEndOrLeaveCall's doc comment). Rebuilding that whole subtree
+/// every second forced Flutter Web to re-evaluate/re-composite those
+/// platform-view "overlay" layers once a second for the entire call,
+/// which showed up as periodic video/audio stutter. Isolating the
+/// ticking to this small leaf widget means only this badge's own few
+/// pixels rebuild each second -- the video iframe and toolbar are
+/// untouched, and are only rebuilt when something they actually care
+/// about changes (mute/camera toggle, join state, etc.).
+class _ElapsedTimeBadge extends StatefulWidget {
+  const _ElapsedTimeBadge();
+
+  @override
+  State<_ElapsedTimeBadge> createState() => _ElapsedTimeBadgeState();
+}
+
+class _ElapsedTimeBadgeState extends State<_ElapsedTimeBadge> {
+  int _seconds = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _seconds++);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String _format(int seconds) {
+    final m = (seconds ~/ 60).toString().padLeft(2, '0');
+    final s = (seconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.redAccent.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              color: Colors.redAccent,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _format(_seconds),
+            style: const TextStyle(
+              color: Colors.redAccent,
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
