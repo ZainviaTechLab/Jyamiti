@@ -13,6 +13,9 @@ class MeetingIframeController {
     required String htmlContent,
     required void Function() onReady,
     required void Function() onLeft,
+    void Function()? onUserJoined,
+    void Function()? onJoined,
+    void Function(String error)? onJoinFailed,
   }) {
     final html.IFrameElement iframeElement = html.IFrameElement()
       ..srcdoc = htmlContent
@@ -31,6 +34,12 @@ class MeetingIframeController {
           onReady();
         } else if (type == 'agora_left') {
           onLeft();
+        } else if (type == 'user_joined') {
+          onUserJoined?.call();
+        } else if (type == 'joined') {
+          onJoined?.call();
+        } else if (type == 'join_failed') {
+          onJoinFailed?.call((data['error'] ?? 'Unknown error').toString());
         }
       }
     });

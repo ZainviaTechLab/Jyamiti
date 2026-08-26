@@ -50,6 +50,25 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
   final Set<int> _remoteUids = {};
   String? _nativeMediaError;
 
+  // Waiting-room / "don't auto-join camera+mic to the channel" flow --
+  // the room opens straight into a LOCAL-ONLY preview (camera/mic
+  // captured for self-view, never published/joined to the actual Agora
+  // channel, so it costs nothing and no one else can see or hear it)
+  // until the user explicitly taps "Join Now". `_hasJoinedChannel`
+  // gates both the UI (preview toolbar vs normal call toolbar) and
+  // which teardown path `_handleEndOrLeaveCall` takes.
+  bool _hasJoinedChannel = false;
+  bool _isJoining = false;
+
+  // Host-only 5-minute no-show safety net -- started the moment the
+  // host actually joins (see `_onChannelJoined`), cancelled the moment
+  // any remote user is seen (see `_onRemoteUserJoined`). If it fires
+  // with no remote user ever having joined, shows a popup and leaves
+  // automatically -- see `_handleNoShowTimeout`.
+  Timer? _noShowTimer;
+  bool _remoteUserSeen = false;
+  static const Duration _kNoShowTimeout = Duration(minutes: 5);
+
   @override
   void initState() {
     super.initState();
@@ -57,7 +76,10 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
         'meet_${DateTime.now().millisecondsSinceEpoch}';
     _viewId = 'agora_meet_frame_${channel}_${DateTime.now().millisecondsSinceEpoch}';
 
-    // Automatically mark meeting as LIVE when host enters
+    // Automatically mark meeting as LIVE when host enters -- independent
+    // of whether they've actually tapped "Join Now" yet (see
+    // `_hasJoinedChannel`'s doc comment): this is about the meeting
+    // RECORD's status for listing purposes, not the video call itself.
     if (widget.isHost && widget.meeting['_id'] != null) {
       ParentMeetingService.updateMeetingStatus(
         widget.meeting['_id'].toString(),
@@ -65,12 +87,8 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
       ).then((_) {}).catchError((_) => null);
     }
 
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() => _elapsedSeconds++);
-      }
-    });
-
+    // The elapsed-time badge only starts once the call actually begins
+    // -- see `_onChannelJoined` -- not while still in preview.
     _initAgoraTokenAndIframe();
   }
 
@@ -90,17 +108,22 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     if (kIsWeb) {
       _registerAgoraWebIframe();
     } else {
-      unawaited(_initNativeAgoraEngine());
+      unawaited(_initNativeAgoraEnginePreviewOnly());
     }
   }
 
-  /// Native (non-web) counterpart to `_registerAgoraWebIframe` -- joins
+  /// Native (non-web) counterpart to `_registerAgoraWebIframe` -- sets up
   /// the SAME Agora channel/token via the official `agora_rtc_engine`
   /// plugin instead of an HTML/JS iframe. Camera/mic permissions are
   /// requested explicitly first (required on Android; a safe no-op-ish
   /// call on Windows/macOS/iOS, which prompt via their own OS dialogs
   /// the moment the engine actually touches the device either way).
-  Future<void> _initNativeAgoraEngine() async {
+  ///
+  /// Deliberately stops at `startPreview()` -- LOCAL camera/mic capture
+  /// for self-view only, never published/joined to the actual channel
+  /// (see `_hasJoinedChannel`'s doc comment). `_joinNativeChannel`
+  /// (fired by the "Join Now" button) does the actual `joinChannel`.
+  Future<void> _initNativeAgoraEnginePreviewOnly() async {
     try {
       final statuses = await [Permission.camera, Permission.microphone].request();
       final bool granted = statuses.values.every(
@@ -118,7 +141,6 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 
       final String appId =
           widget.meeting['agoraAppId'] ?? '2bd28ff5ea124b5982b6ef930c49998d';
-      final String channel = widget.meeting['channelName'] ?? 'test_channel';
 
       final engine = createAgoraRtcEngine();
       await engine.initialize(RtcEngineContext(appId: appId));
@@ -126,10 +148,17 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
       engine.registerEventHandler(
         RtcEngineEventHandler(
           onJoinChannelSuccess: (connection, elapsed) {
-            if (mounted) setState(() => _nativeEngineReady = true);
+            if (mounted) {
+              setState(() {
+                _hasJoinedChannel = true;
+                _isJoining = false;
+              });
+              _onChannelJoined();
+            }
           },
           onUserJoined: (connection, remoteUid, elapsed) {
             if (mounted) setState(() => _remoteUids.add(remoteUid));
+            _onRemoteUserJoined();
           },
           onUserOffline: (connection, remoteUid, reason) {
             if (mounted) setState(() => _remoteUids.remove(remoteUid));
@@ -142,7 +171,26 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 
       await engine.enableVideo();
       await engine.startPreview();
-      await engine.joinChannel(
+
+      _rtcEngine = engine;
+      if (mounted) setState(() => _nativeEngineReady = true);
+    } catch (e) {
+      debugPrint('Native Agora init error: $e');
+      if (mounted) {
+        setState(() => _nativeMediaError = 'Could not start the video call: $e');
+      }
+    }
+  }
+
+  /// Fired by the "Join Now" button (native path) -- actually joins the
+  /// channel using the engine/preview already set up by
+  /// `_initNativeAgoraEnginePreviewOnly`.
+  Future<void> _joinNativeChannel() async {
+    if (_rtcEngine == null || _isJoining || _hasJoinedChannel) return;
+    setState(() => _isJoining = true);
+    try {
+      final String channel = widget.meeting['channelName'] ?? 'test_channel';
+      await _rtcEngine!.joinChannel(
         token: _rtcToken ?? '',
         channelId: channel,
         uid: 0,
@@ -151,14 +199,83 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
           clientRoleType: ClientRoleType.clientRoleBroadcaster,
         ),
       );
-
-      _rtcEngine = engine;
+      // `_hasJoinedChannel`/`_isJoining` are actually flipped in
+      // `onJoinChannelSuccess` above once Agora confirms the join, not
+      // here -- this call merely requests it.
     } catch (e) {
-      debugPrint('Native Agora init error: $e');
+      debugPrint('Native join error: $e');
       if (mounted) {
-        setState(() => _nativeMediaError = 'Could not start the video call: $e');
+        setState(() {
+          _isJoining = false;
+          _nativeMediaError = 'Could not join the call: $e';
+        });
       }
     }
+  }
+
+  /// Fired once the call actually starts (native: `onJoinChannelSuccess`;
+  /// web: the iframe's `joined` message -- see `_registerAgoraWebIframe`)
+  /// -- shared by both platforms. Starts the elapsed-time badge fresh
+  /// from 0 (not from when the room screen first opened, since nothing
+  /// was happening during preview) and, for the host only, arms the
+  /// 5-minute no-show timer.
+  void _onChannelJoined() {
+    _timer?.cancel();
+    _elapsedSeconds = 0;
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) setState(() => _elapsedSeconds++);
+    });
+
+    if (widget.isHost) {
+      _noShowTimer?.cancel();
+      _noShowTimer = Timer(_kNoShowTimeout, _handleNoShowTimeout);
+    }
+  }
+
+  /// Fired the moment any remote participant is seen (native:
+  /// `onUserJoined`; web: the iframe's `user_joined` message) --
+  /// cancels the no-show timer, since the whole point of it is "did
+  /// anyone actually show up."
+  void _onRemoteUserJoined() {
+    _remoteUserSeen = true;
+    _noShowTimer?.cancel();
+    _noShowTimer = null;
+  }
+
+  /// The 5-minute no-show safety net firing: no remote participant ever
+  /// joined this host's class. Shows a popup, then leaves automatically
+  /// -- via the same `_performLeave` teardown the normal Leave/End
+  /// button uses, just without asking for confirmation first (the
+  /// timeout itself already establishes that this class should end).
+  Future<void> _handleNoShowTimeout() async {
+    if (!mounted || _remoteUserSeen || _isLeaving) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor:
+            context.isDark ? const Color(0xFF1E293B) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('No One Joined', style: TextStyle(color: context.textColor)),
+        content: Text(
+          'No students joined within 5 minutes, so this class is ending '
+          'automatically.',
+          style: TextStyle(color: context.textColor70),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6366F1),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    if (mounted) await _performLeave();
   }
 
   void _postIframeMessage(Map<String, dynamic> data) {
@@ -346,13 +463,17 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
       }
     }
 
-    async function initAgora() {
-      try {
-        updateStatus("🔑 Connecting to Agora Video Channel: " + CHANNEL + "...");
-        await client.join(APP_ID, CHANNEL, TOKEN, null);
-        isJoined = true;
-        updateStatus("📹 Channel Connected! Requesting Camera & Microphone...");
+    let hasNotifiedUserJoined = false;
 
+    // Local-only camera/mic preview -- captures tracks and plays them
+    // locally, but never calls client.join()/client.publish(), so
+    // nothing is actually sent to the channel and no one else can see
+    // or hear it yet. Runs immediately on load (see the bottom of this
+    // script); joinAndPublish() below only fires once Flutter's "Join
+    // Now" button posts the joinChannel action.
+    async function initPreview() {
+      try {
+        updateStatus("📹 Requesting Camera & Microphone for preview...");
         try {
           [localTracks.audioTrack, localTracks.videoTrack] =
             await AgoraRTC.createMicrophoneAndCameraTracks(
@@ -361,13 +482,11 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
             );
 
           playVideoWithRetry(localTracks.videoTrack, "local-player", 5);
-          await client.publish(Object.values(localTracks).filter(Boolean));
-          updateStatus("🟢 Live! Waiting for other participants...");
+          updateStatus("✅ Ready -- tap Join Now when you're ready to start.");
         } catch (mediaErr) {
           console.warn("Camera/Mic creation failed, attempting audio only:", mediaErr.message);
           try {
             localTracks.audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
-            await client.publish([localTracks.audioTrack]);
             const avatar = document.getElementById("local-avatar");
             const player = document.getElementById("local-player");
             if (player) player.style.display = "none";
@@ -377,6 +496,27 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
             updateStatus("⚠️ Media error: Check camera & microphone permissions");
           }
         }
+      } catch (err) {
+        console.error("Agora Preview Error:", err);
+        updateStatus("❌ Preview Error: " + (err.message || err));
+      }
+    }
+
+    // Actually joins the channel and publishes the already-captured
+    // preview tracks -- fired once by Flutter's "Join Now" button (see
+    // the "joinChannel" message action below), never automatically.
+    async function joinAndPublish() {
+      try {
+        updateStatus("🔑 Connecting to Agora Video Channel: " + CHANNEL + "...");
+        await client.join(APP_ID, CHANNEL, TOKEN, null);
+        isJoined = true;
+        window.parent.postMessage({ type: "joined" }, "*");
+
+        const tracksToPublish = Object.values(localTracks).filter(Boolean);
+        if (tracksToPublish.length > 0) {
+          await client.publish(tracksToPublish);
+        }
+        updateStatus("🟢 Live! Waiting for other participants...");
 
         // Handle remote users joining & publishing video/audio
         client.on("user-published", async (user, mediaType) => {
@@ -384,6 +524,10 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
             await client.subscribe(user, mediaType);
             const count = client.remoteUsers.length + 1;
             updateStatus("👥 " + count + " participant(s) connected");
+            if (!hasNotifiedUserJoined) {
+              hasNotifiedUserJoined = true;
+              window.parent.postMessage({ type: "user_joined" }, "*");
+            }
 
             if (mediaType === "video") {
               const remoteContainerId = "player-" + user.uid;
@@ -432,8 +576,9 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
         });
 
       } catch (err) {
-        console.error("Agora Init Error:", err);
+        console.error("Agora Join Error:", err);
         updateStatus("❌ Connection Error: " + (err.message || err));
+        window.parent.postMessage({ type: "join_failed", error: String(err.message || err) }, "*");
       }
     }
 
@@ -498,6 +643,9 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
       if (data.action === "leave") {
         leaveChannel();
       }
+      if (data.action === "joinChannel") {
+        joinAndPublish();
+      }
     });
 
     // Notify Flutter that JS is ready to receive messages
@@ -505,7 +653,7 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
       window.parent.postMessage({ type: "iframe_ready" }, "*");
     });
 
-    initAgora();
+    initPreview();
   </script>
 </body>
 </html>
@@ -525,14 +673,39 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
           Navigator.pop(context);
         }
       },
+      onJoined: () {
+        if (!mounted) return;
+        setState(() {
+          _hasJoinedChannel = true;
+          _isJoining = false;
+        });
+        _onChannelJoined();
+      },
+      onJoinFailed: (error) {
+        if (!mounted) return;
+        setState(() => _isJoining = false);
+        debugPrint('Web join failed: $error');
+      },
+      onUserJoined: _onRemoteUserJoined,
     );
 
     setState(() {});
   }
 
+  /// Fired by the "Join Now" button (web path) -- tells the iframe's JS
+  /// to actually join the channel and publish the preview tracks it's
+  /// already captured (see `initPreview`/`joinAndPublish` in the JS
+  /// above).
+  void _joinWebChannel() {
+    if (_hasJoinedChannel || _isJoining) return;
+    setState(() => _isJoining = true);
+    _postIframeMessage({'action': 'joinChannel'});
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
+    _noShowTimer?.cancel();
     if (kIsWeb) {
       // Only send leave if we're not already in the leave flow
       if (!_isLeaving) {
@@ -550,8 +723,16 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
 
   Future<void> _handleEndOrLeaveCall() async {
     if (_isLeaving) return;
-    final bool isHost = widget.isHost;
 
+    // Still in preview -- never actually joined the channel, so there's
+    // nothing real to confirm ending; just tear down local resources and
+    // go back.
+    if (!_hasJoinedChannel) {
+      await _performLeave();
+      return;
+    }
+
+    final bool isHost = widget.isHost;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -587,35 +768,51 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
     );
 
     if (confirm == true && mounted) {
-      setState(() => _isLeaving = true);
+      await _performLeave();
+    }
+  }
 
-      // Update status in DB first (host only)
-      if (isHost && widget.meeting['_id'] != null) {
-        await ParentMeetingService.updateMeetingStatus(
-          widget.meeting['_id'].toString(),
-          'ended',
-        ).then((_) {}).catchError((_) => null);
-      }
+  /// The actual teardown, shared by three callers: the confirmed
+  /// Leave/End button, backing out of the preview before ever joining
+  /// (no confirmation needed there -- see `_handleEndOrLeaveCall`), and
+  /// the 5-minute no-show timeout (`_handleNoShowTimeout`, no
+  /// confirmation needed there either -- the timeout itself already
+  /// establishes the class should end).
+  Future<void> _performLeave() async {
+    if (_isLeaving) return;
+    setState(() => _isLeaving = true);
+    _noShowTimer?.cancel();
 
-      if (kIsWeb) {
-        // Tell JS to leave. It will send back 'agora_left' → we pop.
-        // Set a fallback timer in case the message never comes back.
-        _postIframeMessage({'action': 'leave'});
+    // Update status in DB first (host only)
+    if (widget.isHost && widget.meeting['_id'] != null) {
+      await ParentMeetingService.updateMeetingStatus(
+        widget.meeting['_id'].toString(),
+        'ended',
+      ).then((_) {}).catchError((_) => null);
+    }
 
-        // Fallback: pop after 2 seconds even if JS doesn't respond
-        Timer(const Duration(seconds: 2), () {
-          if (mounted) Navigator.pop(context);
-        });
-      } else {
-        // No iframe round-trip to wait for on native -- leave the
-        // channel directly, then pop.
-        try {
-          await _rtcEngine?.leaveChannel();
-          await _rtcEngine?.release();
-        } catch (_) {}
-        _rtcEngine = null;
+    if (kIsWeb) {
+      // Tell JS to leave. It will send back 'agora_left' → we pop. Safe
+      // even if never actually joined (leaveChannel() itself no-ops if
+      // `isJoined` is false, but local tracks still get stopped/closed).
+      // Set a fallback timer in case the message never comes back.
+      _postIframeMessage({'action': 'leave'});
+
+      // Fallback: pop after 2 seconds even if JS doesn't respond
+      Timer(const Duration(seconds: 2), () {
         if (mounted) Navigator.pop(context);
-      }
+      });
+    } else {
+      // No iframe round-trip to wait for on native -- leave the channel
+      // directly, then pop. Safe even if never actually joined
+      // (leaveChannel() on an engine that's only previewing, never
+      // joined, is a documented no-op rather than an error).
+      try {
+        await _rtcEngine?.leaveChannel();
+        await _rtcEngine?.release();
+      } catch (_) {}
+      _rtcEngine = null;
+      if (mounted) Navigator.pop(context);
     }
   }
 
@@ -843,39 +1040,60 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                         ],
                       ),
                     ),
-                    // Live indicator + Timer Badge
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.redAccent.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                            color: Colors.redAccent.withValues(alpha: 0.4)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: const BoxDecoration(
-                              color: Colors.redAccent,
-                              shape: BoxShape.circle,
-                            ),
+                    // Preview badge (not joined yet) or Live + Timer badge
+                    if (!_hasJoinedChannel)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                              color: const Color(0xFF6366F1).withValues(alpha: 0.4)),
+                        ),
+                        child: const Text(
+                          'PREVIEW',
+                          style: TextStyle(
+                            color: Color(0xFF6366F1),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            letterSpacing: 0.5,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _formatDuration(_elapsedSeconds),
-                            style: const TextStyle(
-                              color: Colors.redAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                              color: Colors.redAccent.withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: const BoxDecoration(
+                                color: Colors.redAccent,
+                                shape: BoxShape.circle,
+                              ),
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 8),
+                            Text(
+                              _formatDuration(_elapsedSeconds),
+                              style: const TextStyle(
+                                color: Colors.redAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -902,106 +1120,221 @@ class _ParentMeetingRoomScreenState extends State<ParentMeetingRoomScreen> {
                     : HtmlElementView(viewType: _viewId),
               ),
 
-              // Bottom Action Controls Toolbar
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                color: const Color(0xFF0F172A),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Mute Mic Button
-                    _buildControlFab(
-                      icon: _isMicMuted
-                          ? Icons.mic_off_rounded
-                          : Icons.mic_rounded,
-                      label: _isMicMuted ? 'Unmute' : 'Mute',
-                      color: _isMicMuted
-                          ? Colors.redAccent
-                          : const Color(0xFF334155),
-                      onTap: () {
-                        setState(() => _isMicMuted = !_isMicMuted);
-                        if (kIsWeb) {
-                          _postIframeMessage({
-                            'action': 'toggleAudio',
-                            'mute': _isMicMuted,
-                          });
-                        } else {
-                          _rtcEngine?.muteLocalAudioStream(_isMicMuted);
-                        }
-                      },
-                    ),
-                    const SizedBox(width: 16),
-
-                    // Camera Toggle Button
-                    _buildControlFab(
-                      icon: _isVideoOff
-                          ? Icons.videocam_off_rounded
-                          : Icons.videocam_rounded,
-                      label: _isVideoOff ? 'Start Video' : 'Stop Video',
-                      color: _isVideoOff
-                          ? Colors.redAccent
-                          : const Color(0xFF334155),
-                      onTap: () {
-                        setState(() => _isVideoOff = !_isVideoOff);
-                        if (kIsWeb) {
-                          _postIframeMessage({
-                            'action': 'toggleVideo',
-                            'off': _isVideoOff,
-                          });
-                        } else {
-                          _rtcEngine?.muteLocalVideoStream(_isVideoOff);
-                        }
-                      },
-                    ),
-                    const SizedBox(width: 16),
-
-                    // Screen Share / Raise Hand Button
-                    if (widget.isHost) ...[
+              // Bottom Action Controls Toolbar -- preview (waiting room)
+              // toolbar before joining, normal call toolbar after.
+              if (!_hasJoinedChannel)
+                _buildPreviewToolbar()
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 24, vertical: 16),
+                  color: const Color(0xFF0F172A),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Mute Mic Button
                       _buildControlFab(
-                        icon: Icons.screen_share_rounded,
-                        label: _isScreenSharing
-                            ? 'Stop Share'
-                            : 'Screen Share',
-                        color: _isScreenSharing
-                            ? const Color(0xFF10B981)
+                        icon: _isMicMuted
+                            ? Icons.mic_off_rounded
+                            : Icons.mic_rounded,
+                        label: _isMicMuted ? 'Unmute' : 'Mute',
+                        color: _isMicMuted
+                            ? Colors.redAccent
                             : const Color(0xFF334155),
                         onTap: () {
-                          setState(() =>
-                              _isScreenSharing = !_isScreenSharing);
+                          setState(() => _isMicMuted = !_isMicMuted);
+                          if (kIsWeb) {
+                            _postIframeMessage({
+                              'action': 'toggleAudio',
+                              'mute': _isMicMuted,
+                            });
+                          } else {
+                            _rtcEngine?.muteLocalAudioStream(_isMicMuted);
+                          }
                         },
                       ),
                       const SizedBox(width: 16),
-                    ] else ...[
-                      // Raise Hand (Parent/Participant Only)
+
+                      // Camera Toggle Button
                       _buildControlFab(
-                        icon: Icons.back_hand_rounded,
-                        label:
-                            _isHandRaised ? 'Hand Raised' : 'Raise Hand',
-                        color: _isHandRaised
-                            ? const Color(0xFFF59E0B)
+                        icon: _isVideoOff
+                            ? Icons.videocam_off_rounded
+                            : Icons.videocam_rounded,
+                        label: _isVideoOff ? 'Start Video' : 'Stop Video',
+                        color: _isVideoOff
+                            ? Colors.redAccent
                             : const Color(0xFF334155),
                         onTap: () {
-                          setState(() => _isHandRaised = !_isHandRaised);
+                          setState(() => _isVideoOff = !_isVideoOff);
+                          if (kIsWeb) {
+                            _postIframeMessage({
+                              'action': 'toggleVideo',
+                              'off': _isVideoOff,
+                            });
+                          } else {
+                            _rtcEngine?.muteLocalVideoStream(_isVideoOff);
+                          }
                         },
                       ),
                       const SizedBox(width: 16),
+
+                      // Screen Share / Raise Hand Button
+                      if (widget.isHost) ...[
+                        _buildControlFab(
+                          icon: Icons.screen_share_rounded,
+                          label: _isScreenSharing
+                              ? 'Stop Share'
+                              : 'Screen Share',
+                          color: _isScreenSharing
+                              ? const Color(0xFF10B981)
+                              : const Color(0xFF334155),
+                          onTap: () {
+                            setState(() =>
+                                _isScreenSharing = !_isScreenSharing);
+                          },
+                        ),
+                        const SizedBox(width: 16),
+                      ] else ...[
+                        // Raise Hand (Parent/Participant Only)
+                        _buildControlFab(
+                          icon: Icons.back_hand_rounded,
+                          label:
+                              _isHandRaised ? 'Hand Raised' : 'Raise Hand',
+                          color: _isHandRaised
+                              ? const Color(0xFFF59E0B)
+                              : const Color(0xFF334155),
+                          onTap: () {
+                            setState(() => _isHandRaised = !_isHandRaised);
+                          },
+                        ),
+                        const SizedBox(width: 16),
+                      ],
+
+                      // End Call / Leave Call Button
+                      _buildControlFab(
+                        icon: Icons.call_end_rounded,
+                        label: widget.isHost ? 'End Call' : 'Leave',
+                        color: Colors.redAccent,
+                        isMainEnd: true,
+                        onTap: _isLeaving ? () {} : _handleEndOrLeaveCall,
+                      ),
                     ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-                    // End Call / Leave Call Button
-                    _buildControlFab(
-                      icon: Icons.call_end_rounded,
-                      label: widget.isHost ? 'End Call' : 'Leave',
-                      color: Colors.redAccent,
-                      isMainEnd: true,
-                      onTap: _isLeaving ? () {} : _handleEndOrLeaveCall,
-                    ),
-                  ],
+  /// Whether local preview (camera/mic captured, not yet joined to the
+  /// channel) has actually started -- gates the "Join Now" button so it
+  /// can't be tapped before there's an engine/iframe ready to join with.
+  bool get _isPreviewReady => kIsWeb ? _iframeReady : _nativeEngineReady;
+
+  /// Waiting-room toolbar shown before the call has actually started --
+  /// see `_hasJoinedChannel`'s doc comment. Mute/camera toggles still
+  /// work here (local track control only, doesn't need a channel), plus
+  /// a "Join Now" button that actually starts the call
+  /// (`_joinWebChannel`/`_joinNativeChannel`) and a plain Cancel to back
+  /// out without ever joining.
+  Widget _buildPreviewToolbar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      color: const Color(0xFF0F172A),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.isHost)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                'If no student joins within 5 minutes of starting, this '
+                'class will end automatically.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+              ),
+            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildControlFab(
+                icon: _isMicMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                label: _isMicMuted ? 'Unmute' : 'Mute',
+                color: _isMicMuted ? Colors.redAccent : const Color(0xFF334155),
+                onTap: () {
+                  setState(() => _isMicMuted = !_isMicMuted);
+                  if (kIsWeb) {
+                    _postIframeMessage({
+                      'action': 'toggleAudio',
+                      'mute': _isMicMuted,
+                    });
+                  } else {
+                    _rtcEngine?.muteLocalAudioStream(_isMicMuted);
+                  }
+                },
+              ),
+              const SizedBox(width: 16),
+              _buildControlFab(
+                icon: _isVideoOff
+                    ? Icons.videocam_off_rounded
+                    : Icons.videocam_rounded,
+                label: _isVideoOff ? 'Start Video' : 'Stop Video',
+                color: _isVideoOff ? Colors.redAccent : const Color(0xFF334155),
+                onTap: () {
+                  setState(() => _isVideoOff = !_isVideoOff);
+                  if (kIsWeb) {
+                    _postIframeMessage({
+                      'action': 'toggleVideo',
+                      'off': _isVideoOff,
+                    });
+                  } else {
+                    _rtcEngine?.muteLocalVideoStream(_isVideoOff);
+                  }
+                },
+              ),
+              const SizedBox(width: 24),
+              TextButton(
+                onPressed: _isLeaving ? null : _handleEndOrLeaveCall,
+                child: Text(
+                  'Cancel',
+                  style: TextStyle(color: context.textColor60),
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: (_isPreviewReady && !_isJoining && !_isLeaving)
+                    ? (kIsWeb ? _joinWebChannel : _joinNativeChannel)
+                    : null,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF10B981),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF334155),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: _isJoining
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.video_call_rounded, size: 20),
+                label: Text(
+                  _isJoining ? 'Joining...' : 'Join Now',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }

@@ -11,6 +11,9 @@ class MeetingIframeController {
     required String htmlContent,
     required void Function() onReady,
     required void Function() onLeft,
+    void Function()? onUserJoined,
+    void Function()? onJoined,
+    void Function(String error)? onJoinFailed,
   }) {
     // No-op: nothing to embed on non-web platforms.
   }

@@ -27,6 +27,7 @@ import slideRouter from './routes/slideRoutes.js';
 import competitionsRouter from './routes/competitions.js';
 import parentMeetingsRouter from './routes/parentMeetings.js';
 import classMeetingsRouter from './routes/classMeetings.js';
+import agoraWebhookRouter from './routes/agoraWebhook.js';
 import oauthRouter from './routes/oauth.js';
 import { initScheduleCron } from './services/scheduleGenerator.js';
 import { initPaymentCron } from './services/paymentGenerator.js';
@@ -56,6 +57,14 @@ app.use(helmet({
 
 // Enable CORS
 app.use(cors());
+
+// Mounted BEFORE the global express.json() below on purpose -- Agora
+// signs the RAW request body (see agoraWebhook.js's header comment), and
+// once express.json() parses a request it consumes the raw body stream,
+// leaving nothing for a route-level express.raw() to read afterward.
+// Registering this specific path first means Express hands it the
+// request before express.json() ever gets a chance to touch it.
+app.use('/api/agora', agoraWebhookRouter);
 
 app.use(express.json());
 
