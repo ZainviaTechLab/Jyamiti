@@ -12898,6 +12898,12 @@ class _MathsPadGridBackgroundPainter extends CustomPainter {
     final gridPaint = Paint()
       ..color = (isDark ? Colors.white : Colors.indigo).withOpacity(0.07)
       ..strokeWidth = 1.0 / scale
+      // `drawLine` (the old per-line approach) always strokes regardless
+      // of `Paint.style` -- but `drawPath` (below) respects it, and
+      // `Paint()`'s default style is `fill`, not `stroke`. Without this
+      // explicit, `drawPath` on a path made of disconnected open
+      // subpaths has zero area to fill, so nothing was drawn at all.
+      ..style = PaintingStyle.stroke
       // Faint hairline background grid -- doesn't need anti-aliased edges,
       // and AA is real per-line rasterization cost paid on EVERY pan/zoom
       // frame (see the batching comment below).
