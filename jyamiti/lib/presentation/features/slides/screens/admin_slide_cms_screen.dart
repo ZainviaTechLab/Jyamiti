@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
@@ -458,6 +460,167 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     );
   }
 
+  Future<void> _importDeckFromJson() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json', 'pptx'],
+        withData: true,
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.first;
+      if (file.bytes != null) {
+        final content = utf8.decode(file.bytes!);
+        final dynamic decoded = json.decode(content);
+        if (decoded is Map<String, dynamic>) {
+          final importedDeck = SlideDeck.fromMap(decoded);
+          setState(() {
+            _titleController.text = importedDeck.title;
+            _descController.text = importedDeck.description;
+            _courseController.text = importedDeck.courseName;
+            if (importedDeck.slides.isNotEmpty) {
+              _slides = List<SlideItem>.from(importedDeck.slides);
+              _activeSlideIndex = 0;
+            }
+          });
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Successfully loaded deck "${importedDeck.title}" (${importedDeck.slides.length} slides)!',
+                ),
+                backgroundColor: const Color(0xFF10B981),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to import deck: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  void _configureSlideVisual() {
+    final activeSlide = _slides[_activeSlideIndex];
+    final urlCtrl = TextEditingController(text: activeSlide.imageUrl ?? '');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.image_rounded, color: Color(0xFF6366F1)),
+            SizedBox(width: 8),
+            Text('1:1 High-Fidelity Slide Visual'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Set the high-resolution image URL for this slide (rendered from PPTX or uploaded). This guarantees 100% identical layout to PowerPoint.',
+                style: TextStyle(fontSize: 12.5, color: Colors.grey),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: urlCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Slide Image URL or Data URI',
+                  hintText: 'https://... or data:image/png;base64,...',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 3,
+              ),
+              if (activeSlide.imageUrl != null &&
+                  activeSlide.imageUrl!.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: Image.network(
+                      activeSlide.imageUrl!,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        color: Colors.grey.shade800,
+                        child: const Center(
+                          child: Text(
+                            'Image Preview Error',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          if (activeSlide.imageUrl != null &&
+              activeSlide.imageUrl!.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _slides[_activeSlideIndex] = SlideItem(
+                    id: activeSlide.id,
+                    slideIndex: activeSlide.slideIndex,
+                    title: activeSlide.title,
+                    blocks: activeSlide.blocks,
+                    theme: activeSlide.theme,
+                    quiz: activeSlide.quiz,
+                    enableWhiteboard: activeSlide.enableWhiteboard,
+                    imageUrl: null,
+                  );
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text(
+                'Clear Image',
+                style: TextStyle(color: Colors.redAccent),
+              ),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {
+                _slides[_activeSlideIndex] = SlideItem(
+                  id: activeSlide.id,
+                  slideIndex: activeSlide.slideIndex,
+                  title: activeSlide.title,
+                  blocks: activeSlide.blocks,
+                  theme: activeSlide.theme,
+                  quiz: activeSlide.quiz,
+                  enableWhiteboard: activeSlide.enableWhiteboard,
+                  imageUrl: urlCtrl.text.trim().isNotEmpty
+                      ? urlCtrl.text.trim()
+                      : null,
+                );
+              });
+              Navigator.pop(ctx);
+            },
+            child: const Text('Save Visual'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = context.isDark;
@@ -470,6 +633,11 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.file_upload_outlined),
+            tooltip: 'Import Converted Deck JSON',
+            onPressed: _importDeckFromJson,
+          ),
           IconButton(
             icon: const Icon(Icons.remove_red_eye_rounded),
             tooltip: 'Live Student Preview',
@@ -696,12 +864,27 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                                 theme: val,
                                 quiz: activeSlide.quiz,
                                 enableWhiteboard: activeSlide.enableWhiteboard,
+                                imageUrl: activeSlide.imageUrl,
                               );
                             });
                           }
                         },
                       ),
                       const SizedBox(width: 10),
+                      IconButton(
+                        icon: Icon(
+                          activeSlide.imageUrl != null &&
+                                  activeSlide.imageUrl!.isNotEmpty
+                              ? Icons.image_rounded
+                              : Icons.image_outlined,
+                          color: activeSlide.imageUrl != null &&
+                                  activeSlide.imageUrl!.isNotEmpty
+                              ? const Color(0xFF10B981)
+                              : context.textColor,
+                        ),
+                        tooltip: '1:1 PPTX Slide Visual',
+                        onPressed: _configureSlideVisual,
+                      ),
                       IconButton(
                         icon: const Icon(
                           Icons.quiz_outlined,

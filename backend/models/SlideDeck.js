@@ -27,8 +27,16 @@ const slideItemSchema = new mongoose.Schema({
   slideIndex: { type: Number, required: true },
   title: { type: String, required: true },
   theme: { type: String, default: 'darkGlass' },
+  imageUrl: { type: String, default: '' },
   blocks: [slideBlockSchema],
   quizzes: [slideQuizSchema],
+  quiz: {
+    question: { type: String },
+    options: [{ type: String }],
+    correctIndex: { type: Number },
+    explanation: { type: String },
+  },
+  enableWhiteboard: { type: Boolean, default: true },
 });
 
 const slideDeckSchema = new mongoose.Schema(

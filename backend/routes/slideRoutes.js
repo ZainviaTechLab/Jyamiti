@@ -46,6 +46,31 @@ router.post('/', async (req, res) => {
   }
 });
 
+// POST /api/slide-decks/import-deck - Import full slide deck JSON or array of decks
+router.post('/import-deck', async (req, res) => {
+  try {
+    const payload = req.body;
+    const decks = Array.isArray(payload) ? payload : [payload];
+    const results = [];
+
+    for (const deckData of decks) {
+      if (!deckData.id) {
+        deckData.id = `deck_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      }
+      const updated = await SlideDeck.findOneAndUpdate(
+        { id: deckData.id },
+        deckData,
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+      results.push(updated);
+    }
+
+    res.status(201).json({ message: `Successfully imported ${results.length} deck(s)`, decks: results });
+  } catch (error) {
+    res.status(500).json({ message: 'Error importing slide deck(s)', error: error.message });
+  }
+});
+
 // DELETE /api/slide-decks/:id - Delete slide deck
 router.delete('/:id', async (req, res) => {
   try {

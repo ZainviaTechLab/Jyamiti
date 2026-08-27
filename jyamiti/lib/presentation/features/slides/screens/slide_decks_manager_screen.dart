@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
@@ -40,6 +42,48 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
     });
   }
 
+  Future<void> _importDeck() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.first;
+      if (file.bytes != null) {
+        final content = utf8.decode(file.bytes!);
+        final dynamic decoded = json.decode(content);
+        if (decoded is Map<String, dynamic>) {
+          final importedDeck = SlideDeck.fromMap(decoded);
+          await SlideCacheService.instance.saveDeck(importedDeck);
+          await _loadDecks();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Successfully imported "${importedDeck.title}" with ${importedDeck.slides.length} slides!',
+                ),
+                backgroundColor: const Color(0xFF10B981),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to import deck: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = context.isDark;
@@ -55,7 +99,12 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
             onPressed: _loadDecks,
             tooltip: 'Refresh',
           ),
-          if (widget.isAdmin)
+          if (widget.isAdmin) ...[
+            IconButton(
+              icon: const Icon(Icons.file_upload_outlined),
+              tooltip: 'Import Converted Deck',
+              onPressed: _importDeck,
+            ),
             ElevatedButton.icon(
               onPressed: () async {
                 await Navigator.push(
@@ -74,6 +123,8 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
                 padding: const EdgeInsets.only(right: 16, top: 8, bottom: 8),
               ),
             ),
+            const SizedBox(width: 8),
+          ],
         ],
       ),
       body: _isLoading

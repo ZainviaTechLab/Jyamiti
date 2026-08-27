@@ -1,5 +1,6 @@
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../providers/theme_provider.dart';
@@ -410,42 +411,103 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
     SlideItem slide,
     bool isDark,
   ) {
+    final bool hasHighFidelityImage =
+        slide.imageUrl != null && slide.imageUrl!.trim().isNotEmpty;
+
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(20.0),
       child: Center(
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 860),
+          constraints: const BoxConstraints(maxWidth: 1000),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Slide Header Badge
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6366F1).withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'SLIDE ${slide.slideIndex + 1}',
-                  style: const TextStyle(
-                    color: Color(0xFF818CF8),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                    letterSpacing: 1.1,
+              // Slide Header Badge & Title
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6366F1).withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'SLIDE ${slide.slideIndex + 1}',
+                      style: const TextStyle(
+                        color: Color(0xFF818CF8),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 10),
+                  if (hasHighFidelityImage)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: const Color(0xFF10B981).withOpacity(0.4),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.verified_rounded,
+                            color: Color(0xFF10B981),
+                            size: 12,
+                          ),
+                          SizedBox(width: 4),
+                          Text(
+                            'Original 1:1 High-Fidelity Slide',
+                            style: TextStyle(
+                              color: Color(0xFF10B981),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const Spacer(),
+                  if (slide.title.isNotEmpty)
+                    Flexible(
+                      child: Text(
+                        slide.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
 
-              // Modular Slide Blocks
+              // 1. High-Fidelity Slide Visual Canvas (100% Identical to PPTX)
+              if (hasHighFidelityImage) ...[
+                _buildHighFidelitySlideVisual(slide.imageUrl!, isDark),
+                const SizedBox(height: 18),
+              ],
+
+              // 2. Modular Slide Blocks (if any extracted/added)
               ...slide.blocks.map(
                 (block) => SlideBlockRenderer(block: block, isDark: isDark),
               ),
 
-              // Embedded Interactive Quiz Card (If Present)
+              // 3. Embedded Interactive Quiz Card (If Present)
               if (slide.quiz != null) ...[
                 const SizedBox(height: 24),
                 _buildEmbeddedQuizCard(
@@ -457,6 +519,109 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHighFidelitySlideVisual(String imageUrl, bool isDark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? const Color(0xFF334155)
+              : const Color(0xFFE2E8F0),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.35 : 0.1),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(15),
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: InteractiveViewer(
+            minScale: 1.0,
+            maxScale: 3.5,
+            child: _buildSlideImageWidget(imageUrl, isDark),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSlideImageWidget(String imageUrl, bool isDark) {
+    final cleanUrl = imageUrl.trim();
+    if (cleanUrl.startsWith('data:image')) {
+      try {
+        final commaIdx = cleanUrl.indexOf(',');
+        if (commaIdx != -1) {
+          final base64Str = cleanUrl.substring(commaIdx + 1);
+          final bytes = const Base64Decoder().convert(base64Str);
+          return Image.memory(
+            bytes,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.high,
+          );
+        }
+      } catch (_) {}
+    }
+
+    return Image.network(
+      cleanUrl,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return Container(
+          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+          child: Center(
+            child: CircularProgressIndicator(
+              value: loadingProgress.expectedTotalBytes != null
+                  ? loadingProgress.cumulativeBytesLoaded /
+                      loadingProgress.expectedTotalBytes!
+                  : null,
+              color: const Color(0xFF6366F1),
+            ),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) => Container(
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.broken_image_rounded,
+              size: 48,
+              color: Colors.grey,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Slide Image Preview Unavailable',
+              style: TextStyle(
+                color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              cleanUrl,
+              style: const TextStyle(color: Colors.grey, fontSize: 11),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ),
       ),
     );

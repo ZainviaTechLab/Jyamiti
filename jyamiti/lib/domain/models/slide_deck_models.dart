@@ -98,6 +98,7 @@ class SlideItem {
   final String theme; // 'darkGlass', 'midnightNeon', 'emeraldSlate', 'sunsetViolet', 'cleanLight'
   final SlideQuiz? quiz;
   final bool enableWhiteboard;
+  final String? imageUrl; // Optional high-fidelity slide visual (from PPTX/PDF rendering)
 
   SlideItem({
     required this.id,
@@ -107,6 +108,7 @@ class SlideItem {
     this.theme = 'darkGlass',
     this.quiz,
     this.enableWhiteboard = true,
+    this.imageUrl,
   });
 
   Map<String, dynamic> toMap() {
@@ -118,6 +120,7 @@ class SlideItem {
       'theme': theme,
       'quiz': quiz?.toMap(),
       'enableWhiteboard': enableWhiteboard,
+      'imageUrl': imageUrl,
     };
   }
 
@@ -134,6 +137,7 @@ class SlideItem {
       theme: map['theme'] ?? 'darkGlass',
       quiz: map['quiz'] != null ? SlideQuiz.fromMap(map['quiz']) : null,
       enableWhiteboard: map['enableWhiteboard'] ?? true,
+      imageUrl: map['imageUrl'],
     );
   }
 
