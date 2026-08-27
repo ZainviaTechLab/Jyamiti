@@ -1,7 +1,138 @@
 import express from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { execFile, exec } from 'child_process';
 import { SlideDeck, SlideProgress } from '../models/SlideDeck.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const router = express.Router();
+
+// Multer storage for PPTX file uploads
+const pptxStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, '../uploads/temp_pptx/');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '_' + Math.round(Math.random() * 1E6);
+    const sanitized = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${uniqueSuffix}_${sanitized}`);
+  }
+});
+const uploadPptx = multer({
+  storage: pptxStorage,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
+});
+
+// POST /api/slide-decks/upload-pptx - Upload & convert a PPTX presentation into a SlideDeck
+router.post('/upload-pptx', uploadPptx.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No .pptx file uploaded' });
+    }
+
+    const pptxPath = req.file.path;
+    const courseName = req.body.courseName || 'Mathematics';
+    const courseId = req.body.courseId || 'course_101';
+    const theme = req.body.theme || 'darkGlass';
+    const customTitle = req.body.title || path.parse(req.file.originalname).name.replace(/[_-]/g, ' ');
+
+    const deckId = `deck_${Date.now()}`;
+    const outputDir = path.join(__dirname, `../uploads/slides/${deckId}`);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    // Locate converter script
+    const possibleScriptPaths = [
+      path.resolve(__dirname, '../../convert_pptx_to_jyamiti.py'),
+      path.resolve(process.cwd(), 'convert_pptx_to_jyamiti.py'),
+      path.resolve(process.cwd(), '../convert_pptx_to_jyamiti.py'),
+    ];
+    let scriptPath = possibleScriptPaths.find(p => fs.existsSync(p));
+
+    if (!scriptPath) {
+      // Fallback: create temporary minimal converter invocation or check
+      scriptPath = possibleScriptPaths[0];
+    }
+
+    const host = req.get('host');
+    const protocol = req.protocol;
+    const baseUrl = `${protocol}://${host}`;
+
+    // Execute converter: python convert_pptx_to_jyamiti.py <pptxPath> -o <outputDir> -c <courseName> --theme <theme>
+    const cmd = `python "${scriptPath}" "${pptxPath}" -o "${outputDir}" -c "${courseName}" --course-id "${courseId}" --theme "${theme}"`;
+
+    exec(cmd, { timeout: 180000 }, async (error, stdout, stderr) => {
+      // Remove temp PPTX upload
+      try {
+        if (fs.existsSync(pptxPath)) fs.unlinkSync(pptxPath);
+      } catch (_) {}
+
+      // Find generated json
+      let jsonFile = null;
+      if (fs.existsSync(outputDir)) {
+        const files = fs.readdirSync(outputDir);
+        const match = files.find(f => f.endsWith('_deck.json'));
+        if (match) jsonFile = path.join(outputDir, match);
+      }
+
+      if (!jsonFile || !fs.existsSync(jsonFile)) {
+        // If external conversion fails, return descriptive error
+        return res.status(500).json({
+          message: 'PPTX conversion failed. Ensure PowerPoint or Python is installed on server.',
+          error: error ? error.message : stderr
+        });
+      }
+
+      try {
+        const rawContent = fs.readFileSync(jsonFile, 'utf-8');
+        const deckData = JSON.parse(rawContent);
+        deckData.id = deckId;
+        deckData.title = customTitle;
+        deckData.courseName = courseName;
+        deckData.courseId = courseId;
+
+        // Fix image URLs to point to static uploads endpoint: /uploads/slides/<deckId>/slide_<n>.png
+        const slideImgDir = fs.readdirSync(outputDir).find(f => fs.statSync(path.join(outputDir, f)).isDirectory());
+        
+        if (slideImgDir && deckData.slides) {
+          deckData.slides.forEach((slide, idx) => {
+            const imgFileName = `slide_${idx + 1}.png`;
+            const localImgPath = path.join(outputDir, slideImgDir, imgFileName);
+            if (fs.existsSync(localImgPath)) {
+              // Copy to root of deck directory for cleaner URL
+              const targetPath = path.join(outputDir, imgFileName);
+              if (!fs.existsSync(targetPath)) {
+                fs.copyFileSync(localImgPath, targetPath);
+              }
+              slide.imageUrl = `${baseUrl}/uploads/slides/${deckId}/${imgFileName}`;
+            }
+          });
+        }
+
+        const savedDeck = await SlideDeck.findOneAndUpdate(
+          { id: deckData.id },
+          deckData,
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+
+        res.status(201).json(savedDeck);
+      } catch (parseErr) {
+        res.status(500).json({ message: 'Failed to process converted slide deck JSON', error: parseErr.message });
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Error processing PPTX upload', error: err.message });
+  }
+});
 
 // GET /api/slide-decks - Get all slide decks
 router.get('/', async (req, res) => {

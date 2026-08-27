@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../../../services/slide_cache_service.dart';
+import '../widgets/import_pptx_dialog.dart';
 import 'admin_slide_analytics_screen.dart';
 import 'admin_slide_cms_screen.dart';
 import 'student_slide_viewer_screen.dart';
@@ -40,6 +41,37 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
       _decks = decks;
       _isLoading = false;
     });
+  }
+
+  Future<void> _openImportPptxDialog() async {
+    final result = await showDialog<SlideDeck>(
+      context: context,
+      builder: (ctx) => const ImportPptxDialog(),
+    );
+
+    if (result != null) {
+      await _loadDecks();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Successfully imported "${result.title}" (${result.slides.length} slides)!'),
+            backgroundColor: const Color(0xFF10B981),
+            action: SnackBarAction(
+              label: 'Open Slides',
+              textColor: Colors.white,
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => StudentSlideViewerScreen(deck: result),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _importDeck() async {
@@ -100,9 +132,20 @@ class _SlideDecksManagerScreenState extends State<SlideDecksManagerScreen> {
             tooltip: 'Refresh',
           ),
           if (widget.isAdmin) ...[
+            OutlinedButton.icon(
+              onPressed: _openImportPptxDialog,
+              icon: const Icon(Icons.slideshow_rounded, size: 18, color: Color(0xFFD97706)),
+              label: const Text('Import .pptx'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: isDark ? Colors.amber.shade200 : const Color(0xFFB45309),
+                side: const BorderSide(color: Color(0xFFD97706), width: 1.2),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+            ),
+            const SizedBox(width: 8),
             IconButton(
               icon: const Icon(Icons.file_upload_outlined),
-              tooltip: 'Import Converted Deck',
+              tooltip: 'Import Converted Deck JSON',
               onPressed: _importDeck,
             ),
             ElevatedButton.icon(

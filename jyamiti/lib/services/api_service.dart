@@ -140,6 +140,35 @@ class ApiService {
     return await request.send();
   }
 
+  static Future<http.Response> uploadPptx(
+    List<int> bytes,
+    String filename, {
+    required String title,
+    required String courseName,
+    required String courseId,
+    required String theme,
+  }) async {
+    final url = Uri.parse('$baseUrl/slide-decks/upload-pptx');
+    final request = http.MultipartRequest('POST', url);
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('auth_token');
+    if (token != null) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
+
+    request.fields['title'] = title;
+    request.fields['courseName'] = courseName;
+    request.fields['courseId'] = courseId;
+    request.fields['theme'] = theme;
+
+    request.files.add(
+      http.MultipartFile.fromBytes('file', bytes, filename: filename),
+    );
+    final streamed = await request.send();
+    return await http.Response.fromStream(streamed);
+  }
+
   // --- Assignments ---
   
   static Future<http.Response> createAssignment(Map<String, dynamic> body) async {

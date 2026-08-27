@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../../../services/slide_cache_service.dart';
+import '../widgets/import_pptx_dialog.dart';
 import '../widgets/slide_block_renderer.dart';
 import 'student_slide_viewer_screen.dart';
 
@@ -621,6 +622,35 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     );
   }
 
+  Future<void> _openImportPptxDialog() async {
+    final result = await showDialog<SlideDeck>(
+      context: context,
+      builder: (ctx) => ImportPptxDialog(
+        initialCourseName: _courseController.text,
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _titleController.text = result.title;
+        _descController.text = result.description;
+        _courseController.text = result.courseName;
+        if (result.slides.isNotEmpty) {
+          _slides = List<SlideItem>.from(result.slides);
+          _activeSlideIndex = 0;
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Imported "${result.title}" with ${result.slides.length} slides!'),
+            backgroundColor: const Color(0xFF10B981),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = context.isDark;
@@ -633,6 +663,17 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
+          OutlinedButton.icon(
+            onPressed: _openImportPptxDialog,
+            icon: const Icon(Icons.slideshow_rounded, size: 18, color: Color(0xFFD97706)),
+            label: const Text('Import .pptx'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: isDark ? Colors.amber.shade200 : const Color(0xFFB45309),
+              side: const BorderSide(color: Color(0xFFD97706), width: 1.2),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            ),
+          ),
+          const SizedBox(width: 6),
           IconButton(
             icon: const Icon(Icons.file_upload_outlined),
             tooltip: 'Import Converted Deck JSON',
