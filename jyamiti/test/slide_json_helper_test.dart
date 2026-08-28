@@ -388,6 +388,27 @@ void main() {
       expect(defaultResult.slides.first.blocks.first.glass, isFalse);
     });
 
+    test('parses horizontalAlign on card blocks', () {
+      const cardAlignJson = '''
+      {
+        "title": "Aligned Card",
+        "blocks": [
+          {
+            "type": "card",
+            "content": "Centered card content",
+            "horizontalAlign": "center"
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(cardAlignJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.card);
+      expect(block.horizontalAlign, 'center');
+    });
+
     test('"text" JSON type resolves to the text block, not paragraph', () {
       const aliasJson = '''
       {

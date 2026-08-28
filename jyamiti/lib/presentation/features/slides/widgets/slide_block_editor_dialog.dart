@@ -53,6 +53,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? cardBorder = block.borderColor;
   double cardBorderWidth = block.borderWidth > 0 ? block.borderWidth : 2.0;
   bool cardGlass = block.glass;
+  String cardHorizontalAlign = block.horizontalAlign ?? 'left';
 
   // Text's own style fields -- see SlideBlockRenderer._buildTextBlock,
   // which reads these plus the bold/italic/underline/strikethrough flags
@@ -252,6 +253,20 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 10),
+                const Text('Text Alignment', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'left', label: Text('Left')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'right', label: Text('Right')),
+                    ButtonSegment(value: 'justify', label: Text('Justify')),
+                  ],
+                  selected: {cardHorizontalAlign},
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => cardHorizontalAlign = sel.first),
                 ),
               ],
               if (block.type == SlideBlockType.code ||
@@ -612,7 +627,9 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     ? layoutHorizontalAlign
                     : block.type == SlideBlockType.text
                         ? textHorizontalAlign
-                        : null,
+                        : block.type == SlideBlockType.card
+                            ? cardHorizontalAlign
+                            : null,
                 verticalAlign: block.type == SlideBlockType.banner
                     ? layoutVerticalAlign
                     : null,

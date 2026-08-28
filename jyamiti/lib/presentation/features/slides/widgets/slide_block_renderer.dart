@@ -877,6 +877,7 @@ class SlideBlockRenderer extends StatelessWidget {
       textColorStr: block.textColor,
       extra: block.extra,
       glass: block.glass,
+      horizontalAlign: block.horizontalAlign,
     );
   }
 
@@ -890,7 +891,20 @@ class SlideBlockRenderer extends StatelessWidget {
     String? textColorStr,
     String? extra,
     bool glass = false,
+    String? horizontalAlign,
   }) {
+    final TextAlign contentAlign = switch (horizontalAlign) {
+      'center' => TextAlign.center,
+      'right' => TextAlign.right,
+      'justify' => TextAlign.justify,
+      _ => TextAlign.left,
+    };
+    final CrossAxisAlignment cardCrossAlign = switch (horizontalAlign) {
+      'center' => CrossAxisAlignment.center,
+      'right' => CrossAxisAlignment.end,
+      'justify' => CrossAxisAlignment.stretch,
+      _ => CrossAxisAlignment.start,
+    };
     final Color? explicitBorder = parseHexColor(borderColorStr);
     final Color defaultAccent =
         isDark ? const Color(0xFF22C55E) : const Color(0xFF16A34A);
@@ -951,12 +965,13 @@ class SlideBlockRenderer extends StatelessWidget {
       ),
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: cardCrossAlign,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (title != null && title.trim().isNotEmpty) ...[
             Text(
               title.trim(),
+              textAlign: contentAlign,
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -966,7 +981,7 @@ class SlideBlockRenderer extends StatelessWidget {
             ),
             const SizedBox(height: 10),
           ],
-          _buildRichCardContent(content, textColor),
+          _buildRichCardContent(content, textColor, textAlign: contentAlign),
         ],
       ),
     );
@@ -1059,12 +1074,24 @@ class SlideBlockRenderer extends StatelessWidget {
     );
   }
 
-  Widget _buildRichCardContent(String text, Color defaultColor) {
+  Widget _buildRichCardContent(
+    String text,
+    Color defaultColor, {
+    TextAlign textAlign = TextAlign.left,
+  }) {
     final mathRegex = RegExp(r'(\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$)');
     final lines = text.split('\n');
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      // .start (the plain-left default) lets each line shrink-wrap to
+      // its own width, same as elsewhere in this file -- but that means
+      // a non-left textAlign would have no extra room to align within,
+      // so anything else here needs .stretch to actually give textAlign
+      // something to work against (see _buildTextBlock's near-identical
+      // fix for the standalone text block).
+      crossAxisAlignment: textAlign == TextAlign.left
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: lines.map((line) {
         if (!mathRegex.hasMatch(line)) {
@@ -1072,6 +1099,7 @@ class SlideBlockRenderer extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 2.5),
             child: Text(
               line,
+              textAlign: textAlign,
               style: TextStyle(
                 fontSize: 17,
                 height: 1.4,
@@ -1145,7 +1173,10 @@ class SlideBlockRenderer extends StatelessWidget {
 
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 2.5),
-          child: SelectableText.rich(TextSpan(children: spans)),
+          child: SelectableText.rich(
+            TextSpan(children: spans),
+            textAlign: textAlign,
+          ),
         );
       }).toList(),
     );
