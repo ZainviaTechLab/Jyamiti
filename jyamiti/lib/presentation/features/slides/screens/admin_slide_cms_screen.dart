@@ -531,49 +531,17 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     String? color2 = activeSlide.backgroundColor2;
     final imageCtrl =
         TextEditingController(text: activeSlide.backgroundImageUrl ?? '');
-    String contentVerticalAlign = activeSlide.contentVerticalAlign;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('Slide Background & Layout'),
+          title: const Text('Slide Background'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Content Position -- where the WHOLE content column
-                // (header badge + blocks + quiz) sits vertically on the
-                // slide. This is what actually centers a lone banner (or
-                // any small amount of content) in the middle of an
-                // otherwise-blank slide -- a block's own
-                // horizontalAlign/verticalAlign only position that
-                // block's content within its own box, not where the
-                // block sits on the slide as a whole.
-                const Text(
-                  'Content Position',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                ),
-                const SizedBox(height: 6),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'top', label: Text('Top')),
-                    ButtonSegment(value: 'center', label: Text('Center')),
-                    ButtonSegment(value: 'bottom', label: Text('Bottom')),
-                  ],
-                  selected: {contentVerticalAlign},
-                  onSelectionChanged: (sel) =>
-                      setDialogState(() => contentVerticalAlign = sel.first),
-                ),
-                const SizedBox(height: 20),
-                const Divider(),
-                const SizedBox(height: 4),
-                const Text(
-                  'Background',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                ),
-                const SizedBox(height: 6),
                 SegmentedButton<SlideBackgroundType>(
                   segments: const [
                     ButtonSegment(
@@ -652,7 +620,6 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                         ? imageCtrl.text.trim()
                         : null,
                     clearBackgroundImageUrl: imageCtrl.text.trim().isEmpty,
-                    contentVerticalAlign: contentVerticalAlign,
                   );
                 });
                 Navigator.pop(ctx);
