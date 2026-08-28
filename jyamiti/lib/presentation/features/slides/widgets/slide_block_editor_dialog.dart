@@ -73,15 +73,20 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   bool textFitContent = block.fitContent;
   bool textGlass = block.glass;
   // Google Fonts family names GoogleFonts.getFont resolves at render
-  // time (see SlideBlockRenderer._buildTextBlock) -- kept to the same
-  // small curated set already used elsewhere across the app (Outfit
-  // for body text, Space Grotesk for display/headings, Fira Code for
-  // code) rather than exposing the entire Google Fonts catalog.
-  String textFontFamily =
-      ['Outfit', 'Space Grotesk', 'Fira Code', 'Merriweather']
-              .contains(block.fontFamily)
-          ? block.fontFamily!
-          : 'Default';
+  // time (see SlideBlockRenderer._buildTextBlock) -- kept to a small
+  // curated set rather than exposing the entire Google Fonts catalog:
+  // Outfit/Space Grotesk/Fira Code are already used elsewhere across
+  // the app (body/display/code respectively); Merriweather and Comic
+  // Neue round it out with a serif and a casual/handwritten option.
+  String textFontFamily = [
+    'Outfit',
+    'Space Grotesk',
+    'Fira Code',
+    'Merriweather',
+    'Comic Neue',
+  ].contains(block.fontFamily)
+      ? block.fontFamily!
+      : 'Default';
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -461,6 +466,10 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     DropdownMenuItem(
                       value: 'Merriweather',
                       child: Text('Merriweather (serif)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Comic Neue',
+                      child: Text('Comic Neue (casual)'),
                     ),
                   ],
                   onChanged: (val) => setDialogState(
