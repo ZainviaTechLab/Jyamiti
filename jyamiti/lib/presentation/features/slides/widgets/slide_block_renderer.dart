@@ -85,28 +85,33 @@ class SlideBlockRenderer extends StatelessWidget {
         borderRadius: borderRadius,
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: Stack(
-            children: [
-              child,
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      borderRadius: borderRadius,
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        stops: const [0.0, 0.5],
-                        colors: [
-                          Colors.white.withValues(alpha: isDark ? 0.16 : 0.24),
-                          Colors.white.withValues(alpha: 0.0),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+          // foregroundDecoration paints the sheen directly on top of
+          // [child] without affecting layout at all -- a Stack was
+          // tried here first, but Stack gives its non-positioned
+          // children (child) loose constraints and pins them to
+          // top-left, whereas a Positioned.fill sibling still fills
+          // the Stack's own (possibly wider, e.g. a card's boxed 85%-
+          // width FractionallySizedBox forcing this whole wrapper's
+          // width) resolved size -- the result was a correctly-sized
+          // bordered box hugging one corner with the blur/shadow/sheen
+          // still spanning the full forced width around it, a visible
+          // "ghost" smear past the box's own edge. foregroundDecoration
+          // has no such quirk: this Container just defers its size to
+          // child exactly as if it wasn't here.
+          child: Container(
+            foregroundDecoration: BoxDecoration(
+              borderRadius: borderRadius,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                stops: const [0.0, 0.5],
+                colors: [
+                  Colors.white.withValues(alpha: isDark ? 0.16 : 0.24),
+                  Colors.white.withValues(alpha: 0.0),
+                ],
               ),
-            ],
+            ),
+            child: child,
           ),
         ),
       ),
