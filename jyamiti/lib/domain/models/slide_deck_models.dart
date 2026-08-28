@@ -14,6 +14,7 @@ enum SlideBlockType {
   video,
   card,
   columns,
+  banner,
 }
 
 class SlideBlock {
@@ -34,6 +35,19 @@ class SlideBlock {
   final String? borderColor;
   final double borderWidth;
 
+  // Layout knobs -- currently only read by the `banner` block type's own
+  // renderer (see SlideBlockRenderer._buildBannerBlock), kept on SlideBlock
+  // generally rather than banner-specific so they're available to other
+  // block types later without another migration. All null/default means
+  // "use that block type's own hardcoded default" -- e.g. banner defaults
+  // to horizontalAlign 'center' when this is null, not literally unaligned.
+  final double? padding; // internal spacing on all sides
+  final double? marginVertical; // spacing above/below the block
+  final double? fontSize;
+  final String? horizontalAlign; // 'left' | 'center' | 'right'
+  final String? verticalAlign; // 'top' | 'center' | 'bottom'
+  final double? minHeight; // lets verticalAlign do something beyond a tight fit
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -44,6 +58,12 @@ class SlideBlock {
     this.textColor,
     this.borderColor,
     this.borderWidth = 0,
+    this.padding,
+    this.marginVertical,
+    this.fontSize,
+    this.horizontalAlign,
+    this.verticalAlign,
+    this.minHeight,
   });
 
   SlideBlock copyWith({
@@ -61,6 +81,18 @@ class SlideBlock {
     String? borderColor,
     bool clearBorderColor = false,
     double? borderWidth,
+    double? padding,
+    bool clearPadding = false,
+    double? marginVertical,
+    bool clearMarginVertical = false,
+    double? fontSize,
+    bool clearFontSize = false,
+    String? horizontalAlign,
+    bool clearHorizontalAlign = false,
+    String? verticalAlign,
+    bool clearVerticalAlign = false,
+    double? minHeight,
+    bool clearMinHeight = false,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -75,6 +107,17 @@ class SlideBlock {
       borderColor:
           clearBorderColor ? null : (borderColor ?? this.borderColor),
       borderWidth: borderWidth ?? this.borderWidth,
+      padding: clearPadding ? null : (padding ?? this.padding),
+      marginVertical: clearMarginVertical
+          ? null
+          : (marginVertical ?? this.marginVertical),
+      fontSize: clearFontSize ? null : (fontSize ?? this.fontSize),
+      horizontalAlign: clearHorizontalAlign
+          ? null
+          : (horizontalAlign ?? this.horizontalAlign),
+      verticalAlign:
+          clearVerticalAlign ? null : (verticalAlign ?? this.verticalAlign),
+      minHeight: clearMinHeight ? null : (minHeight ?? this.minHeight),
     );
   }
 
@@ -89,6 +132,12 @@ class SlideBlock {
       'textColor': textColor,
       'borderColor': borderColor,
       'borderWidth': borderWidth,
+      'padding': padding,
+      'marginVertical': marginVertical,
+      'fontSize': fontSize,
+      'horizontalAlign': horizontalAlign,
+      'verticalAlign': verticalAlign,
+      'minHeight': minHeight,
     };
   }
 
@@ -107,6 +156,12 @@ class SlideBlock {
       textColor: map['textColor'],
       borderColor: map['borderColor'],
       borderWidth: (map['borderWidth'] as num?)?.toDouble() ?? 0,
+      padding: (map['padding'] as num?)?.toDouble(),
+      marginVertical: (map['marginVertical'] as num?)?.toDouble(),
+      fontSize: (map['fontSize'] as num?)?.toDouble(),
+      horizontalAlign: map['horizontalAlign'],
+      verticalAlign: map['verticalAlign'],
+      minHeight: (map['minHeight'] as num?)?.toDouble(),
     );
   }
 

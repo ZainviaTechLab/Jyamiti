@@ -340,11 +340,13 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
       final currentSlide = _slides[_activeSlideIndex];
       final updatedBlocks = List<SlideBlock>.from(currentSlide.blocks)
         ..add(
-          SlideBlock(
-            id: 'b_${DateTime.now().millisecondsSinceEpoch}',
-            type: type,
-            content: defaults.content,
-            extra: defaults.extra,
+          applyBannerDefaults(
+            SlideBlock(
+              id: 'b_${DateTime.now().millisecondsSinceEpoch}',
+              type: type,
+              content: defaults.content,
+              extra: defaults.extra,
+            ),
           ),
         );
 

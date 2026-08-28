@@ -25,6 +25,17 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? styleBorder = block.borderColor;
   double styleBorderWidth = block.borderWidth;
 
+  // Layout fields -- currently only shown/meaningful for the banner
+  // block type (see SlideBlockRenderer._buildBannerBlock), but stored on
+  // every SlideBlock generally (see that model's own doc comment), so
+  // this section is gated on block.type below rather than living in a
+  // banner-only dialog.
+  double layoutPadding = block.padding ?? 16;
+  double layoutMarginVertical = block.marginVertical ?? 12;
+  double layoutFontSize = block.fontSize ?? 20;
+  String layoutHorizontalAlign = block.horizontalAlign ?? 'center';
+  String layoutVerticalAlign = block.verticalAlign ?? 'center';
+
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
   // Save (see SlideBlockRenderer._buildTableBlock's doc comment for the
@@ -83,7 +94,9 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                                 ? 'YouTube URL or Video ID'
                                 : block.type == SlideBlockType.imageUrl
                                     ? 'Image URL'
-                                    : 'Content',
+                                    : block.type == SlideBlockType.banner
+                                        ? 'Banner Title'
+                                        : 'Content',
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -199,6 +212,95 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ),
                 ],
               ),
+              if (block.type == SlideBlockType.banner) ...[
+                const SizedBox(height: 16),
+                const Divider(),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Banner Layout',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Text('Padding', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: layoutPadding.clamp(0, 48),
+                        min: 0,
+                        max: 48,
+                        divisions: 24,
+                        label: layoutPadding.toStringAsFixed(0),
+                        onChanged: (val) =>
+                            setDialogState(() => layoutPadding = val),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Margin', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: layoutMarginVertical.clamp(0, 48),
+                        min: 0,
+                        max: 48,
+                        divisions: 24,
+                        label: layoutMarginVertical.toStringAsFixed(0),
+                        onChanged: (val) => setDialogState(
+                            () => layoutMarginVertical = val),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Font Size', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: layoutFontSize.clamp(12, 48),
+                        min: 12,
+                        max: 48,
+                        divisions: 36,
+                        label: layoutFontSize.toStringAsFixed(0),
+                        onChanged: (val) =>
+                            setDialogState(() => layoutFontSize = val),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Text('Horizontal Alignment',
+                    style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'left', label: Text('Left')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'right', label: Text('Right')),
+                  ],
+                  selected: {layoutHorizontalAlign},
+                  onSelectionChanged: (sel) => setDialogState(
+                      () => layoutHorizontalAlign = sel.first),
+                ),
+                const SizedBox(height: 10),
+                const Text('Vertical Alignment',
+                    style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'top', label: Text('Top')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'bottom', label: Text('Bottom')),
+                  ],
+                  selected: {layoutVerticalAlign},
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => layoutVerticalAlign = sel.first),
+                ),
+              ],
             ],
           ),
         ),
@@ -226,6 +328,21 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                 borderColor: styleBorder,
                 clearBorderColor: styleBorder == null,
                 borderWidth: styleBorderWidth,
+                padding: block.type == SlideBlockType.banner
+                    ? layoutPadding
+                    : null,
+                marginVertical: block.type == SlideBlockType.banner
+                    ? layoutMarginVertical
+                    : null,
+                fontSize: block.type == SlideBlockType.banner
+                    ? layoutFontSize
+                    : null,
+                horizontalAlign: block.type == SlideBlockType.banner
+                    ? layoutHorizontalAlign
+                    : null,
+                verticalAlign: block.type == SlideBlockType.banner
+                    ? layoutVerticalAlign
+                    : null,
               );
               Navigator.pop(ctx, updated);
             },

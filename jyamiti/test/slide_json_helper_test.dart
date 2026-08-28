@@ -245,5 +245,37 @@ void main() {
         SlideBlockType.bulletList,
       ]);
     });
+
+    test('parses banner blocks with layout fields correctly', () {
+      const bannerJson = '''
+      {
+        "title": "Section Break",
+        "blocks": [
+          {
+            "type": "banner",
+            "content": "Unit 2: Trigonometry",
+            "backgroundColor": "FFF59E0B",
+            "textColor": "FF000000",
+            "padding": 20,
+            "marginVertical": 14,
+            "fontSize": 24,
+            "horizontalAlign": "center",
+            "verticalAlign": "center"
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(bannerJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.banner);
+      expect(block.content, 'Unit 2: Trigonometry');
+      expect(block.padding, 20);
+      expect(block.marginVertical, 14);
+      expect(block.fontSize, 24);
+      expect(block.horizontalAlign, 'center');
+      expect(block.verticalAlign, 'center');
+    });
   });
 }

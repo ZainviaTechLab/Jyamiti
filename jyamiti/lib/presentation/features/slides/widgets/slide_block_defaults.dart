@@ -34,7 +34,30 @@ IconData iconForSlideBlockType(SlideBlockType type) {
       return Icons.crop_square_rounded;
     case SlideBlockType.columns:
       return Icons.view_column_rounded;
+    case SlideBlockType.banner:
+      return Icons.view_agenda_rounded;
   }
+}
+
+/// Style defaults specific to the `banner` block type (background/text
+/// color, padding, margin, font size, alignment) -- applied via
+/// `.copyWith(...)` on top of whatever `defaultBlockContentFor` returns,
+/// at both call sites that create a fresh block (AdminSlideCmsScreen's
+/// Add Block bar and ColumnsBlockEditorScreen's per-column Add Block
+/// bar). Kept separate from `defaultBlockContentFor`'s record rather than
+/// widening that record's shape for every other block type just for
+/// banner's sake.
+SlideBlock applyBannerDefaults(SlideBlock block) {
+  if (block.type != SlideBlockType.banner) return block;
+  return block.copyWith(
+    backgroundColor: 'FFF59E0B',
+    textColor: 'FF000000',
+    padding: 16,
+    marginVertical: 12,
+    fontSize: 20,
+    horizontalAlign: 'center',
+    verticalAlign: 'center',
+  );
 }
 
 /// A freshly-added block's starting content/extra -- same reasoning as
@@ -115,5 +138,7 @@ IconData iconForSlideBlockType(SlideBlockType type) {
         }),
         extra: null,
       );
+    case SlideBlockType.banner:
+      return (content: 'New Banner Section Title', extra: null);
   }
 }

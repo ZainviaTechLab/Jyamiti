@@ -263,6 +263,12 @@ class SlideJsonHelper {
     final textColor = map['textColor']?.toString();
     final borderColor = map['borderColor']?.toString();
     final borderWidth = (map['borderWidth'] as num?)?.toDouble() ?? 0;
+    final padding = (map['padding'] as num?)?.toDouble();
+    final marginVertical = (map['marginVertical'] as num?)?.toDouble();
+    final fontSize = (map['fontSize'] as num?)?.toDouble();
+    final horizontalAlign = map['horizontalAlign']?.toString();
+    final verticalAlign = map['verticalAlign']?.toString();
+    final minHeight = (map['minHeight'] as num?)?.toDouble();
 
     return SlideBlock(
       id: blockId,
@@ -274,6 +280,12 @@ class SlideJsonHelper {
       textColor: textColor,
       borderColor: borderColor,
       borderWidth: borderWidth,
+      padding: padding,
+      marginVertical: marginVertical,
+      fontSize: fontSize,
+      horizontalAlign: horizontalAlign,
+      verticalAlign: verticalAlign,
+      minHeight: minHeight,
     );
   }
 
@@ -344,6 +356,10 @@ class SlideJsonHelper {
       case 'multicolumn':
       case 'row':
         return SlideBlockType.columns;
+      case 'banner':
+      case 'section_banner':
+      case 'divider_banner':
+        return SlideBlockType.banner;
       case 'paragraph':
       case 'text':
       case 'body':

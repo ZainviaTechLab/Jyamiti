@@ -35,6 +35,12 @@ class SlideBlockRenderer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Banner fully owns its own layout (padding/margin/font size/
+    // alignment, on top of the same background/text/border fields every
+    // other block shares) rather than going through the generic wrapper
+    // below -- see _buildBannerBlock's doc comment for why.
+    if (block.type == SlideBlockType.banner) return _buildBannerBlock(context);
+
     final Widget content = _buildContent(context);
     final Color? bg = parseHexColor(block.backgroundColor);
     final Color? border = parseHexColor(block.borderColor);
@@ -85,6 +91,12 @@ class SlideBlockRenderer extends StatelessWidget {
         return _buildCardBlock(context);
       case SlideBlockType.columns:
         return _buildColumnsBlock(context);
+      case SlideBlockType.banner:
+        // Never actually reached -- build() special-cases banner before
+        // this switch runs. Listed anyway so this switch stays
+        // exhaustive without a `default` swallowing a real future
+        // omission for any other type.
+        return _buildBannerBlock(context);
     }
   }
 
@@ -1105,6 +1117,78 @@ class SlideBlockRenderer extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// A full-width colored bar with a title -- e.g. a section divider
+  /// between groups of content on a slide. Handles its own background/
+  /// text/border AND the newer layout fields (padding/marginVertical/
+  /// fontSize/horizontalAlign/verticalAlign/minHeight) directly, rather
+  /// than going through the generic bg/border wrapper every other block
+  /// shares, since a banner's whole purpose IS that styling -- routing it
+  /// through the generic wrapper too would double up the box.
+  ///
+  /// Defaults (when a field is unset -- see
+  /// slide_block_defaults.dart's applyBannerDefaults, which is what a
+  /// freshly-added banner actually gets): amber background, black text,
+  /// 16px padding, 12px vertical margin, 20px font, centered both ways.
+  Widget _buildBannerBlock(BuildContext context) {
+    final Color bg = parseHexColor(block.backgroundColor) ??
+        const Color(0xFFF59E0B);
+    final Color? border = parseHexColor(block.borderColor);
+    final Color textColor =
+        parseHexColor(block.textColor) ?? const Color(0xFF000000);
+    final double padding = block.padding ?? 16;
+    final double marginV = block.marginVertical ?? 12;
+    final double fontSize = block.fontSize ?? 20;
+
+    final TextAlign textAlign = switch (block.horizontalAlign) {
+      'left' => TextAlign.left,
+      'right' => TextAlign.right,
+      _ => TextAlign.center,
+    };
+    final Alignment boxAlignment = switch ((
+      block.horizontalAlign,
+      block.verticalAlign
+    )) {
+      ('left', 'top') => Alignment.topLeft,
+      ('left', 'bottom') => Alignment.bottomLeft,
+      ('left', _) => Alignment.centerLeft,
+      ('right', 'top') => Alignment.topRight,
+      ('right', 'bottom') => Alignment.bottomRight,
+      ('right', _) => Alignment.centerRight,
+      (_, 'top') => Alignment.topCenter,
+      (_, 'bottom') => Alignment.bottomCenter,
+      (_, _) => Alignment.center,
+    };
+
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.symmetric(vertical: marginV),
+      padding: EdgeInsets.all(padding),
+      constraints: block.minHeight != null
+          ? BoxConstraints(minHeight: block.minHeight!)
+          : null,
+      alignment: boxAlignment,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: border != null
+            ? Border.all(
+                color: border,
+                width: block.borderWidth > 0 ? block.borderWidth : 1.5,
+              )
+            : null,
+      ),
+      child: Text(
+        block.content,
+        textAlign: textAlign,
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: FontWeight.bold,
+          color: textColor,
+        ),
       ),
     );
   }

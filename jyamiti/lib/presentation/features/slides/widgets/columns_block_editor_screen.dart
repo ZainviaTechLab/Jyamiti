@@ -76,11 +76,13 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
     final defaults = defaultBlockContentFor(type);
     setState(() {
       _columns[colIdx].add(
-        SlideBlock(
-          id: 'cb_${DateTime.now().millisecondsSinceEpoch}',
-          type: type,
-          content: defaults.content,
-          extra: defaults.extra,
+        applyBannerDefaults(
+          SlideBlock(
+            id: 'cb_${DateTime.now().millisecondsSinceEpoch}',
+            type: type,
+            content: defaults.content,
+            extra: defaults.extra,
+          ),
         ),
       );
     });
