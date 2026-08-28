@@ -480,6 +480,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     final block = _slides[_activeSlideIndex].blocks[blockIndex];
     final contentCtrl = TextEditingController(text: block.content);
     final extraCtrl = TextEditingController(text: block.extra ?? '');
+    final captionCtrl = TextEditingController(text: block.caption ?? '');
 
     // Style overrides (background/text/border/outline) -- optional, apply
     // uniformly across every block type; see SlideBlockRenderer's own
@@ -542,10 +543,22 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                       ? 'SVG XML Code'
                       : block.type == SlideBlockType.video
                           ? 'YouTube URL or Video ID'
-                          : 'Content',
+                          : block.type == SlideBlockType.imageUrl
+                              ? 'Image URL'
+                              : 'Content',
                   border: const OutlineInputBorder(),
                 ),
               ),
+              if (block.type == SlideBlockType.imageUrl) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: captionCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Caption (optional, shown below the image)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
               if (block.type == SlideBlockType.svg) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
@@ -670,6 +683,9 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                   content: newContent,
                   extra: extraCtrl.text.isNotEmpty ? extraCtrl.text : null,
                   clearExtra: extraCtrl.text.isEmpty,
+                  caption:
+                      captionCtrl.text.isNotEmpty ? captionCtrl.text : null,
+                  clearCaption: captionCtrl.text.isEmpty,
                   backgroundColor: styleBg,
                   clearBackgroundColor: styleBg == null,
                   textColor: styleText,
