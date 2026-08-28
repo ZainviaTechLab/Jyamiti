@@ -307,6 +307,14 @@ class SlideJsonHelper {
       case 'youtube':
       case 'embed':
         return SlideBlockType.video;
+      case 'card':
+      case 'cards':
+      case 'box':
+      case 'cardbox':
+      case 'framedbox':
+      case 'container':
+      case 'panel':
+        return SlideBlockType.card;
       case 'paragraph':
       case 'text':
       case 'body':

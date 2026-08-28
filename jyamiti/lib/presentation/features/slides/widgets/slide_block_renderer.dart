@@ -81,6 +81,8 @@ class SlideBlockRenderer extends StatelessWidget {
         return _buildTableBlock(context);
       case SlideBlockType.video:
         return _buildVideoBlock(context);
+      case SlideBlockType.card:
+        return _buildCardBlock(context);
     }
   }
 
@@ -739,6 +741,282 @@ class SlideBlockRenderer extends StatelessWidget {
         aspectRatio: 16 / 9,
         child: InlineYoutubePlayer(videoId: videoId, videoUrl: raw),
       ),
+    );
+  }
+
+  /// Builds a native styled Card or Framed Box block.
+  /// Supports inline LaTeX math, custom border/background colors, and width modes.
+  Widget _buildCardBlock(BuildContext context) {
+    // Check if content is a JSON list of cards
+    if (block.content.trim().startsWith('[') &&
+        block.content.trim().endsWith(']')) {
+      try {
+        final decoded = json.decode(block.content) as List;
+        if (decoded.isNotEmpty && decoded.first is Map) {
+          return _buildCardsList(
+              context, decoded.cast<Map<String, dynamic>>());
+        }
+      } catch (_) {}
+    }
+
+    return _buildSingleCard(
+      context,
+      title: block.caption,
+      content: block.content,
+      borderColorStr: block.borderColor,
+      borderWidth: block.borderWidth > 0 ? block.borderWidth : 2.0,
+      bgColorStr: block.backgroundColor,
+      textColorStr: block.textColor,
+      extra: block.extra,
+    );
+  }
+
+  Widget _buildSingleCard(
+    BuildContext context, {
+    String? title,
+    required String content,
+    String? borderColorStr,
+    double borderWidth = 2.0,
+    String? bgColorStr,
+    String? textColorStr,
+    String? extra,
+  }) {
+    final Color borderColor = parseHexColor(borderColorStr) ??
+        (isDark ? const Color(0xFF22C55E) : const Color(0xFF16A34A));
+    final Color bgColor = parseHexColor(bgColorStr) ??
+        (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9));
+    final Color textColor = parseHexColor(textColorStr) ??
+        (isDark ? const Color(0xFFFFFFFF) : const Color(0xFF0F172A));
+
+    final mode = (extra ?? 'boxed').toLowerCase().trim();
+    double? widthFactor;
+    if (mode == 'compact' || mode == '75%') {
+      widthFactor = 0.75;
+    } else if (mode == 'small' || mode == '50%') {
+      widthFactor = 0.50;
+    } else if (mode == 'full') {
+      widthFactor = null;
+    } else if (mode.endsWith('%')) {
+      final parsed = double.tryParse(mode.replaceAll('%', '').trim());
+      if (parsed != null && parsed > 0 && parsed <= 100) {
+        widthFactor = parsed / 100.0;
+      }
+    } else {
+      // Default boxed card width
+      widthFactor = 0.85;
+    }
+
+    final cardWidget = Container(
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor, width: borderWidth),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (title != null && title.trim().isNotEmpty) ...[
+            Text(
+              title.trim(),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: borderColor,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+          _buildRichCardContent(content, textColor),
+        ],
+      ),
+    );
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 10.0),
+      alignment: Alignment.center,
+      child: widthFactor != null
+          ? FractionallySizedBox(
+              widthFactor: widthFactor,
+              child: cardWidget,
+            )
+          : cardWidget,
+    );
+  }
+
+  Widget _buildCardsList(
+      BuildContext context, List<Map<String, dynamic>> cardItems) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 12.0),
+      child: LayoutBuilder(
+        builder: (ctx, constraints) {
+          final isWide = constraints.maxWidth > 650;
+          final cardWidgets = cardItems.map((item) {
+            final title =
+                item['title']?.toString() ?? item['caption']?.toString();
+            final content = item['content']?.toString() ??
+                item['text']?.toString() ??
+                item['math']?.toString() ??
+                '';
+            final bColor = parseHexColor(item['borderColor']?.toString()) ??
+                (isDark ? const Color(0xFFF472B6) : const Color(0xFFDB2777));
+            final bg = parseHexColor(item['backgroundColor']?.toString()) ??
+                (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9));
+            final txtColor = parseHexColor(item['textColor']?.toString()) ??
+                (isDark ? Colors.white : const Color(0xFF0F172A));
+
+            return Container(
+              margin: const EdgeInsets.all(6.0),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: bColor, width: 2.0),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.05),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (title != null && title.trim().isNotEmpty) ...[
+                    Text(
+                      title.trim(),
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: bColor,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  _buildRichCardContent(content, txtColor),
+                ],
+              ),
+            );
+          }).toList();
+
+          if (isWide && cardItems.length <= 4) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: cardWidgets.map((w) => Expanded(child: w)).toList(),
+            );
+          } else {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: cardWidgets,
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildRichCardContent(String text, Color defaultColor) {
+    final mathRegex = RegExp(r'(\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$)');
+    final lines = text.split('\n');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: lines.map((line) {
+        if (!mathRegex.hasMatch(line)) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2.5),
+            child: Text(
+              line,
+              style: TextStyle(
+                fontSize: 17,
+                height: 1.4,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.bold,
+                color: defaultColor,
+              ),
+            ),
+          );
+        }
+
+        final spans = <InlineSpan>[];
+        int lastEnd = 0;
+
+        for (final match in mathRegex.allMatches(line)) {
+          if (match.start > lastEnd) {
+            spans.add(
+              TextSpan(
+                text: line.substring(lastEnd, match.start),
+                style: TextStyle(
+                  fontSize: 17,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                  color: defaultColor,
+                ),
+              ),
+            );
+          }
+
+          final matchedStr = match.group(0)!;
+          final isDisplay = matchedStr.startsWith(r'$$');
+          final cleanTex = isDisplay
+              ? matchedStr.substring(2, matchedStr.length - 2).trim()
+              : matchedStr.substring(1, matchedStr.length - 1).trim();
+
+          spans.add(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2.0),
+                child: Math.tex(
+                  cleanTex,
+                  textStyle: TextStyle(
+                    fontSize: 18,
+                    color: isDark
+                        ? const Color(0xFF38BDF8)
+                        : const Color(0xFF4338CA),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          );
+
+          lastEnd = match.end;
+        }
+
+        if (lastEnd < line.length) {
+          spans.add(
+            TextSpan(
+              text: line.substring(lastEnd),
+              style: TextStyle(
+                fontSize: 17,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.bold,
+                color: defaultColor,
+              ),
+            ),
+          );
+        }
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2.5),
+          child: SelectableText.rich(TextSpan(children: spans)),
+        );
+      }).toList(),
     );
   }
 }

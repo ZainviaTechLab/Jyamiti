@@ -381,6 +381,10 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
       case SlideBlockType.video:
         defaultContent = '';
         break;
+      case SlideBlockType.card:
+        defaultContent =
+            '7 = 3 + 4\n10 = 1 + 2 + 3 + 4\n12 = 3 + 4 + 5\n15 = 7 + 8\n= 4 + 5 + 6\n= 1 + 2 + 3 + 4 + 5';
+        break;
     }
 
     setState(() {
@@ -535,31 +539,38 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                     block.type == SlideBlockType.code ||
                         block.type == SlideBlockType.paragraph ||
                         block.type == SlideBlockType.bulletList ||
-                        block.type == SlideBlockType.svg
+                        block.type == SlideBlockType.svg ||
+                        block.type == SlideBlockType.card
                     ? 6
                     : 2,
                 decoration: InputDecoration(
                   labelText: block.type == SlideBlockType.svg
                       ? 'SVG XML Code'
-                      : block.type == SlideBlockType.video
-                          ? 'YouTube URL or Video ID'
-                          : block.type == SlideBlockType.imageUrl
-                              ? 'Image URL'
-                              : 'Content',
+                      : block.type == SlideBlockType.card
+                          ? 'Card Content (Text or LaTeX equations)'
+                          : block.type == SlideBlockType.video
+                              ? 'YouTube URL or Video ID'
+                              : block.type == SlideBlockType.imageUrl
+                                  ? 'Image URL'
+                                  : 'Content',
                   border: const OutlineInputBorder(),
                 ),
               ),
-              if (block.type == SlideBlockType.imageUrl) ...[
+              if (block.type == SlideBlockType.imageUrl ||
+                  block.type == SlideBlockType.card) ...[
                 const SizedBox(height: 12),
                 TextField(
                   controller: captionCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Caption (optional, shown below the image)',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: block.type == SlideBlockType.card
+                        ? 'Card Title / Header (e.g. Set 1, Explore)'
+                        : 'Caption (optional, shown below the image)',
+                    border: const OutlineInputBorder(),
                   ),
                 ),
               ],
-              if (block.type == SlideBlockType.svg) ...[
+              if (block.type == SlideBlockType.svg ||
+                  block.type == SlideBlockType.card) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   value: [
@@ -570,23 +581,19 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                     'small',
                   ].contains(extraCtrl.text.toLowerCase().trim())
                       ? extraCtrl.text.toLowerCase().trim()
-                      : 'full',
+                      : (block.type == SlideBlockType.card ? 'boxed' : 'full'),
                   decoration: const InputDecoration(
                     labelText: 'Display Width Mode',
                     border: OutlineInputBorder(),
                   ),
                   items: const [
                     DropdownMenuItem(
-                      value: 'full',
-                      child: Text('Full Width (Widescreen 16:9 / Edge-to-Edge)'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'original',
-                      child: Text('Original SVG Size (viewBox dimensions)'),
-                    ),
-                    DropdownMenuItem(
                       value: 'boxed',
                       child: Text('Boxed Card (85% Width Frame)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'full',
+                      child: Text('Full Width (Edge-to-Edge)'),
                     ),
                     DropdownMenuItem(
                       value: 'compact',
@@ -1653,6 +1660,8 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
         return Icons.table_chart_rounded;
       case SlideBlockType.video:
         return Icons.smart_display_rounded;
+      case SlideBlockType.card:
+        return Icons.crop_square_rounded;
     }
   }
 }

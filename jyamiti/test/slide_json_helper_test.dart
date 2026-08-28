@@ -170,5 +170,35 @@ void main() {
       // text tag must receive fill and font-weight
       expect(processed.contains("font-weight='bold'"), isTrue);
     });
+
+    test('parses and handles native card blocks with custom border and content', () {
+      const cardJson = '''
+      {
+        "title": "Consecutive Numbers",
+        "slides": [
+          {
+            "slideIndex": 0,
+            "title": "Exploring Sums",
+            "blocks": [
+              {
+                "type": "card",
+                "caption": "Set 1",
+                "borderColor": "#f472b6",
+                "backgroundColor": "#0b2240",
+                "content": "7 = 3 + 4\\n10 = 1 + 2 + 3 + 4\\n12 = 3 + 4 + 5\\n15 = 7 + 8"
+              }
+            ]
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(cardJson);
+      expect(result.isSuccess, isTrue);
+      expect(result.slides.first.blocks.first.type, SlideBlockType.card);
+      expect(result.slides.first.blocks.first.caption, 'Set 1');
+      expect(result.slides.first.blocks.first.borderColor, '#f472b6');
+      expect(result.slides.first.blocks.first.content, contains('7 = 3 + 4'));
+    });
   });
 }

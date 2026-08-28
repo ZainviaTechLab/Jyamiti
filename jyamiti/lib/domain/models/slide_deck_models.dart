@@ -12,6 +12,7 @@ enum SlideBlockType {
   svg,
   table,
   video,
+  card,
 }
 
 class SlideBlock {
