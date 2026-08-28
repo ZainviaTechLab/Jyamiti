@@ -263,8 +263,8 @@ void main() {
       final columns = decoded['columns'] as List;
       expect(columns.length, 2);
 
-      // Column 1: heading, image, bulletList -- a real mix, not just
-      // plain text like a table cell would allow.
+      // Column 1: heading, image, bulletList, text -- a real mix, not
+      // just plain text like a table cell would allow.
       final col1 = (columns[0] as List)
           .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
           .toList();
@@ -272,6 +272,7 @@ void main() {
         SlideBlockType.heading,
         SlideBlockType.imageUrl,
         SlideBlockType.bulletList,
+        SlideBlockType.text,
       ]);
 
       // Column 2: heading, card, table.

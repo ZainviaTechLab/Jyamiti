@@ -584,6 +584,13 @@ class SlideJsonHelper {
                 {
                   "type": "bulletList",
                   "content": "Two legs\nOne hypotenuse\nOne right angle"
+                },
+                {
+                  "type": "text",
+                  "content": "Tip: label the right angle first.",
+                  "textColor": "FF34D399",
+                  "fontSize": 14.0,
+                  "italic": true
                 }
               ],
               [
@@ -694,6 +701,13 @@ class SlideJsonHelper {
                       ["(3, 2)", "I"],
                       ["(-4, 1)", "II"]
                     ]
+                  },
+                  {
+                    "type": "text",
+                    "content": "Note the sign pattern above.",
+                    "textColor": "FFA78BFA",
+                    "fontSize": 14.0,
+                    "underline": true
                   }
                 ]
               ]
@@ -830,6 +844,13 @@ class SlideJsonHelper {
                     {
                       "type": "bulletList",
                       "content": "Exhibits interference\nExhibits diffraction\nDescribed by a wavelength"
+                    },
+                    {
+                      "type": "text",
+                      "content": "Confirmed by the double-slit experiment.",
+                      "textColor": "FFA78BFA",
+                      "fontSize": 14.0,
+                      "italic": true
                     }
                   ],
                   [
