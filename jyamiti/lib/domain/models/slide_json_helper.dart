@@ -273,6 +273,7 @@ class SlideJsonHelper {
     final italic = map['italic'] == true;
     final underline = map['underline'] == true;
     final strikethrough = map['strikethrough'] == true;
+    final fitContent = map['fitContent'] == true;
 
     return SlideBlock(
       id: blockId,
@@ -294,6 +295,7 @@ class SlideJsonHelper {
       italic: italic,
       underline: underline,
       strikethrough: strikethrough,
+      fitContent: fitContent,
     );
   }
 
@@ -512,7 +514,8 @@ class SlideJsonHelper {
             "fontSize": 17.0,
             "horizontalAlign": "center",
             "bold": true,
-            "underline": true
+            "underline": true,
+            "fitContent": true
           },
           {
             "type": "math",

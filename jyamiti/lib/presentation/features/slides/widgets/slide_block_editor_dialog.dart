@@ -67,6 +67,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   bool textItalic = block.italic;
   bool textUnderline = block.underline;
   bool textStrikethrough = block.strikethrough;
+  bool textFitContent = block.fitContent;
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -404,6 +405,19 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   onChanged: (val) => textBorder = val,
                 ),
                 const SizedBox(height: 10),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  title: const Text(
+                    'Fit box to text width (instead of full width)',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  value: textFitContent,
+                  onChanged: (val) =>
+                      setDialogState(() => textFitContent = val ?? false),
+                ),
+                const SizedBox(height: 10),
                 Row(
                   children: [
                     const Text('Outline Width', style: TextStyle(fontSize: 13)),
@@ -568,6 +582,8 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                 strikethrough: block.type == SlideBlockType.text
                     ? textStrikethrough
                     : null,
+                fitContent:
+                    block.type == SlideBlockType.text ? textFitContent : null,
               );
               Navigator.pop(ctx, updated);
             },

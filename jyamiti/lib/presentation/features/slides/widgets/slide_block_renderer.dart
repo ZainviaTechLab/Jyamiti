@@ -1251,13 +1251,47 @@ class SlideBlockRenderer extends StatelessWidget {
       ),
     );
 
+    final bool boxed = bg != null || border != null;
+
+    // A box that hugs the text's own width, for when the box itself
+    // (not just the text inside it) should look like a tag/chip rather
+    // than a full-width bar. `fitContent` only means anything when
+    // there's actually a box to shrink -- an unboxed block always uses
+    // the full-width path below regardless of this flag.
+    if (boxed && block.fitContent) {
+      final Alignment boxAlignment = switch (block.horizontalAlign) {
+        'center' => Alignment.center,
+        'right' => Alignment.centerRight,
+        _ => Alignment.centerLeft,
+      };
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12.0),
+        child: Align(
+          alignment: boxAlignment,
+          child: Container(
+            padding: const EdgeInsets.all(14.0),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(14),
+              border: border != null
+                  ? Border.all(
+                      color: border,
+                      width: block.borderWidth > 0 ? block.borderWidth : 1.5,
+                    )
+                  : null,
+            ),
+            child: text,
+          ),
+        ),
+      );
+    }
+
     // Always a full-width box, even when unboxed (no bg/border) -- a
     // plain Padding here would shrink-wrap to the text's own intrinsic
     // width, leaving `textAlign` nothing wider than the text itself to
     // align within, so center/right/justify would silently render as
     // left-aligned. width: double.infinity is what actually gives
     // textAlign room to work (same technique _buildBannerBlock uses).
-    final bool boxed = bg != null || border != null;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 12.0),

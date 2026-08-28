@@ -335,7 +335,8 @@ void main() {
             "bold": true,
             "italic": true,
             "underline": true,
-            "strikethrough": false
+            "strikethrough": false,
+            "fitContent": true
           }
         ]
       }
@@ -350,6 +351,7 @@ void main() {
       expect(block.backgroundColor, '331E293B');
       expect(block.fontSize, 18);
       expect(block.horizontalAlign, 'center');
+      expect(block.fitContent, isTrue);
       expect(block.bold, isTrue);
       expect(block.italic, isTrue);
       expect(block.underline, isTrue);

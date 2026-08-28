@@ -61,6 +61,14 @@ class SlideBlock {
   final bool underline;
   final bool strikethrough;
 
+  // `text` block only: when it has a background/border box, this
+  // shrinks that box to hug the content's own width and positions it
+  // via horizontalAlign (left/center/right) instead of stretching the
+  // box edge-to-edge -- see SlideBlockRenderer._buildTextBlock. Ignored
+  // when there's no background/border to draw, or for any other block
+  // type.
+  final bool fitContent;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -81,6 +89,7 @@ class SlideBlock {
     this.italic = false,
     this.underline = false,
     this.strikethrough = false,
+    this.fitContent = false,
   });
 
   SlideBlock copyWith({
@@ -114,6 +123,7 @@ class SlideBlock {
     bool? italic,
     bool? underline,
     bool? strikethrough,
+    bool? fitContent,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -143,6 +153,7 @@ class SlideBlock {
       italic: italic ?? this.italic,
       underline: underline ?? this.underline,
       strikethrough: strikethrough ?? this.strikethrough,
+      fitContent: fitContent ?? this.fitContent,
     );
   }
 
@@ -167,6 +178,7 @@ class SlideBlock {
       'italic': italic,
       'underline': underline,
       'strikethrough': strikethrough,
+      'fitContent': fitContent,
     };
   }
 
@@ -195,6 +207,7 @@ class SlideBlock {
       italic: map['italic'] == true,
       underline: map['underline'] == true,
       strikethrough: map['strikethrough'] == true,
+      fitContent: map['fitContent'] == true,
     );
   }
 
