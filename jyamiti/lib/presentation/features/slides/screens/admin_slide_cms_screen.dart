@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -359,75 +358,6 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
         quiz: currentSlide.quiz,
         enableWhiteboard: currentSlide.enableWhiteboard,
       );
-    });
-  }
-
-  /// Drops a ready-made group of blocks onto the active slide in one tap
-  /// -- common layouts (title+bullets, a two-column compare table, an
-  /// image with caption, a pull-quote) that would otherwise take several
-  /// individual "Add Block" taps plus manual configuration each time.
-  void _insertTemplate(_SlideTemplate template) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    late final List<SlideBlock> newBlocks;
-    switch (template) {
-      case _SlideTemplate.titleBullets:
-        newBlocks = [
-          SlideBlock(
-            id: 'b_${now}_0',
-            type: SlideBlockType.heading,
-            content: 'Section Title',
-          ),
-          SlideBlock(
-            id: 'b_${now}_1',
-            type: SlideBlockType.bulletList,
-            content: 'First key point\nSecond key point\nThird key point',
-          ),
-        ];
-        break;
-      case _SlideTemplate.twoColumnCompare:
-        newBlocks = [
-          SlideBlock(
-            id: 'b_${now}_0',
-            type: SlideBlockType.table,
-            content: jsonEncode({
-              'headers': ['Option A', 'Option B'],
-              'rows': [
-                ['', ''],
-                ['', ''],
-              ],
-            }),
-          ),
-        ];
-        break;
-      case _SlideTemplate.imageCaption:
-        newBlocks = [
-          SlideBlock(
-            id: 'b_${now}_0',
-            type: SlideBlockType.imageUrl,
-            content:
-                'https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800',
-            caption: 'Image caption goes here',
-          ),
-        ];
-        break;
-      case _SlideTemplate.quote:
-        newBlocks = [
-          SlideBlock(
-            id: 'b_${now}_0',
-            type: SlideBlockType.callout,
-            content: 'A memorable quote or key takeaway.',
-            extra: 'tip',
-          ),
-        ];
-        break;
-    }
-
-    setState(() {
-      final currentSlide = _slides[_activeSlideIndex];
-      final updatedBlocks =
-          List<SlideBlock>.from(currentSlide.blocks)..addAll(newBlocks);
-      _slides[_activeSlideIndex] =
-          currentSlide.copyWith(blocks: updatedBlocks);
     });
   }
 
@@ -1084,67 +1014,29 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                   ),
                 ),
 
-                // Templates + Add Block Bar
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                // Add Block Bar
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.all(8.0),
                   child: Row(
-                    children: [
-                      PopupMenuButton<_SlideTemplate>(
-                        tooltip: 'Insert a ready-made block layout',
-                        onSelected: _insertTemplate,
-                        itemBuilder: (ctx) => _SlideTemplate.values
-                            .map(
-                              (t) => PopupMenuItem(
-                                value: t,
-                                child: Row(
-                                  children: [
-                                    Icon(t.icon, size: 16, color: const Color(0xFF6366F1)),
-                                    const SizedBox(width: 8),
-                                    Text(t.label),
-                                  ],
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        child: Chip(
-                          avatar: const Icon(Icons.dashboard_customize_rounded, size: 14),
-                          label: const Text(
-                            'TEMPLATES',
-                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                    children: SlideBlockType.values.map((type) {
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6.0),
+                        child: ActionChip(
+                          avatar: Icon(_getIconForBlock(type), size: 14),
+                          label: Text(
+                            type.name.toUpperCase(),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                          backgroundColor: const Color(0xFF10B981).withValues(alpha: 0.15),
+                          onPressed: () => _addBlockToActiveSlide(type),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Container(width: 1, height: 24, color: Colors.grey.withValues(alpha: 0.3)),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: SlideBlockType.values.map((type) {
-                              return Padding(
-                                padding: const EdgeInsets.only(right: 6.0),
-                                child: ActionChip(
-                                  avatar: Icon(_getIconForBlock(type), size: 14),
-                                  label: Text(
-                                    type.name.toUpperCase(),
-                                    style: const TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  onPressed: () => _addBlockToActiveSlide(type),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ),
-                    ],
+                      );
+                    }).toList(),
                   ),
                 ),
-                const SizedBox(height: 4),
 
                 // Blocks List Editor -- drag-to-reorder via an explicit
                 // handle (buildDefaultDragHandles: false) rather than
@@ -1250,37 +1142,4 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
   }
 
   IconData _getIconForBlock(SlideBlockType type) => iconForSlideBlockType(type);
-}
-
-/// One-tap layout templates for the "TEMPLATES" menu -- see
-/// _AdminSlideCmsScreenState._insertTemplate for what each one drops onto
-/// the active slide.
-enum _SlideTemplate { titleBullets, twoColumnCompare, imageCaption, quote }
-
-extension on _SlideTemplate {
-  String get label {
-    switch (this) {
-      case _SlideTemplate.titleBullets:
-        return 'Title + Bullets';
-      case _SlideTemplate.twoColumnCompare:
-        return 'Two-Column Compare';
-      case _SlideTemplate.imageCaption:
-        return 'Image + Caption';
-      case _SlideTemplate.quote:
-        return 'Quote / Callout';
-    }
-  }
-
-  IconData get icon {
-    switch (this) {
-      case _SlideTemplate.titleBullets:
-        return Icons.format_list_bulleted_rounded;
-      case _SlideTemplate.twoColumnCompare:
-        return Icons.table_chart_rounded;
-      case _SlideTemplate.imageCaption:
-        return Icons.image_rounded;
-      case _SlideTemplate.quote:
-        return Icons.format_quote_rounded;
-    }
-  }
 }
