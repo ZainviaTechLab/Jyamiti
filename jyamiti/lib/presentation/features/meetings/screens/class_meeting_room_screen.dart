@@ -1184,18 +1184,50 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                       style: TextStyle(color: Color(0xFF94A3B8)),
                     ),
                   )
-                : SingleChildScrollView(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: slide.blocks
-                          .map((b) => SlideBlockRenderer(block: b, isDark: true))
-                          .toList(),
-                    ),
-                  ),
+                : _buildSharedSlideBlocks(slide),
           ),
         ],
       ),
+    );
+  }
+
+  /// Same 'top'/'center'/'bottom' contentVerticalAlign handling as
+  /// StudentSlideViewerScreen._buildSlideContent -- mirrored here rather
+  /// than shared since this panel has its own header row and doesn't use
+  /// that screen's "SLIDE N" badge, but a slide authored with a centered
+  /// banner (or any other content) should look the same whether it's
+  /// being viewed normally or shared live in a class.
+  Widget _buildSharedSlideBlocks(SlideItem slide) {
+    final Widget blocksColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: slide.blocks
+          .map((b) => SlideBlockRenderer(block: b, isDark: true))
+          .toList(),
+    );
+
+    if (slide.contentVerticalAlign == 'top') {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: blocksColumn,
+      );
+    }
+
+    final Alignment align = slide.contentVerticalAlign == 'bottom'
+        ? Alignment.bottomCenter
+        : Alignment.center;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: (constraints.maxHeight - 40).clamp(0, double.infinity),
+            ),
+            child: Align(alignment: align, child: blocksColumn),
+          ),
+        );
+      },
     );
   }
 

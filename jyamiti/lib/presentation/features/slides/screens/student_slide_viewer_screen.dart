@@ -454,55 +454,91 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
     SlideItem slide,
     bool isDark,
   ) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
-      child: Center(
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 860),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Slide Header Badge
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6366F1).withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'SLIDE ${slide.slideIndex + 1}',
-                  style: const TextStyle(
-                    color: Color(0xFF818CF8),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                    letterSpacing: 1.1,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Modular Slide Blocks
-              ...slide.blocks.map(
-                (block) => SlideBlockRenderer(block: block, isDark: isDark),
-              ),
-
-              // Embedded Interactive Quiz Card (If Present)
-              if (slide.quiz != null) ...[
-                const SizedBox(height: 24),
-                _buildEmbeddedQuizCard(
-                  context,
-                  slide.slideIndex,
-                  slide.quiz!,
-                  isDark,
-                ),
-              ],
-            ],
+    final Widget contentColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Slide Header Badge
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 4,
+          ),
+          decoration: BoxDecoration(
+            color: const Color(0xFF6366F1).withOpacity(0.18),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            'SLIDE ${slide.slideIndex + 1}',
+            style: const TextStyle(
+              color: Color(0xFF818CF8),
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+              letterSpacing: 1.1,
+            ),
           ),
         ),
-      ),
+        const SizedBox(height: 12),
+
+        // Modular Slide Blocks
+        ...slide.blocks.map(
+          (block) => SlideBlockRenderer(block: block, isDark: isDark),
+        ),
+
+        // Embedded Interactive Quiz Card (If Present)
+        if (slide.quiz != null) ...[
+          const SizedBox(height: 24),
+          _buildEmbeddedQuizCard(
+            context,
+            slide.slideIndex,
+            slide.quiz!,
+            isDark,
+          ),
+        ],
+      ],
+    );
+
+    final Widget constrainedContent = Container(
+      constraints: const BoxConstraints(maxWidth: 860),
+      child: contentColumn,
+    );
+
+    // 'top' (the default -- every existing deck) is the original,
+    // unconstrained-height behavior: content just starts below the
+    // padding like a normal scrollable document. 'center'/'bottom' are
+    // what actually make "a banner centered on an otherwise-blank slide"
+    // possible -- a block's own horizontalAlign/verticalAlign (see
+    // SlideBlock) only position that block's content within its OWN box,
+    // not where the block sits on the slide as a whole. Needs
+    // LayoutBuilder to know the viewport's real height before deciding
+    // how tall to force the content area to be; still scrolls normally
+    // if the content is taller than that (ConstrainedBox's minHeight is
+    // a minimum, not a cap).
+    if (slide.contentVerticalAlign == 'top') {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: Center(child: constrainedContent),
+      );
+    }
+
+    final Alignment align = slide.contentVerticalAlign == 'bottom'
+        ? Alignment.bottomCenter
+        : Alignment.center;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: ConstrainedBox(
+            // -48 accounts for the 24px top+bottom padding above, so the
+            // centering is against the actual visible height, not the
+            // padding-inclusive one.
+            constraints: BoxConstraints(
+              minHeight: (constraints.maxHeight - 48).clamp(0, double.infinity),
+            ),
+            child: Align(alignment: align, child: constrainedContent),
+          ),
+        );
+      },
     );
   }
 

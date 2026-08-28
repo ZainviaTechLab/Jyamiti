@@ -88,17 +88,19 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
   }
 
   void _reindexSlides() {
+    // .copyWith rather than reconstructing SlideItem field-by-field --
+    // the latter used to silently drop every field added after this
+    // method was first written (background type/color/gradient/image,
+    // contentVerticalAlign) every time a slide got reindexed, i.e. on
+    // every delete/reorder/import. copyWith carries whatever isn't
+    // explicitly overridden here forward automatically, so a future
+    // field addition can't reintroduce the same bug.
     for (int i = 0; i < _slides.length; i++) {
-      _slides[i] = SlideItem(
+      _slides[i] = _slides[i].copyWith(
         id: _slides[i].id.isNotEmpty
             ? _slides[i].id
             : 'slide_${DateTime.now().millisecondsSinceEpoch}_$i',
         slideIndex: i,
-        title: _slides[i].title,
-        blocks: _slides[i].blocks,
-        theme: _slides[i].theme,
-        quiz: _slides[i].quiz,
-        enableWhiteboard: _slides[i].enableWhiteboard,
       );
     }
   }
@@ -349,15 +351,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
           ),
         );
 
-      _slides[_activeSlideIndex] = SlideItem(
-        id: currentSlide.id,
-        slideIndex: currentSlide.slideIndex,
-        title: currentSlide.title,
-        blocks: updatedBlocks,
-        theme: currentSlide.theme,
-        quiz: currentSlide.quiz,
-        enableWhiteboard: currentSlide.enableWhiteboard,
-      );
+      _slides[_activeSlideIndex] = currentSlide.copyWith(blocks: updatedBlocks);
     });
   }
 
@@ -487,15 +481,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                   onPressed: () {
                     setState(() {
                       final s = _slides[_activeSlideIndex];
-                      _slides[_activeSlideIndex] = SlideItem(
-                        id: s.id,
-                        slideIndex: s.slideIndex,
-                        title: s.title,
-                        blocks: s.blocks,
-                        theme: s.theme,
-                        quiz: null,
-                        enableWhiteboard: s.enableWhiteboard,
-                      );
+                      _slides[_activeSlideIndex] = s.copyWith(clearQuiz: true);
                     });
                     Navigator.pop(ctx);
                   },
@@ -512,19 +498,13 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                 onPressed: () {
                   setState(() {
                     final s = _slides[_activeSlideIndex];
-                    _slides[_activeSlideIndex] = SlideItem(
-                      id: s.id,
-                      slideIndex: s.slideIndex,
-                      title: s.title,
-                      blocks: s.blocks,
-                      theme: s.theme,
+                    _slides[_activeSlideIndex] = s.copyWith(
                       quiz: SlideQuiz(
                         question: qCtrl.text,
                         options: [opt0.text, opt1.text, opt2.text, opt3.text],
                         correctIndex: correctIdx,
                         explanation: expCtrl.text,
                       ),
-                      enableWhiteboard: s.enableWhiteboard,
                     );
                   });
                   Navigator.pop(ctx);
@@ -551,17 +531,49 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     String? color2 = activeSlide.backgroundColor2;
     final imageCtrl =
         TextEditingController(text: activeSlide.backgroundImageUrl ?? '');
+    String contentVerticalAlign = activeSlide.contentVerticalAlign;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('Slide Background'),
+          title: const Text('Slide Background & Layout'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Content Position -- where the WHOLE content column
+                // (header badge + blocks + quiz) sits vertically on the
+                // slide. This is what actually centers a lone banner (or
+                // any small amount of content) in the middle of an
+                // otherwise-blank slide -- a block's own
+                // horizontalAlign/verticalAlign only position that
+                // block's content within its own box, not where the
+                // block sits on the slide as a whole.
+                const Text(
+                  'Content Position',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'top', label: Text('Top')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'bottom', label: Text('Bottom')),
+                  ],
+                  selected: {contentVerticalAlign},
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => contentVerticalAlign = sel.first),
+                ),
+                const SizedBox(height: 20),
+                const Divider(),
+                const SizedBox(height: 4),
+                const Text(
+                  'Background',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+                const SizedBox(height: 6),
                 SegmentedButton<SlideBackgroundType>(
                   segments: const [
                     ButtonSegment(
@@ -640,6 +652,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                         ? imageCtrl.text.trim()
                         : null,
                     clearBackgroundImageUrl: imageCtrl.text.trim().isEmpty,
+                    contentVerticalAlign: contentVerticalAlign,
                   );
                 });
                 Navigator.pop(ctx);
@@ -928,15 +941,8 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                             text: activeSlide.title,
                           ),
                           onChanged: (val) {
-                            _slides[_activeSlideIndex] = SlideItem(
-                              id: activeSlide.id,
-                              slideIndex: activeSlide.slideIndex,
-                              title: val,
-                              blocks: activeSlide.blocks,
-                              theme: activeSlide.theme,
-                              quiz: activeSlide.quiz,
-                              enableWhiteboard: activeSlide.enableWhiteboard,
-                            );
+                            _slides[_activeSlideIndex] =
+                                activeSlide.copyWith(title: val);
                           },
                           decoration: const InputDecoration(
                             hintText: 'Slide Title',

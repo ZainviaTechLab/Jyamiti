@@ -277,5 +277,34 @@ void main() {
       expect(block.horizontalAlign, 'center');
       expect(block.verticalAlign, 'center');
     });
+
+    test('parses a slide-level contentVerticalAlign for centering a banner',
+        () {
+      const centeredBannerJson = '''
+      {
+        "title": "Section Break",
+        "contentVerticalAlign": "center",
+        "blocks": [
+          {
+            "type": "banner",
+            "content": "Welcome to Chapter 3",
+            "horizontalAlign": "center",
+            "verticalAlign": "center"
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(centeredBannerJson);
+      expect(result.isSuccess, isTrue);
+      expect(result.slides.first.contentVerticalAlign, 'center');
+      expect(result.slides.first.blocks.first.type, SlideBlockType.banner);
+    });
+
+    test('contentVerticalAlign defaults to top when absent', () {
+      final result =
+          SlideJsonHelper.parseJson(SlideJsonHelper.sampleSingleSlideJson);
+      expect(result.slides.first.contentVerticalAlign, 'top');
+    });
   });
 }

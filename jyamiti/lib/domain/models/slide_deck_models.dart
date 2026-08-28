@@ -231,6 +231,17 @@ class SlideItem {
   final String? backgroundColor2; // gradient's second stop
   final String? backgroundImageUrl;
 
+  // Where the slide's whole content column (header badge + blocks + quiz,
+  // as one unit) sits within the available vertical space -- 'top' (the
+  // default, existing behavior: content starts right below the header
+  // like a normal scrollable document) | 'center' | 'bottom'. This is
+  // what actually makes "a banner centered on an otherwise-blank slide"
+  // possible: a block's OWN horizontalAlign/verticalAlign (see
+  // SlideBlock) only position that block's content within its own box --
+  // they say nothing about where the block sits on the slide as a whole,
+  // which is a slide-level layout question, not a block-level one.
+  final String contentVerticalAlign;
+
   SlideItem({
     required this.id,
     required this.slideIndex,
@@ -243,6 +254,7 @@ class SlideItem {
     this.backgroundColor,
     this.backgroundColor2,
     this.backgroundImageUrl,
+    this.contentVerticalAlign = 'top',
   });
 
   SlideItem copyWith({
@@ -261,6 +273,7 @@ class SlideItem {
     bool clearBackgroundColor2 = false,
     String? backgroundImageUrl,
     bool clearBackgroundImageUrl = false,
+    String? contentVerticalAlign,
   }) {
     return SlideItem(
       id: id ?? this.id,
@@ -280,6 +293,7 @@ class SlideItem {
       backgroundImageUrl: clearBackgroundImageUrl
           ? null
           : (backgroundImageUrl ?? this.backgroundImageUrl),
+      contentVerticalAlign: contentVerticalAlign ?? this.contentVerticalAlign,
     );
   }
 
@@ -296,6 +310,7 @@ class SlideItem {
       'backgroundColor': backgroundColor,
       'backgroundColor2': backgroundColor2,
       'backgroundImageUrl': backgroundImageUrl,
+      'contentVerticalAlign': contentVerticalAlign,
     };
   }
 
@@ -320,6 +335,7 @@ class SlideItem {
       backgroundColor: map['backgroundColor'],
       backgroundColor2: map['backgroundColor2'],
       backgroundImageUrl: map['backgroundImageUrl'],
+      contentVerticalAlign: map['contentVerticalAlign'] ?? 'top',
     );
   }
 

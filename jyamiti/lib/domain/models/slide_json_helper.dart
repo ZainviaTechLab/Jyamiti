@@ -185,6 +185,7 @@ class SlideJsonHelper {
       backgroundColor: map['backgroundColor']?.toString(),
       backgroundColor2: map['backgroundColor2']?.toString(),
       backgroundImageUrl: map['backgroundImageUrl']?.toString(),
+      contentVerticalAlign: map['contentVerticalAlign']?.toString() ?? 'top',
     );
   }
 
