@@ -514,10 +514,7 @@ class SlideJsonHelper {
           {
             "type": "callout",
             "content": "Remember: c represents the length of the hypotenuse opposite the right angle.",
-            "extra": "tip",
-            "backgroundColor": "331E1B4B",
-            "borderColor": "FF818CF8",
-            "borderWidth": 2.0
+            "extra": "tip"
           },
           {
             "type": "imageUrl",
@@ -839,10 +836,7 @@ class SlideJsonHelper {
               {
                 "type": "callout",
                 "content": "\\hbar (h-bar) is Planck's constant divided by 2π.",
-                "extra": "info",
-                "backgroundColor": "331E1B4B",
-                "borderColor": "FF818CF8",
-                "borderWidth": 2.0
+                "extra": "info"
               },
               {
                 "type": "imageUrl",
