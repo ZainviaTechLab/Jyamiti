@@ -1251,27 +1251,29 @@ class SlideBlockRenderer extends StatelessWidget {
       ),
     );
 
-    if (bg == null && border == null) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 12.0),
-        child: text,
-      );
-    }
-
+    // Always a full-width box, even when unboxed (no bg/border) -- a
+    // plain Padding here would shrink-wrap to the text's own intrinsic
+    // width, leaving `textAlign` nothing wider than the text itself to
+    // align within, so center/right/justify would silently render as
+    // left-aligned. width: double.infinity is what actually gives
+    // textAlign room to work (same technique _buildBannerBlock uses).
+    final bool boxed = bg != null || border != null;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 12.0),
-      padding: const EdgeInsets.all(14.0),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-        border: border != null
-            ? Border.all(
-                color: border,
-                width: block.borderWidth > 0 ? block.borderWidth : 1.5,
-              )
-            : null,
-      ),
+      padding: boxed ? const EdgeInsets.all(14.0) : EdgeInsets.zero,
+      decoration: boxed
+          ? BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(14),
+              border: border != null
+                  ? Border.all(
+                      color: border,
+                      width: block.borderWidth > 0 ? block.borderWidth : 1.5,
+                    )
+                  : null,
+            )
+          : null,
       child: text,
     );
   }
