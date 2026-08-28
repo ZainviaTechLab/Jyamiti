@@ -13,11 +13,12 @@ import 'slide_color_utils.dart';
 /// the result actually gets applied.
 ///
 /// There's no generic background/text/outline color UI that applies to
-/// every block type anymore -- that was removed. Banner keeps its own
-/// background/text/outline controls (inside Banner Layout below) since
-/// coloring IS what a banner fundamentally is, not optional styling on
-/// top of some other content the way it would be for a heading or a
-/// paragraph.
+/// every block type anymore -- that was removed. Banner and card each
+/// keep their own background/text/outline controls (inside Banner
+/// Layout / Card Style below) since coloring IS what those two
+/// fundamentally are (a colored bar; a bordered box), not optional
+/// styling on top of some other content the way it would be for a
+/// heading or a paragraph.
 Future<SlideBlock?> showSlideBlockEditorDialog(
   BuildContext context,
   SlideBlock block,
@@ -40,6 +41,16 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? bannerText = block.textColor;
   String? bannerBorder = block.borderColor;
   double bannerBorderWidth = block.borderWidth;
+
+  // Card's own style fields -- see SlideBlockRenderer._buildCardBlock,
+  // which reads these same 4 fields directly (and, notably, defaults
+  // borderWidth to 2.0 rather than 0 when unset, since a card is always
+  // drawn with a visible border -- mirrored here so the slider's initial
+  // position matches what's actually rendered).
+  String? cardBg = block.backgroundColor;
+  String? cardText = block.textColor;
+  String? cardBorder = block.borderColor;
+  double cardBorderWidth = block.borderWidth > 0 ? block.borderWidth : 2.0;
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -158,6 +169,53 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                       extraCtrl.text = val;
                     }
                   },
+                ),
+              ],
+              if (block.type == SlideBlockType.card) ...[
+                const SizedBox(height: 16),
+                const Divider(),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Card Style',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SlideColorPickerField(
+                  label: 'Background',
+                  initialHex: cardBg,
+                  onChanged: (val) => cardBg = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Text Color',
+                  initialHex: cardText,
+                  onChanged: (val) => cardText = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Outline',
+                  initialHex: cardBorder,
+                  onChanged: (val) => cardBorder = val,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Text('Outline Width', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: cardBorderWidth.clamp(0, 6),
+                        min: 0,
+                        max: 6,
+                        divisions: 12,
+                        label: cardBorderWidth.toStringAsFixed(1),
+                        onChanged: (val) =>
+                            setDialogState(() => cardBorderWidth = val),
+                      ),
+                    ),
+                  ],
                 ),
               ],
               if (block.type == SlideBlockType.code ||
@@ -317,21 +375,35 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                 caption:
                     captionCtrl.text.isNotEmpty ? captionCtrl.text : null,
                 clearCaption: captionCtrl.text.isEmpty,
-                backgroundColor:
-                    block.type == SlideBlockType.banner ? bannerBg : null,
-                clearBackgroundColor: block.type == SlideBlockType.banner &&
-                    bannerBg == null,
-                textColor:
-                    block.type == SlideBlockType.banner ? bannerText : null,
-                clearTextColor: block.type == SlideBlockType.banner &&
-                    bannerText == null,
-                borderColor:
-                    block.type == SlideBlockType.banner ? bannerBorder : null,
-                clearBorderColor: block.type == SlideBlockType.banner &&
-                    bannerBorder == null,
+                backgroundColor: block.type == SlideBlockType.banner
+                    ? bannerBg
+                    : block.type == SlideBlockType.card
+                        ? cardBg
+                        : null,
+                clearBackgroundColor:
+                    (block.type == SlideBlockType.banner && bannerBg == null) ||
+                        (block.type == SlideBlockType.card && cardBg == null),
+                textColor: block.type == SlideBlockType.banner
+                    ? bannerText
+                    : block.type == SlideBlockType.card
+                        ? cardText
+                        : null,
+                clearTextColor: (block.type == SlideBlockType.banner &&
+                        bannerText == null) ||
+                    (block.type == SlideBlockType.card && cardText == null),
+                borderColor: block.type == SlideBlockType.banner
+                    ? bannerBorder
+                    : block.type == SlideBlockType.card
+                        ? cardBorder
+                        : null,
+                clearBorderColor: (block.type == SlideBlockType.banner &&
+                        bannerBorder == null) ||
+                    (block.type == SlideBlockType.card && cardBorder == null),
                 borderWidth: block.type == SlideBlockType.banner
                     ? bannerBorderWidth
-                    : null,
+                    : block.type == SlideBlockType.card
+                        ? cardBorderWidth
+                        : null,
                 padding: block.type == SlideBlockType.banner
                     ? layoutPadding
                     : null,
