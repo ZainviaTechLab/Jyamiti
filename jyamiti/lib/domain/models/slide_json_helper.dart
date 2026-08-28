@@ -494,7 +494,8 @@ class SlideJsonHelper {
             "marginVertical": 14.0,
             "fontSize": 24.0,
             "horizontalAlign": "center",
-            "verticalAlign": "center"
+            "verticalAlign": "center",
+            "glass": true
           },
           {
             "type": "heading",
@@ -519,7 +520,8 @@ class SlideJsonHelper {
             "horizontalAlign": "center",
             "bold": true,
             "underline": true,
-            "fitContent": true
+            "fitContent": true,
+            "fontFamily": "Space Grotesk"
           },
           {
             "type": "math",
@@ -572,7 +574,9 @@ class SlideJsonHelper {
             "caption": "Practice Set",
             "content": "3-4-5\n5-12-13\n8-15-17",
             "extra": "boxed",
-            "borderColor": "FF10B981"
+            "borderColor": "FF10B981",
+            "horizontalAlign": "center",
+            "glass": true
           },
           {
             "type": "columns",
@@ -651,7 +655,8 @@ class SlideJsonHelper {
               "marginVertical": 12.0,
               "fontSize": 22.0,
               "horizontalAlign": "left",
-              "verticalAlign": "center"
+              "verticalAlign": "center",
+              "glass": true
             },
             {
               "type": "heading",
@@ -671,7 +676,8 @@ class SlideJsonHelper {
               "textColor": "FF38BDF8",
               "fontSize": 16.0,
               "horizontalAlign": "left",
-              "italic": true
+              "italic": true,
+              "fontFamily": "Outfit"
             },
             {
               "type": "math",
@@ -766,7 +772,9 @@ class SlideJsonHelper {
               "caption": "Practice Set",
               "content": "y = 2x + 3\ny = -x + 7\n2y = 4x - 6",
               "extra": "boxed",
-              "borderColor": "FF10B981"
+              "borderColor": "FF10B981",
+              "horizontalAlign": "right",
+              "glass": true
             }
           ],
           "quiz": {
@@ -801,7 +809,8 @@ class SlideJsonHelper {
                 "marginVertical": 12.0,
                 "fontSize": 22.0,
                 "horizontalAlign": "center",
-                "verticalAlign": "center"
+                "verticalAlign": "center",
+                "glass": true
               },
               {
                 "type": "heading",
@@ -822,7 +831,8 @@ class SlideJsonHelper {
                 "fontSize": 15.0,
                 "horizontalAlign": "right",
                 "italic": true,
-                "strikethrough": true
+                "strikethrough": true,
+                "fontFamily": "Merriweather"
               },
               {
                 "type": "math",
@@ -931,7 +941,9 @@ class SlideJsonHelper {
                 "caption": "Core Formulation",
                 "content": "i\\hbar \\frac{\\partial}{\\partial t} \\Psi = \\hat{H}\\Psi",
                 "extra": "boxed",
-                "borderColor": "FFA78BFA"
+                "borderColor": "FFA78BFA",
+                "horizontalAlign": "center",
+                "glass": true
               }
             ],
             "quiz": {
