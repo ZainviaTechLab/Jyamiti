@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
+import 'slide_color_utils.dart';
 
 /// The block-edit dialog -- content/extra/caption fields per block type,
 /// plus (banner only) the Banner Layout section. A standalone top-level
@@ -11,10 +12,12 @@ import '../../../../domain/models/slide_deck_models.dart';
 /// version or null if cancelled" and can each decide for themselves where
 /// the result actually gets applied.
 ///
-/// There's no UI here for background/text/outline color -- SlideBlock
-/// still carries those fields (banner's own default styling and any
-/// JSON-authored block still uses them), this dialog just doesn't offer
-/// a way to change them anymore.
+/// There's no generic background/text/outline color UI that applies to
+/// every block type anymore -- that was removed. Banner keeps its own
+/// background/text/outline controls (inside Banner Layout below) since
+/// coloring IS what a banner fundamentally is, not optional styling on
+/// top of some other content the way it would be for a heading or a
+/// paragraph.
 Future<SlideBlock?> showSlideBlockEditorDialog(
   BuildContext context,
   SlideBlock block,
@@ -33,6 +36,10 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   double layoutFontSize = block.fontSize ?? 20;
   String layoutHorizontalAlign = block.horizontalAlign ?? 'center';
   String layoutVerticalAlign = block.verticalAlign ?? 'center';
+  String? bannerBg = block.backgroundColor;
+  String? bannerText = block.textColor;
+  String? bannerBorder = block.borderColor;
+  double bannerBorderWidth = block.borderWidth;
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -178,6 +185,41 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ),
                 ),
                 const SizedBox(height: 10),
+                SlideColorPickerField(
+                  label: 'Background',
+                  initialHex: bannerBg,
+                  onChanged: (val) => bannerBg = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Text Color',
+                  initialHex: bannerText,
+                  onChanged: (val) => bannerText = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Outline',
+                  initialHex: bannerBorder,
+                  onChanged: (val) => bannerBorder = val,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Text('Outline Width', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: bannerBorderWidth.clamp(0, 6),
+                        min: 0,
+                        max: 6,
+                        divisions: 12,
+                        label: bannerBorderWidth.toStringAsFixed(1),
+                        onChanged: (val) =>
+                            setDialogState(() => bannerBorderWidth = val),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
                 Row(
                   children: [
                     const Text('Padding', style: TextStyle(fontSize: 13)),
@@ -275,6 +317,21 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                 caption:
                     captionCtrl.text.isNotEmpty ? captionCtrl.text : null,
                 clearCaption: captionCtrl.text.isEmpty,
+                backgroundColor:
+                    block.type == SlideBlockType.banner ? bannerBg : null,
+                clearBackgroundColor: block.type == SlideBlockType.banner &&
+                    bannerBg == null,
+                textColor:
+                    block.type == SlideBlockType.banner ? bannerText : null,
+                clearTextColor: block.type == SlideBlockType.banner &&
+                    bannerText == null,
+                borderColor:
+                    block.type == SlideBlockType.banner ? bannerBorder : null,
+                clearBorderColor: block.type == SlideBlockType.banner &&
+                    bannerBorder == null,
+                borderWidth: block.type == SlideBlockType.banner
+                    ? bannerBorderWidth
+                    : null,
                 padding: block.type == SlideBlockType.banner
                     ? layoutPadding
                     : null,
