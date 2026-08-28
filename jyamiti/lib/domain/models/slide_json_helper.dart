@@ -442,9 +442,21 @@ class SlideJsonHelper {
             "content": "a^2 + b^2 = c^2"
           },
           {
+            "type": "table",
+            "headers": ["a", "b", "c (hypotenuse)"],
+            "rows": [
+              ["3", "4", "5"],
+              ["5", "12", "13"],
+              ["8", "15", "17"]
+            ]
+          },
+          {
             "type": "callout",
             "content": "Remember: c represents the length of the hypotenuse opposite the right angle.",
-            "extra": "tip"
+            "extra": "tip",
+            "backgroundColor": "331E1B4B",
+            "borderColor": "FF818CF8",
+            "borderWidth": 2.0
           }
         ],
         "quiz": {
@@ -476,6 +488,11 @@ class SlideJsonHelper {
             {
               "type": "math",
               "content": "d = \\sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}"
+            },
+            {
+              "type": "video",
+              "content": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              "caption": "Watch: the distance formula, visually explained"
             }
           ]
         },
@@ -496,6 +513,13 @@ class SlideJsonHelper {
               "type": "callout",
               "content": "If denominator is zero, the line is strictly vertical with undefined slope.",
               "extra": "warning"
+            },
+            {
+              "type": "card",
+              "caption": "Practice Set",
+              "content": "y = 2x + 3\ny = -x + 7\n2y = 4x - 6",
+              "extra": "boxed",
+              "borderColor": "FF10B981"
             }
           ]
         }
@@ -527,6 +551,9 @@ class SlideJsonHelper {
           {
             "title": "Time-Dependent Schrödinger Equation",
             "theme": "darkGlass",
+            "backgroundType": "gradient",
+            "backgroundColor": "FF2E1065",
+            "backgroundColor2": "FF0F172A",
             "blocks": [
               {
                 "type": "heading",
@@ -548,6 +575,81 @@ class SlideJsonHelper {
               "correctIndex": 0,
               "explanation": "\\hbar (h-bar) equals Planck's constant h divided by 2π."
             }
+          }
+        ]
+      });
+
+  /// Dedicated example for the newest/most involved features: a
+  /// `columns` block with genuinely mixed content per column (not just
+  /// plain text -- an image, a table, a card, a formula, a bullet list,
+  /// spread across two columns), plus a slide-level image background and
+  /// per-block background/text/outline styling on top of it.
+  static String get sampleColumnsLayoutJson => _prettyEncoder.convert({
+        "title": "Linear vs Quadratic Functions",
+        "theme": "darkGlass",
+        "backgroundType": "image",
+        "backgroundImageUrl":
+            "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=1200",
+        "blocks": [
+          {
+            "type": "heading",
+            "content": "Side-by-Side Comparison",
+            "backgroundColor": "CC0F172A",
+            "textColor": "FFFFFFFF"
+          },
+          {
+            "type": "columns",
+            "columns": [
+              [
+                {
+                  "type": "heading",
+                  "content": "Linear Function",
+                  "textColor": "FF38BDF8"
+                },
+                {
+                  "type": "imageUrl",
+                  "content":
+                      "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=600",
+                  "caption": "A straight-line graph"
+                },
+                {
+                  "type": "math",
+                  "content": "y = mx + b"
+                },
+                {
+                  "type": "bulletList",
+                  "content":
+                      "Constant rate of change\nGraph is a straight line\nDegree 1 polynomial"
+                }
+              ],
+              [
+                {
+                  "type": "heading",
+                  "content": "Quadratic Function",
+                  "textColor": "FFF472B6"
+                },
+                {
+                  "type": "card",
+                  "caption": "Standard Form",
+                  "content": "y = ax^2 + bx + c",
+                  "extra": "boxed",
+                  "borderColor": "FFF472B6"
+                },
+                {
+                  "type": "table",
+                  "headers": ["a", "Shape"],
+                  "rows": [
+                    ["> 0", "Opens upward"],
+                    ["< 0", "Opens downward"]
+                  ]
+                },
+                {
+                  "type": "bulletList",
+                  "content":
+                      "Variable rate of change\nGraph is a parabola\nDegree 2 polynomial"
+                }
+              ]
+            ]
           }
         ]
       });

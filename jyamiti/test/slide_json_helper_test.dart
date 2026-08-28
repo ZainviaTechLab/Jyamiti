@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jyamiti/domain/models/slide_deck_models.dart';
 import 'package:jyamiti/domain/models/slide_json_helper.dart';
@@ -14,11 +15,14 @@ void main() {
       final slide = result.slides.first;
       expect(slide.title, 'Pythagorean Theorem');
       expect(slide.theme, 'darkGlass');
-      expect(slide.blocks.length, 4);
+      expect(slide.blocks.length, 5);
       expect(slide.blocks[0].type, SlideBlockType.heading);
       expect(slide.blocks[1].type, SlideBlockType.paragraph);
       expect(slide.blocks[2].type, SlideBlockType.math);
-      expect(slide.blocks[3].type, SlideBlockType.callout);
+      expect(slide.blocks[3].type, SlideBlockType.table);
+      expect(slide.blocks[4].type, SlideBlockType.callout);
+      expect(slide.blocks[4].backgroundColor, '331E1B4B');
+      expect(slide.blocks[4].borderColor, 'FF818CF8');
       expect(slide.quiz, isNotNull);
       expect(slide.quiz!.question, 'Which side of a right triangle is the hypotenuse?');
       expect(slide.quiz!.correctIndex, 0);
@@ -199,6 +203,47 @@ void main() {
       expect(result.slides.first.blocks.first.caption, 'Set 1');
       expect(result.slides.first.blocks.first.borderColor, '#f472b6');
       expect(result.slides.first.blocks.first.content, contains('7 = 3 + 4'));
+    });
+
+    test('parses columns layout sample with nested mixed content correctly',
+        () {
+      final result =
+          SlideJsonHelper.parseJson(SlideJsonHelper.sampleColumnsLayoutJson);
+
+      expect(result.isSuccess, isTrue);
+      final slide = result.slides.first;
+      expect(slide.backgroundType, SlideBackgroundType.image);
+      expect(slide.backgroundImageUrl, isNotNull);
+
+      final columnsBlock = slide.blocks.firstWhere(
+        (b) => b.type == SlideBlockType.columns,
+      );
+      final decoded = json.decode(columnsBlock.content) as Map<String, dynamic>;
+      final columns = decoded['columns'] as List;
+      expect(columns.length, 2);
+
+      // Column 1: heading, image, math, bulletList -- a real mix, not
+      // just plain text like a table cell would allow.
+      final col1 = (columns[0] as List)
+          .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+          .toList();
+      expect(col1.map((b) => b.type), [
+        SlideBlockType.heading,
+        SlideBlockType.imageUrl,
+        SlideBlockType.math,
+        SlideBlockType.bulletList,
+      ]);
+
+      // Column 2: heading, card, table, bulletList.
+      final col2 = (columns[1] as List)
+          .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+          .toList();
+      expect(col2.map((b) => b.type), [
+        SlideBlockType.heading,
+        SlideBlockType.card,
+        SlideBlockType.table,
+        SlideBlockType.bulletList,
+      ]);
     });
   });
 }
