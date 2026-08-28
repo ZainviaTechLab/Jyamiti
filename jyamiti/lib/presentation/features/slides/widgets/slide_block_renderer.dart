@@ -35,11 +35,16 @@ class SlideBlockRenderer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Banner fully owns its own layout (padding/margin/font size/
-    // alignment, on top of the same background/text/border fields every
-    // other block shares) rather than going through the generic wrapper
-    // below -- see _buildBannerBlock's doc comment for why.
+    // Banner and card both fully own their own background/text/outline
+    // rendering already (banner: its whole layout, see
+    // _buildBannerBlock's doc comment; card: _buildCardBlock/
+    // _buildSingleCard's own decoration, reading these exact same
+    // fields) -- routing either through the generic wrapper below too
+    // would double them up: their own colored/bordered box, wrapped in
+    // a second outer box using the identical color/border, since both
+    // read directly from block.backgroundColor/textColor/borderColor.
     if (block.type == SlideBlockType.banner) return _buildBannerBlock(context);
+    if (block.type == SlideBlockType.card) return _buildCardBlock(context);
 
     final Widget content = _buildContent(context);
     final Color? bg = parseHexColor(block.backgroundColor);
@@ -88,6 +93,10 @@ class SlideBlockRenderer extends StatelessWidget {
       case SlideBlockType.video:
         return _buildVideoBlock(context);
       case SlideBlockType.card:
+        // Never actually reached -- build() special-cases card before
+        // this switch runs (see the comment there). Listed anyway so
+        // this switch stays exhaustive without a `default` swallowing a
+        // real future omission for any other type.
         return _buildCardBlock(context);
       case SlideBlockType.columns:
         return _buildColumnsBlock(context);
