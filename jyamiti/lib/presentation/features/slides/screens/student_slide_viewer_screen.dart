@@ -418,27 +418,65 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Slide Header Badge
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6366F1).withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'SLIDE ${slide.slideIndex + 1}',
-                  style: const TextStyle(
-                    color: Color(0xFF818CF8),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                    letterSpacing: 1.1,
-                  ),
+              // Slide Header Banner Row (SLIDE pill badge on left + Slide Title on right)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 18.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    // SLIDE Badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF6366F1).withValues(alpha: 0.22)
+                            : const Color(0xFFEEF2FF),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF818CF8).withValues(alpha: 0.35)
+                              : const Color(0xFFC7D2FE),
+                          width: 1.2,
+                        ),
+                      ),
+                      child: Text(
+                        'SLIDE ${slide.slideIndex + 1}',
+                        style: TextStyle(
+                          color: isDark
+                              ? const Color(0xFFA5B4FC)
+                              : const Color(0xFF4F46E5),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ),
+
+                    // Slide Title
+                    if (slide.title.trim().isNotEmpty)
+                      Flexible(
+                        child: Text(
+                          slide.title,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: isDark
+                                ? const Color(0xFFF8FAFC)
+                                : const Color(0xFF0F172A),
+                            letterSpacing: -0.2,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
 
               // Modular Slide Blocks
               ...slide.blocks.map(

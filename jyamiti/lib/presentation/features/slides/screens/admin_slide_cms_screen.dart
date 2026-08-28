@@ -1028,6 +1028,83 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                   ),
                 ),
 
+                // Slide Banner Header Preview (SLIDE pill badge on left + Title on right)
+                Container(
+                  margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF1E293B).withValues(alpha: 0.6)
+                        : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isDark
+                          ? const Color(0xFF334155)
+                          : const Color(0xFFE2E8F0),
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // SLIDE Badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? const Color(0xFF6366F1).withValues(alpha: 0.22)
+                              : const Color(0xFFEEF2FF),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: isDark
+                                ? const Color(0xFF818CF8).withValues(alpha: 0.35)
+                                : const Color(0xFFC7D2FE),
+                            width: 1.2,
+                          ),
+                        ),
+                        child: Text(
+                          'SLIDE ${activeSlide.slideIndex + 1}',
+                          style: TextStyle(
+                            color: isDark
+                                ? const Color(0xFFA5B4FC)
+                                : const Color(0xFF4F46E5),
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ),
+
+                      // Slide Title on Right
+                      Flexible(
+                        child: Text(
+                          activeSlide.title.trim().isNotEmpty
+                              ? activeSlide.title
+                              : 'Untitled Slide',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: isDark
+                                ? const Color(0xFFF1F5F9)
+                                : const Color(0xFF0F172A),
+                            letterSpacing: -0.2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
                 // Blocks List Editor
                 Expanded(
                   child: ListView.builder(
