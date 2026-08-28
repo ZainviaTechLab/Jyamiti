@@ -37,3 +37,7 @@ jyamiti/build/
 
 # macOS
 .DS_Store
+
+# Python (backend/convert_pptx_to_jyamiti.py's own cache)
+__pycache__/
+*.pyc
