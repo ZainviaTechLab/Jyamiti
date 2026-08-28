@@ -13,6 +13,7 @@ enum SlideBlockType {
   table,
   video,
   card,
+  columns,
 }
 
 class SlideBlock {

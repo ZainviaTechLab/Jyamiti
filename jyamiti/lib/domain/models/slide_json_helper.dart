@@ -232,6 +232,29 @@ class SlideJsonHelper {
           map['youtube']?.toString() ??
           map['videoId']?.toString() ??
           '';
+    } else if (type == SlideBlockType.columns &&
+        content.isEmpty &&
+        map['columns'] is List) {
+      // Same idea as table above, one level deeper: `columns` is a list
+      // of lists of raw block maps -- each nested block is parsed through
+      // this SAME function (recursively) so it gets normal id generation
+      // and type-alias resolution, then re-serialized into the JSON shape
+      // SlideBlockRenderer._buildColumnsBlock expects.
+      final rawColumns = map['columns'] as List;
+      final parsedColumns = <List<Map<String, dynamic>>>[];
+      for (final colEntry in rawColumns) {
+        final List<Map<String, dynamic>> colBlocks = [];
+        if (colEntry is List) {
+          for (int b = 0; b < colEntry.length; b++) {
+            final bItem = colEntry[b];
+            if (bItem is Map<String, dynamic>) {
+              colBlocks.add(_parseSingleBlock(bItem, slideIndex, b).toMap());
+            }
+          }
+        }
+        parsedColumns.add(colBlocks);
+      }
+      resolvedContent = jsonEncode({'columns': parsedColumns});
     }
 
     final extra = map['extra']?.toString() ?? map['language']?.toString();
@@ -315,6 +338,12 @@ class SlideJsonHelper {
       case 'container':
       case 'panel':
         return SlideBlockType.card;
+      case 'columns':
+      case 'column':
+      case 'grid_columns':
+      case 'multicolumn':
+      case 'row':
+        return SlideBlockType.columns;
       case 'paragraph':
       case 'text':
       case 'body':

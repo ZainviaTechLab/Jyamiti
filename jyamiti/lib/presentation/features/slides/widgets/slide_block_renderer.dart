@@ -83,6 +83,8 @@ class SlideBlockRenderer extends StatelessWidget {
         return _buildVideoBlock(context);
       case SlideBlockType.card:
         return _buildCardBlock(context);
+      case SlideBlockType.columns:
+        return _buildColumnsBlock(context);
     }
   }
 
@@ -1017,6 +1019,93 @@ class SlideBlockRenderer extends StatelessWidget {
           child: SelectableText.rich(TextSpan(children: spans)),
         );
       }).toList(),
+    );
+  }
+
+  /// `block.content` is JSON-encoded {"columns": [[blockMap, blockMap,
+  /// ...], [...], ...]} -- one inner array of block maps per column, each
+  /// parsed back into real SlideBlocks and rendered with a nested
+  /// SlideBlockRenderer. This is what actually makes "mixed content per
+  /// column" possible: a column isn't restricted to one content type --
+  /// it can hold any mix of images, cards, text, tables, whatever, since
+  /// each cell is a full block, not a plain string like a table cell.
+  /// See ColumnsBlockEditorScreen for how this content actually gets
+  /// built/edited.
+  Widget _buildColumnsBlock(BuildContext context) {
+    List<List<SlideBlock>> columns = [];
+    try {
+      final data = json.decode(block.content) as Map<String, dynamic>;
+      final rawColumns = data['columns'] as List? ?? [];
+      columns = rawColumns.map((col) {
+        return (col as List)
+            .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+            .toList();
+      }).toList();
+    } catch (_) {
+      // Malformed/empty columns data -- render nothing rather than crash.
+    }
+
+    if (columns.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 10.0),
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          ),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          'Empty columns block',
+          style: TextStyle(
+            color: _textColorOr(
+                const Color(0xFF94A3B8), const Color(0xFF64748B)),
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      );
+    }
+
+    Widget columnContent(List<SlideBlock> blocks) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: blocks
+              .map((b) => SlideBlockRenderer(block: b, isDark: isDark))
+              .toList(),
+        );
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10.0),
+      child: LayoutBuilder(
+        builder: (ctx, constraints) {
+          // Stacks vertically on narrow panels (e.g. a column nested
+          // inside another column's editor preview) rather than
+          // squeezing every column into an unusable sliver.
+          if (constraints.maxWidth < 480) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final col in columns)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: columnContent(col),
+                  ),
+              ],
+            );
+          }
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (int i = 0; i < columns.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 20),
+                  Expanded(child: columnContent(columns[i])),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
