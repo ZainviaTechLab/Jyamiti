@@ -36,27 +36,78 @@ class SlideBlockRenderer extends StatelessWidget {
 
   /// The translucent fill for a `glass` frosted panel (banner/card/text,
   /// see each's doc comment) -- deliberately ignores whatever alpha
-  /// [base] already carries and forces a fixed, low opacity instead,
-  /// since a fully-opaque "glass" color would defeat the whole effect.
-  /// Falls back to a neutral white/black tint (picked by [isDark]) when
-  /// no background color was set at all, so turning Glass on by itself
-  /// still produces a visible frosted panel.
+  /// [base] already carries and forces a fixed opacity instead, since a
+  /// fully-opaque "glass" color would defeat the whole effect. Falls
+  /// back to a neutral white/black tint (picked by [isDark]) when no
+  /// background color was set at all, so turning Glass on by itself
+  /// still produces a visible frosted panel. Blurring alone barely
+  /// reads as "glass" over a smooth slide background/gradient -- there's
+  /// no texture there for the blur to visibly act on -- so this alpha
+  /// is deliberately higher than a typical translucent overlay, to give
+  /// the panel a real presence even before _wrapGlass's shadow/sheen.
   Color _glassTint(Color? base) {
     final Color source = base ?? (isDark ? Colors.white : Colors.black);
-    return source.withValues(alpha: isDark ? 0.14 : 0.10);
+    return source.withValues(alpha: isDark ? 0.22 : 0.16);
   }
 
-  /// Wraps [child] so whatever renders behind it is blurred, completing
-  /// the frosted-glass look together with [_glassTint]'s translucent
-  /// fill. [child] must already be exactly the shape being frosted
-  /// (i.e. its own decoration should use [borderRadius]) since
-  /// BackdropFilter blurs everything within the ClipRRect's bounds.
+  /// The frosted panel's own edge highlight -- a bright, fairly opaque
+  /// rim rather than a faint one, since that crisp edge (a "glass lip
+  /// catching light") is one of the main things that reads as glass
+  /// rather than just a translucent box, especially when the blur
+  /// behind it has little to actually blur.
+  Color get _glassBorderColor => Colors.white.withValues(alpha: 0.55);
+
+  /// Wraps [child] with everything that makes a translucent box actually
+  /// read as frosted glass rather than just "a see-through box": a
+  /// backdrop blur of whatever renders behind it, a soft drop shadow for
+  /// depth (applied outside the clip, so it isn't cut off by it), and a
+  /// diagonal sheen highlight -- that last one matters most when the
+  /// slide behind the panel is a smooth gradient/solid color, since
+  /// blurring smoothness looks nearly identical to not blurring it at
+  /// all; the sheen is what still reads as "glass" in that case. [child]
+  /// must already be exactly the shape being frosted (its own decoration
+  /// should use [borderRadius]) since BackdropFilter blurs everything
+  /// within the ClipRRect's bounds.
   Widget _wrapGlass(Widget child, {required BorderRadius borderRadius}) {
-    return ClipRRect(
-      borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: child,
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.38 : 0.14),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: Stack(
+            children: [
+              child,
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: borderRadius,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        stops: const [0.0, 0.5],
+                        colors: [
+                          Colors.white.withValues(alpha: isDark ? 0.16 : 0.24),
+                          Colors.white.withValues(alpha: 0.0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -849,7 +900,7 @@ class SlideBlockRenderer extends StatelessWidget {
     // border under glass doesn't also wash out the title to near
     // invisibility.
     final Color borderColor = glass
-        ? (explicitBorder ?? Colors.white.withValues(alpha: 0.28))
+        ? (explicitBorder ?? _glassBorderColor)
         : (explicitBorder ?? defaultAccent);
     final Color titleAccent =
         explicitBorder ?? (glass ? Colors.white : defaultAccent);
@@ -1206,7 +1257,7 @@ class SlideBlockRenderer extends StatelessWidget {
         : (explicitBg ?? const Color(0xFFF59E0B));
     final Color? explicitBorder = parseHexColor(block.borderColor);
     final Color? border = block.glass
-        ? (explicitBorder ?? Colors.white.withValues(alpha: 0.28))
+        ? (explicitBorder ?? _glassBorderColor)
         : explicitBorder;
     // A flat black default (banner's non-glass default) reads poorly on
     // a blurred, arbitrary slide background -- glass without an
@@ -1290,7 +1341,7 @@ class SlideBlockRenderer extends StatelessWidget {
     // turning it on alone should still produce a visible frosted panel.
     final Color? bg = block.glass ? _glassTint(explicitBg) : explicitBg;
     final Color? border = block.glass
-        ? (explicitBorder ?? Colors.white.withValues(alpha: 0.28))
+        ? (explicitBorder ?? _glassBorderColor)
         : explicitBorder;
     final Color textColor =
         _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155));
