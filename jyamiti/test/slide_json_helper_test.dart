@@ -316,5 +316,58 @@ void main() {
       expect(block.horizontalAlign, 'center');
       expect(block.verticalAlign, 'center');
     });
+
+    test('parses text blocks with formatting fields correctly', () {
+      const textJson = '''
+      {
+        "title": "Formatted Text",
+        "blocks": [
+          {
+            "type": "text",
+            "content": "Warning: check your units before submitting.",
+            "textColor": "FFFBBF24",
+            "backgroundColor": "331E293B",
+            "borderColor": "FFFBBF24",
+            "borderWidth": 1.5,
+            "fontSize": 18,
+            "horizontalAlign": "center",
+            "bold": true,
+            "italic": true,
+            "underline": true,
+            "strikethrough": false
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(textJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.text);
+      expect(block.content, 'Warning: check your units before submitting.');
+      expect(block.textColor, 'FFFBBF24');
+      expect(block.backgroundColor, '331E293B');
+      expect(block.fontSize, 18);
+      expect(block.horizontalAlign, 'center');
+      expect(block.bold, isTrue);
+      expect(block.italic, isTrue);
+      expect(block.underline, isTrue);
+      expect(block.strikethrough, isFalse);
+    });
+
+    test('"text" JSON type resolves to the text block, not paragraph', () {
+      const aliasJson = '''
+      {
+        "title": "Alias Check",
+        "blocks": [
+          {"type": "text", "content": "Should stay a text block."}
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(aliasJson);
+      expect(result.isSuccess, isTrue);
+      expect(result.slides.first.blocks.first.type, SlideBlockType.text);
+    });
   });
 }

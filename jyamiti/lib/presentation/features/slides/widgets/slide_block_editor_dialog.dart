@@ -13,12 +13,12 @@ import 'slide_color_utils.dart';
 /// the result actually gets applied.
 ///
 /// There's no generic background/text/outline color UI that applies to
-/// every block type anymore -- that was removed. Banner and card each
-/// keep their own background/text/outline controls (inside Banner
-/// Layout / Card Style below) since coloring IS what those two
-/// fundamentally are (a colored bar; a bordered box), not optional
-/// styling on top of some other content the way it would be for a
-/// heading or a paragraph.
+/// every block type anymore -- that was removed. Banner, card, and text
+/// each keep their own background/text/outline controls (inside Banner
+/// Layout / Card Style / Text Style below) since coloring IS what those
+/// three fundamentally are (a colored bar; a bordered box; freeform
+/// styled text), not optional styling on top of some other content the
+/// way it would be for a heading or a paragraph.
 Future<SlideBlock?> showSlideBlockEditorDialog(
   BuildContext context,
   SlideBlock block,
@@ -51,6 +51,22 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? cardText = block.textColor;
   String? cardBorder = block.borderColor;
   double cardBorderWidth = block.borderWidth > 0 ? block.borderWidth : 2.0;
+
+  // Text's own style fields -- see SlideBlockRenderer._buildTextBlock,
+  // which reads these plus the bold/italic/underline/strikethrough flags
+  // below. Unlike card, text's background/border stay genuinely optional
+  // (null means "just text, no box"), so borderWidth isn't forced to a
+  // nonzero default the way card's is.
+  String? textBg = block.backgroundColor;
+  String? textFg = block.textColor;
+  String? textBorder = block.borderColor;
+  double textBorderWidth = block.borderWidth;
+  double textFontSize = block.fontSize ?? 16;
+  String textHorizontalAlign = block.horizontalAlign ?? 'left';
+  bool textBold = block.bold;
+  bool textItalic = block.italic;
+  bool textUnderline = block.underline;
+  bool textStrikethrough = block.strikethrough;
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -98,7 +114,8 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                               block.type == SlideBlockType.paragraph ||
                               block.type == SlideBlockType.bulletList ||
                               block.type == SlideBlockType.svg ||
-                              block.type == SlideBlockType.card
+                              block.type == SlideBlockType.card ||
+                              block.type == SlideBlockType.text
                           ? 6
                           : 2,
                   decoration: InputDecoration(
@@ -112,7 +129,9 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                                     ? 'Image URL'
                                     : block.type == SlideBlockType.banner
                                         ? 'Banner Title'
-                                        : 'Content',
+                                        : block.type == SlideBlockType.text
+                                            ? 'Text Content'
+                                            : 'Content',
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -355,6 +374,114 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                       setDialogState(() => layoutVerticalAlign = sel.first),
                 ),
               ],
+              if (block.type == SlideBlockType.text) ...[
+                const SizedBox(height: 16),
+                const Divider(),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Text Style',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SlideColorPickerField(
+                  label: 'Text Color',
+                  initialHex: textFg,
+                  onChanged: (val) => textFg = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Background (optional)',
+                  initialHex: textBg,
+                  onChanged: (val) => textBg = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Outline (optional)',
+                  initialHex: textBorder,
+                  onChanged: (val) => textBorder = val,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Text('Outline Width', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: textBorderWidth.clamp(0, 6),
+                        min: 0,
+                        max: 6,
+                        divisions: 12,
+                        label: textBorderWidth.toStringAsFixed(1),
+                        onChanged: (val) =>
+                            setDialogState(() => textBorderWidth = val),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Font Size', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: textFontSize.clamp(10, 48),
+                        min: 10,
+                        max: 48,
+                        divisions: 38,
+                        label: textFontSize.toStringAsFixed(0),
+                        onChanged: (val) =>
+                            setDialogState(() => textFontSize = val),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Text('Horizontal Alignment',
+                    style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'left', label: Text('Left')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'right', label: Text('Right')),
+                    ButtonSegment(value: 'justify', label: Text('Justify')),
+                  ],
+                  selected: {textHorizontalAlign},
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => textHorizontalAlign = sel.first),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    FilterChip(
+                      label: const Text('Bold'),
+                      selected: textBold,
+                      onSelected: (val) =>
+                          setDialogState(() => textBold = val),
+                    ),
+                    FilterChip(
+                      label: const Text('Italic'),
+                      selected: textItalic,
+                      onSelected: (val) =>
+                          setDialogState(() => textItalic = val),
+                    ),
+                    FilterChip(
+                      label: const Text('Underline'),
+                      selected: textUnderline,
+                      onSelected: (val) =>
+                          setDialogState(() => textUnderline = val),
+                    ),
+                    FilterChip(
+                      label: const Text('Strikethrough'),
+                      selected: textStrikethrough,
+                      onSelected: (val) =>
+                          setDialogState(() => textStrikethrough = val),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -379,31 +506,42 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     ? bannerBg
                     : block.type == SlideBlockType.card
                         ? cardBg
-                        : null,
+                        : block.type == SlideBlockType.text
+                            ? textBg
+                            : null,
                 clearBackgroundColor:
                     (block.type == SlideBlockType.banner && bannerBg == null) ||
-                        (block.type == SlideBlockType.card && cardBg == null),
+                        (block.type == SlideBlockType.card && cardBg == null) ||
+                        (block.type == SlideBlockType.text && textBg == null),
                 textColor: block.type == SlideBlockType.banner
                     ? bannerText
                     : block.type == SlideBlockType.card
                         ? cardText
-                        : null,
+                        : block.type == SlideBlockType.text
+                            ? textFg
+                            : null,
                 clearTextColor: (block.type == SlideBlockType.banner &&
                         bannerText == null) ||
-                    (block.type == SlideBlockType.card && cardText == null),
+                    (block.type == SlideBlockType.card && cardText == null) ||
+                    (block.type == SlideBlockType.text && textFg == null),
                 borderColor: block.type == SlideBlockType.banner
                     ? bannerBorder
                     : block.type == SlideBlockType.card
                         ? cardBorder
-                        : null,
+                        : block.type == SlideBlockType.text
+                            ? textBorder
+                            : null,
                 clearBorderColor: (block.type == SlideBlockType.banner &&
                         bannerBorder == null) ||
-                    (block.type == SlideBlockType.card && cardBorder == null),
+                    (block.type == SlideBlockType.card && cardBorder == null) ||
+                    (block.type == SlideBlockType.text && textBorder == null),
                 borderWidth: block.type == SlideBlockType.banner
                     ? bannerBorderWidth
                     : block.type == SlideBlockType.card
                         ? cardBorderWidth
-                        : null,
+                        : block.type == SlideBlockType.text
+                            ? textBorderWidth
+                            : null,
                 padding: block.type == SlideBlockType.banner
                     ? layoutPadding
                     : null,
@@ -412,12 +550,23 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     : null,
                 fontSize: block.type == SlideBlockType.banner
                     ? layoutFontSize
-                    : null,
+                    : block.type == SlideBlockType.text
+                        ? textFontSize
+                        : null,
                 horizontalAlign: block.type == SlideBlockType.banner
                     ? layoutHorizontalAlign
-                    : null,
+                    : block.type == SlideBlockType.text
+                        ? textHorizontalAlign
+                        : null,
                 verticalAlign: block.type == SlideBlockType.banner
                     ? layoutVerticalAlign
+                    : null,
+                bold: block.type == SlideBlockType.text ? textBold : null,
+                italic: block.type == SlideBlockType.text ? textItalic : null,
+                underline:
+                    block.type == SlideBlockType.text ? textUnderline : null,
+                strikethrough: block.type == SlideBlockType.text
+                    ? textStrikethrough
                     : null,
               );
               Navigator.pop(ctx, updated);

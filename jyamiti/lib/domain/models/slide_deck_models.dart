@@ -15,6 +15,7 @@ enum SlideBlockType {
   card,
   columns,
   banner,
+  text,
 }
 
 class SlideBlock {
@@ -48,6 +49,18 @@ class SlideBlock {
   final String? verticalAlign; // 'top' | 'center' | 'bottom'
   final double? minHeight; // lets verticalAlign do something beyond a tight fit
 
+  // Text formatting flags -- currently only exposed via the `text` block
+  // type's own Text Style section (see slide_block_editor_dialog.dart and
+  // SlideBlockRenderer._buildTextBlock), but kept on SlideBlock generally
+  // like the layout knobs above rather than text-specific. Plain bools
+  // (not nullable) since "unset" and "false" mean the same thing here --
+  // no separate tri-state needed the way color fields need null to mean
+  // "inherit default" rather than "no color".
+  final bool bold;
+  final bool italic;
+  final bool underline;
+  final bool strikethrough;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -64,6 +77,10 @@ class SlideBlock {
     this.horizontalAlign,
     this.verticalAlign,
     this.minHeight,
+    this.bold = false,
+    this.italic = false,
+    this.underline = false,
+    this.strikethrough = false,
   });
 
   SlideBlock copyWith({
@@ -93,6 +110,10 @@ class SlideBlock {
     bool clearVerticalAlign = false,
     double? minHeight,
     bool clearMinHeight = false,
+    bool? bold,
+    bool? italic,
+    bool? underline,
+    bool? strikethrough,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -118,6 +139,10 @@ class SlideBlock {
       verticalAlign:
           clearVerticalAlign ? null : (verticalAlign ?? this.verticalAlign),
       minHeight: clearMinHeight ? null : (minHeight ?? this.minHeight),
+      bold: bold ?? this.bold,
+      italic: italic ?? this.italic,
+      underline: underline ?? this.underline,
+      strikethrough: strikethrough ?? this.strikethrough,
     );
   }
 
@@ -138,6 +163,10 @@ class SlideBlock {
       'horizontalAlign': horizontalAlign,
       'verticalAlign': verticalAlign,
       'minHeight': minHeight,
+      'bold': bold,
+      'italic': italic,
+      'underline': underline,
+      'strikethrough': strikethrough,
     };
   }
 
@@ -162,6 +191,10 @@ class SlideBlock {
       horizontalAlign: map['horizontalAlign'],
       verticalAlign: map['verticalAlign'],
       minHeight: (map['minHeight'] as num?)?.toDouble(),
+      bold: map['bold'] == true,
+      italic: map['italic'] == true,
+      underline: map['underline'] == true,
+      strikethrough: map['strikethrough'] == true,
     );
   }
 
@@ -231,17 +264,6 @@ class SlideItem {
   final String? backgroundColor2; // gradient's second stop
   final String? backgroundImageUrl;
 
-  // Where the slide's whole content column (header badge + blocks + quiz,
-  // as one unit) sits within the available vertical space -- 'top' (the
-  // default, existing behavior: content starts right below the header
-  // like a normal scrollable document) | 'center' | 'bottom'. This is
-  // what actually makes "a banner centered on an otherwise-blank slide"
-  // possible: a block's OWN horizontalAlign/verticalAlign (see
-  // SlideBlock) only position that block's content within its own box --
-  // they say nothing about where the block sits on the slide as a whole,
-  // which is a slide-level layout question, not a block-level one.
-  final String contentVerticalAlign;
-
   SlideItem({
     required this.id,
     required this.slideIndex,
@@ -254,7 +276,6 @@ class SlideItem {
     this.backgroundColor,
     this.backgroundColor2,
     this.backgroundImageUrl,
-    this.contentVerticalAlign = 'top',
   });
 
   SlideItem copyWith({
@@ -273,7 +294,6 @@ class SlideItem {
     bool clearBackgroundColor2 = false,
     String? backgroundImageUrl,
     bool clearBackgroundImageUrl = false,
-    String? contentVerticalAlign,
   }) {
     return SlideItem(
       id: id ?? this.id,
@@ -293,7 +313,6 @@ class SlideItem {
       backgroundImageUrl: clearBackgroundImageUrl
           ? null
           : (backgroundImageUrl ?? this.backgroundImageUrl),
-      contentVerticalAlign: contentVerticalAlign ?? this.contentVerticalAlign,
     );
   }
 
@@ -310,7 +329,6 @@ class SlideItem {
       'backgroundColor': backgroundColor,
       'backgroundColor2': backgroundColor2,
       'backgroundImageUrl': backgroundImageUrl,
-      'contentVerticalAlign': contentVerticalAlign,
     };
   }
 
@@ -335,7 +353,6 @@ class SlideItem {
       backgroundColor: map['backgroundColor'],
       backgroundColor2: map['backgroundColor2'],
       backgroundImageUrl: map['backgroundImageUrl'],
-      contentVerticalAlign: map['contentVerticalAlign'] ?? 'top',
     );
   }
 

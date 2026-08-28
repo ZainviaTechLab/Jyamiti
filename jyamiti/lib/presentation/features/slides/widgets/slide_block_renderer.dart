@@ -35,16 +35,18 @@ class SlideBlockRenderer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Banner and card both fully own their own background/text/outline
-    // rendering already (banner: its whole layout, see
+    // Banner, card, and text all fully own their own background/text/
+    // outline rendering already (banner: its whole layout, see
     // _buildBannerBlock's doc comment; card: _buildCardBlock/
-    // _buildSingleCard's own decoration, reading these exact same
-    // fields) -- routing either through the generic wrapper below too
-    // would double them up: their own colored/bordered box, wrapped in
-    // a second outer box using the identical color/border, since both
-    // read directly from block.backgroundColor/textColor/borderColor.
+    // _buildSingleCard's own decoration; text: _buildTextBlock's own
+    // decoration) -- routing any of them through the generic wrapper
+    // below too would double them up: their own colored/bordered box,
+    // wrapped in a second outer box using the identical color/border,
+    // since all three read directly from block.backgroundColor/
+    // textColor/borderColor.
     if (block.type == SlideBlockType.banner) return _buildBannerBlock(context);
     if (block.type == SlideBlockType.card) return _buildCardBlock(context);
+    if (block.type == SlideBlockType.text) return _buildTextBlock(context);
 
     final Widget content = _buildContent(context);
     final Color? bg = parseHexColor(block.backgroundColor);
@@ -106,6 +108,10 @@ class SlideBlockRenderer extends StatelessWidget {
         // exhaustive without a `default` swallowing a real future
         // omission for any other type.
         return _buildBannerBlock(context);
+      case SlideBlockType.text:
+        // Never actually reached -- build() special-cases text before
+        // this switch runs, same reason as banner/card above.
+        return _buildTextBlock(context);
     }
   }
 
@@ -1199,6 +1205,74 @@ class SlideBlockRenderer extends StatelessWidget {
           color: textColor,
         ),
       ),
+    );
+  }
+
+  /// A freeform styled line/paragraph of text -- unlike banner (always a
+  /// centered colored bar) or card (always boxed with a border), `text`
+  /// has no fixed shape of its own: background/border are optional (null
+  /// means "just text, no box"), and bold/italic/underline/strikethrough
+  /// combine freely via TextDecoration.combine. Reuses the same
+  /// backgroundColor/textColor/borderColor/borderWidth/fontSize/
+  /// horizontalAlign fields banner and card already read -- see this
+  /// widget's `build()` for why text is excluded from the generic
+  /// wrapper despite reading those same fields itself.
+  Widget _buildTextBlock(BuildContext context) {
+    final Color? bg = parseHexColor(block.backgroundColor);
+    final Color? border = parseHexColor(block.borderColor);
+    final Color textColor =
+        _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155));
+    final double fontSize = block.fontSize ?? 15.5;
+
+    final TextAlign textAlign = switch (block.horizontalAlign) {
+      'center' => TextAlign.center,
+      'right' => TextAlign.right,
+      'justify' => TextAlign.justify,
+      _ => TextAlign.left,
+    };
+
+    final decorations = <TextDecoration>[
+      if (block.underline) TextDecoration.underline,
+      if (block.strikethrough) TextDecoration.lineThrough,
+    ];
+
+    final text = Text(
+      block.content,
+      textAlign: textAlign,
+      style: TextStyle(
+        fontSize: fontSize,
+        height: 1.5,
+        color: textColor,
+        fontWeight: block.bold ? FontWeight.w700 : FontWeight.w400,
+        fontStyle: block.italic ? FontStyle.italic : FontStyle.normal,
+        decoration: decorations.isEmpty
+            ? TextDecoration.none
+            : TextDecoration.combine(decorations),
+      ),
+    );
+
+    if (bg == null && border == null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12.0),
+        child: text,
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12.0),
+      padding: const EdgeInsets.all(14.0),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: border != null
+            ? Border.all(
+                color: border,
+                width: block.borderWidth > 0 ? block.borderWidth : 1.5,
+              )
+            : null,
+      ),
+      child: text,
     );
   }
 }

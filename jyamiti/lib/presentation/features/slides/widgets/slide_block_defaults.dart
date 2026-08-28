@@ -36,6 +36,8 @@ IconData iconForSlideBlockType(SlideBlockType type) {
       return Icons.view_column_rounded;
     case SlideBlockType.banner:
       return Icons.view_agenda_rounded;
+    case SlideBlockType.text:
+      return Icons.format_color_text_rounded;
   }
 }
 
@@ -140,5 +142,11 @@ SlideBlock applyBannerDefaults(SlideBlock block) {
       );
     case SlideBlockType.banner:
       return (content: 'New Banner Section Title', extra: null);
+    case SlideBlockType.text:
+      return (
+        content: 'Styled text -- color, size, alignment and formatting '
+            'are all adjustable in Text Style below.',
+        extra: null,
+      );
   }
 }

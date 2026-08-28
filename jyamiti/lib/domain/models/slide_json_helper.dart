@@ -269,6 +269,10 @@ class SlideJsonHelper {
     final horizontalAlign = map['horizontalAlign']?.toString();
     final verticalAlign = map['verticalAlign']?.toString();
     final minHeight = (map['minHeight'] as num?)?.toDouble();
+    final bold = map['bold'] == true;
+    final italic = map['italic'] == true;
+    final underline = map['underline'] == true;
+    final strikethrough = map['strikethrough'] == true;
 
     return SlideBlock(
       id: blockId,
@@ -286,6 +290,10 @@ class SlideJsonHelper {
       horizontalAlign: horizontalAlign,
       verticalAlign: verticalAlign,
       minHeight: minHeight,
+      bold: bold,
+      italic: italic,
+      underline: underline,
+      strikethrough: strikethrough,
     );
   }
 
@@ -360,8 +368,12 @@ class SlideJsonHelper {
       case 'section_banner':
       case 'divider_banner':
         return SlideBlockType.banner;
-      case 'paragraph':
       case 'text':
+      case 'styledtext':
+      case 'freetext':
+      case 'richtext':
+        return SlideBlockType.text;
+      case 'paragraph':
       case 'body':
       default:
         return SlideBlockType.paragraph;
@@ -489,6 +501,18 @@ class SlideJsonHelper {
           {
             "type": "paragraph",
             "content": "In mathematics, the Pythagorean theorem is a fundamental relation in Euclidean geometry among the three sides of a right triangle -- written inline as \$a^2 + b^2 = c^2\$ for quick reference."
+          },
+          {
+            "type": "text",
+            "content": "Highlight: the theorem only holds for RIGHT triangles.",
+            "textColor": "FFFBBF24",
+            "backgroundColor": "331E293B",
+            "borderColor": "FFFBBF24",
+            "borderWidth": 1.5,
+            "fontSize": 17.0,
+            "horizontalAlign": "center",
+            "bold": true,
+            "underline": true
           },
           {
             "type": "math",
@@ -628,6 +652,14 @@ class SlideJsonHelper {
               "content": "Every point in the plane is represented by an ordered pair of real numbers (x, y)."
             },
             {
+              "type": "text",
+              "content": "Distance is always non-negative -- it's the magnitude of displacement.",
+              "textColor": "FF38BDF8",
+              "fontSize": 16.0,
+              "horizontalAlign": "left",
+              "italic": true
+            },
+            {
               "type": "math",
               "content": "d = \\sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}"
             },
@@ -761,6 +793,15 @@ class SlideJsonHelper {
               {
                 "type": "paragraph",
                 "content": "Matter exhibits wave-like properties with a wavelength inversely proportional to momentum."
+              },
+              {
+                "type": "text",
+                "content": "Historical note (superseded by later experiments).",
+                "textColor": "FFF87171",
+                "fontSize": 15.0,
+                "horizontalAlign": "right",
+                "italic": true,
+                "strikethrough": true
               },
               {
                 "type": "math",
