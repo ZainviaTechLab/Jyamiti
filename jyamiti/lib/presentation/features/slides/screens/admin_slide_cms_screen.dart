@@ -1,9 +1,12 @@
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../../domain/models/slide_deck_models.dart';
+import '../../../../domain/models/slide_json_helper.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../../../services/slide_cache_service.dart';
 import '../widgets/slide_block_renderer.dart';
+import '../widgets/slide_json_import_dialog.dart';
 import 'student_slide_viewer_screen.dart';
 
 class AdminSlideCmsScreen extends StatefulWidget {
@@ -80,6 +83,22 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     super.dispose();
   }
 
+  void _reindexSlides() {
+    for (int i = 0; i < _slides.length; i++) {
+      _slides[i] = SlideItem(
+        id: _slides[i].id.isNotEmpty
+            ? _slides[i].id
+            : 'slide_${DateTime.now().millisecondsSinceEpoch}_$i',
+        slideIndex: i,
+        title: _slides[i].title,
+        blocks: _slides[i].blocks,
+        theme: _slides[i].theme,
+        quiz: _slides[i].quiz,
+        enableWhiteboard: _slides[i].enableWhiteboard,
+      );
+    }
+  }
+
   void _addNewSlide() {
     setState(() {
       final newIndex = _slides.length;
@@ -121,18 +140,154 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
       if (_activeSlideIndex >= _slides.length) {
         _activeSlideIndex = _slides.length - 1;
       }
-      for (int i = 0; i < _slides.length; i++) {
-        _slides[i] = SlideItem(
-          id: _slides[i].id,
-          slideIndex: i,
-          title: _slides[i].title,
-          blocks: _slides[i].blocks,
-          theme: _slides[i].theme,
-          quiz: _slides[i].quiz,
-          enableWhiteboard: _slides[i].enableWhiteboard,
-        );
+      _reindexSlides();
+    });
+  }
+
+  Future<void> _importFromJson() async {
+    final result = await SlideJsonImportDialog.show(
+      context: context,
+      currentSlideCount: _slides.length,
+      activeSlideIndex: _activeSlideIndex,
+    );
+
+    if (result == null || result.slides.isEmpty) return;
+
+    setState(() {
+      if (result.updateDeckMetadata) {
+        if (result.deckTitle != null && result.deckTitle!.trim().isNotEmpty) {
+          _titleController.text = result.deckTitle!.trim();
+        }
+        if (result.deckDescription != null &&
+            result.deckDescription!.trim().isNotEmpty) {
+          _descController.text = result.deckDescription!.trim();
+        }
+        if (result.courseName != null && result.courseName!.trim().isNotEmpty) {
+          _courseController.text = result.courseName!.trim();
+        }
+      }
+
+      switch (result.placement) {
+        case SlideImportPlacement.appendToEnd:
+          final newIdx = _slides.length;
+          _slides.addAll(result.slides);
+          _reindexSlides();
+          _activeSlideIndex = newIdx.clamp(0, _slides.length - 1);
+          break;
+
+        case SlideImportPlacement.insertAfterActive:
+          final insertIdx = (_activeSlideIndex + 1).clamp(0, _slides.length);
+          _slides.insertAll(insertIdx, result.slides);
+          _reindexSlides();
+          _activeSlideIndex = insertIdx.clamp(0, _slides.length - 1);
+          break;
+
+        case SlideImportPlacement.replaceActive:
+          if (_slides.isNotEmpty) {
+            _slides.removeAt(_activeSlideIndex);
+            _slides.insertAll(_activeSlideIndex, result.slides);
+          } else {
+            _slides.addAll(result.slides);
+          }
+          _reindexSlides();
+          _activeSlideIndex = _activeSlideIndex.clamp(0, _slides.length - 1);
+          break;
+
+        case SlideImportPlacement.replaceAll:
+          _slides = List<SlideItem>.from(result.slides);
+          _reindexSlides();
+          _activeSlideIndex = 0;
+          break;
       }
     });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Successfully imported ${result.slides.length} slide(s)!',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF10B981),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _exportCurrentSlideJson() async {
+    if (_slides.isEmpty || _activeSlideIndex >= _slides.length) return;
+    final slide = _slides[_activeSlideIndex];
+    final jsonStr = SlideJsonHelper.exportSlideJson(slide);
+    await Clipboard.setData(ClipboardData(text: jsonStr));
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.copy_rounded, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Slide "${slide.title}" JSON copied to clipboard!',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF6366F1),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _exportFullDeckJson() async {
+    final currentDeck = SlideDeck(
+      id:
+          widget.initialDeck?.id ??
+          'deck_${DateTime.now().millisecondsSinceEpoch}',
+      courseId: widget.initialDeck?.courseId ?? 'course_101',
+      courseName: _courseController.text.trim(),
+      title: _titleController.text.trim(),
+      description: _descController.text.trim(),
+      slides: _slides,
+      createdAt: widget.initialDeck?.createdAt ?? DateTime.now(),
+    );
+
+    final jsonStr = SlideJsonHelper.exportDeckJson(currentDeck);
+    await Clipboard.setData(ClipboardData(text: jsonStr));
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.data_object_rounded, color: Colors.white, size: 18),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Full Course Slide Deck JSON copied to clipboard!',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Color(0xFF0EA5E9),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> _saveDeck() async {
@@ -206,6 +361,10 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
       case SlideBlockType.math:
         defaultContent = r'a^2 + b^2 = c^2';
         break;
+      case SlideBlockType.svg:
+        defaultContent =
+            "<svg viewBox='0 0 400 200' xmlns='http://www.w3.org/2000/svg'>\n  <rect width='400' height='200' fill='#0b2240' rx='12'/>\n  <circle cx='200' cy='100' r='50' fill='#6366f1'/>\n  <text x='200' y='105' fill='#ffffff' font-size='16' text-anchor='middle' font-weight='bold'>SVG Diagram</text>\n</svg>";
+        break;
     }
 
     setState(() {
@@ -250,14 +409,62 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                 maxLines:
                     block.type == SlideBlockType.code ||
                         block.type == SlideBlockType.paragraph ||
-                        block.type == SlideBlockType.bulletList
+                        block.type == SlideBlockType.bulletList ||
+                        block.type == SlideBlockType.svg
                     ? 6
                     : 2,
-                decoration: const InputDecoration(
-                  labelText: 'Content',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: block.type == SlideBlockType.svg
+                      ? 'SVG XML Code'
+                      : 'Content',
+                  border: const OutlineInputBorder(),
                 ),
               ),
+              if (block.type == SlideBlockType.svg) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: [
+                    'full',
+                    'original',
+                    'boxed',
+                    'compact',
+                    'small',
+                  ].contains(extraCtrl.text.toLowerCase().trim())
+                      ? extraCtrl.text.toLowerCase().trim()
+                      : 'full',
+                  decoration: const InputDecoration(
+                    labelText: 'Display Width Mode',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'full',
+                      child: Text('Full Width (Widescreen 16:9 / Edge-to-Edge)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'original',
+                      child: Text('Original SVG Size (viewBox dimensions)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'boxed',
+                      child: Text('Boxed Card (85% Width Frame)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'compact',
+                      child: Text('Compact (75% Width)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'small',
+                      child: Text('Small (50% Width)'),
+                    ),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      extraCtrl.text = val;
+                    }
+                  },
+                ),
+              ],
               if (block.type == SlideBlockType.code ||
                   block.type == SlideBlockType.callout) ...[
                 const SizedBox(height: 12),
@@ -470,6 +677,61 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
+          OutlinedButton.icon(
+            onPressed: _importFromJson,
+            icon: const Icon(Icons.file_download_rounded, size: 16),
+            label: const Text('Import JSON', style: TextStyle(fontSize: 13)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor:
+                  isDark ? const Color(0xFF818CF8) : const Color(0xFF6366F1),
+              side: BorderSide(
+                color: isDark
+                    ? const Color(0xFF818CF8).withOpacity(0.5)
+                    : const Color(0xFF6366F1),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+          ),
+          const SizedBox(width: 6),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.ios_share_rounded, size: 20),
+            tooltip: 'Export & Share JSON',
+            onSelected: (val) {
+              if (val == 'export_slide') _exportCurrentSlideJson();
+              if (val == 'export_deck') _exportFullDeckJson();
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'export_slide',
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.content_copy_rounded,
+                      size: 16,
+                      color: Color(0xFF6366F1),
+                    ),
+                    SizedBox(width: 8),
+                    Text('Copy Active Slide JSON'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'export_deck',
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.data_object_rounded,
+                      size: 16,
+                      color: Color(0xFF0EA5E9),
+                    ),
+                    SizedBox(width: 8),
+                    Text('Copy Full Course Deck JSON'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 4),
           IconButton(
             icon: const Icon(Icons.remove_red_eye_rounded),
             tooltip: 'Live Student Preview',
@@ -491,6 +753,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
               );
             },
           ),
+          const SizedBox(width: 4),
           ElevatedButton.icon(
             onPressed: _isSaving ? null : _saveDeck,
             icon: _isSaving
@@ -510,6 +773,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             ),
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Row(
@@ -559,7 +823,6 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                     vertical: 4.0,
                   ),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
                         'SLIDES (${_slides.length})',
@@ -568,13 +831,24 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                           fontSize: 12,
                         ),
                       ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(
+                          Icons.file_download_outlined,
+                          color: Color(0xFF818CF8),
+                          size: 20,
+                        ),
+                        onPressed: _importFromJson,
+                        tooltip: 'Import Slide(s) from JSON',
+                      ),
                       IconButton(
                         icon: const Icon(
                           Icons.add_circle_outline_rounded,
                           color: Color(0xFF6366F1),
+                          size: 20,
                         ),
                         onPressed: _addNewSlide,
-                        tooltip: 'Add Slide',
+                        tooltip: 'Add Blank Slide',
                       ),
                     ],
                   ),
@@ -702,6 +976,14 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                         },
                       ),
                       const SizedBox(width: 10),
+                      IconButton(
+                        icon: const Icon(
+                          Icons.copy_all_rounded,
+                          color: Color(0xFF818CF8),
+                        ),
+                        tooltip: 'Copy Slide JSON',
+                        onPressed: _exportCurrentSlideJson,
+                      ),
                       IconButton(
                         icon: const Icon(
                           Icons.quiz_outlined,
@@ -844,6 +1126,8 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
         return Icons.image_rounded;
       case SlideBlockType.math:
         return Icons.functions_rounded;
+      case SlideBlockType.svg:
+        return Icons.polyline_rounded;
     }
   }
 }

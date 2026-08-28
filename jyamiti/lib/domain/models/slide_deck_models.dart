@@ -9,6 +9,7 @@ enum SlideBlockType {
   callout,
   imageUrl,
   math,
+  svg,
 }
 
 class SlideBlock {
@@ -37,10 +38,11 @@ class SlideBlock {
   }
 
   factory SlideBlock.fromMap(Map<String, dynamic> map) {
+    final rawType = (map['type'] ?? '').toString().toLowerCase();
     return SlideBlock(
       id: map['id'] ?? '',
       type: SlideBlockType.values.firstWhere(
-        (e) => e.name == map['type'],
+        (e) => e.name.toLowerCase() == rawType,
         orElse: () => SlideBlockType.paragraph,
       ),
       content: map['content'] ?? '',

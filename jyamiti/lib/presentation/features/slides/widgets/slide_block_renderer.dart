@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../../../../domain/models/slide_deck_models.dart';
-import '../../../../providers/theme_provider.dart';
+import 'svg_style_inliner.dart';
 
 class SlideBlockRenderer extends StatelessWidget {
   final SlideBlock block;
@@ -33,6 +34,8 @@ class SlideBlockRenderer extends StatelessWidget {
         return _buildImageBlock(context);
       case SlideBlockType.math:
         return _buildMathBlock(context);
+      case SlideBlockType.svg:
+        return _buildSvgBlock(context);
     }
   }
 
@@ -84,17 +87,181 @@ class SlideBlockRenderer extends StatelessWidget {
   }
 
   Widget _buildParagraph(BuildContext context) {
+    final text = block.content;
+    final mathRegex = RegExp(r'(\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$)');
+
+    if (!mathRegex.hasMatch(text)) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12.0),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: 15.5,
+            height: 1.55,
+            color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+      );
+    }
+
+    final spans = <InlineSpan>[];
+    int lastEnd = 0;
+
+    for (final match in mathRegex.allMatches(text)) {
+      if (match.start > lastEnd) {
+        spans.add(
+          TextSpan(
+            text: text.substring(lastEnd, match.start),
+            style: TextStyle(
+              fontSize: 15.5,
+              height: 1.55,
+              color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        );
+      }
+
+      final matchedStr = match.group(0)!;
+      final isDisplay = matchedStr.startsWith(r'$$');
+      final cleanTex = isDisplay
+          ? matchedStr.substring(2, matchedStr.length - 2).trim()
+          : matchedStr.substring(1, matchedStr.length - 1).trim();
+
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+            child: Math.tex(
+              cleanTex,
+              textStyle: TextStyle(
+                fontSize: 16.5,
+                color: isDark ? const Color(0xFF38BDF8) : const Color(0xFF4338CA),
+                fontWeight: FontWeight.w600,
+              ),
+              onErrorFallback: (_) => Text(
+                matchedStr,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  color: Colors.amber,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      lastEnd = match.end;
+    }
+
+    if (lastEnd < text.length) {
+      spans.add(
+        TextSpan(
+          text: text.substring(lastEnd),
+          style: TextStyle(
+            fontSize: 15.5,
+            height: 1.55,
+            color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
-      child: Text(
-        block.content,
-        style: TextStyle(
-          fontSize: 15.5,
-          height: 1.55,
-          color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
-          fontWeight: FontWeight.w400,
+      child: SelectableText.rich(
+        TextSpan(children: spans),
+      ),
+    );
+  }
+
+  Widget _buildSvgBlock(BuildContext context) {
+    final processedSvg = SvgStyleInliner.process(block.content);
+    final dim = SvgStyleInliner.extractDimensions(processedSvg);
+    final mode = (block.extra ?? 'full').toLowerCase().trim();
+
+    final isOriginal = mode == 'original' ||
+        mode == 'viewbox' ||
+        mode == 'intrinsic' ||
+        mode == 'native';
+    final isBoxed = mode == 'boxed' || mode == 'contained' || mode == 'card';
+    final isCompact = mode == 'compact' || mode == '75%';
+    final isSmall = mode == 'small' || mode == '50%';
+
+    Widget svgCore = ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: AspectRatio(
+        aspectRatio: dim.aspectRatio,
+        child: SvgPicture.string(
+          processedSvg,
+          fit: BoxFit.contain,
+          placeholderBuilder: (ctx) => const Padding(
+            padding: EdgeInsets.all(24.0),
+            child: CircularProgressIndicator(),
+          ),
         ),
       ),
+    );
+
+    if (isBoxed) {
+      svgCore = Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? const Color(0xFF1E3A5F) : const Color(0xFFCBD5E1),
+            width: 1.5,
+          ),
+        ),
+        padding: const EdgeInsets.all(8.0),
+        child: svgCore,
+      );
+    }
+
+    // 1. Original / Native ViewBox dimensions mode
+    if (isOriginal && dim.width != null && dim.height != null) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 12.0),
+        alignment: Alignment.center,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: dim.width!,
+            maxHeight: dim.height!,
+          ),
+          child: svgCore,
+        ),
+      );
+    }
+
+    // 2. Proportional Scaling / Full-Width modes
+    double? widthFactor;
+    if (isSmall) {
+      widthFactor = 0.50;
+    } else if (isCompact) {
+      widthFactor = 0.75;
+    } else if (isBoxed) {
+      widthFactor = 0.85;
+    } else if (mode.endsWith('%')) {
+      final parsed = double.tryParse(mode.replaceAll('%', '').trim());
+      if (parsed != null && parsed > 0 && parsed <= 100) {
+        widthFactor = parsed / 100.0;
+      }
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 12.0),
+      alignment: Alignment.center,
+      child: widthFactor != null
+          ? FractionallySizedBox(
+              widthFactor: widthFactor,
+              child: svgCore,
+            )
+          : svgCore,
     );
   }
 
