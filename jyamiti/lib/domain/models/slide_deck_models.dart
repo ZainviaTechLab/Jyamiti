@@ -69,6 +69,13 @@ class SlideBlock {
   // type.
   final bool fitContent;
 
+  // banner/card/text only: an iOS-style frosted glass panel -- blurs
+  // whatever's behind the box and tints it translucent instead of
+  // painting a flat opaque color, regardless of what backgroundColor
+  // is actually set to (see SlideBlockRenderer's _glassTint). Ignored
+  // for any other block type.
+  final bool glass;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -90,6 +97,7 @@ class SlideBlock {
     this.underline = false,
     this.strikethrough = false,
     this.fitContent = false,
+    this.glass = false,
   });
 
   SlideBlock copyWith({
@@ -124,6 +132,7 @@ class SlideBlock {
     bool? underline,
     bool? strikethrough,
     bool? fitContent,
+    bool? glass,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -154,6 +163,7 @@ class SlideBlock {
       underline: underline ?? this.underline,
       strikethrough: strikethrough ?? this.strikethrough,
       fitContent: fitContent ?? this.fitContent,
+      glass: glass ?? this.glass,
     );
   }
 
@@ -179,6 +189,7 @@ class SlideBlock {
       'underline': underline,
       'strikethrough': strikethrough,
       'fitContent': fitContent,
+      'glass': glass,
     };
   }
 
@@ -208,6 +219,7 @@ class SlideBlock {
       underline: map['underline'] == true,
       strikethrough: map['strikethrough'] == true,
       fitContent: map['fitContent'] == true,
+      glass: map['glass'] == true,
     );
   }
 

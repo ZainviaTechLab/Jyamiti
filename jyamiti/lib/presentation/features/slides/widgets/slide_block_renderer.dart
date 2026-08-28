@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
@@ -31,6 +32,33 @@ class SlideBlockRenderer extends StatelessWidget {
   Color _textColorOr(Color darkDefault, Color lightDefault) {
     return parseHexColor(block.textColor) ??
         (isDark ? darkDefault : lightDefault);
+  }
+
+  /// The translucent fill for a `glass` frosted panel (banner/card/text,
+  /// see each's doc comment) -- deliberately ignores whatever alpha
+  /// [base] already carries and forces a fixed, low opacity instead,
+  /// since a fully-opaque "glass" color would defeat the whole effect.
+  /// Falls back to a neutral white/black tint (picked by [isDark]) when
+  /// no background color was set at all, so turning Glass on by itself
+  /// still produces a visible frosted panel.
+  Color _glassTint(Color? base) {
+    final Color source = base ?? (isDark ? Colors.white : Colors.black);
+    return source.withValues(alpha: isDark ? 0.14 : 0.10);
+  }
+
+  /// Wraps [child] so whatever renders behind it is blurred, completing
+  /// the frosted-glass look together with [_glassTint]'s translucent
+  /// fill. [child] must already be exactly the shape being frosted
+  /// (i.e. its own decoration should use [borderRadius]) since
+  /// BackdropFilter blurs everything within the ClipRRect's bounds.
+  Widget _wrapGlass(Widget child, {required BorderRadius borderRadius}) {
+    return ClipRRect(
+      borderRadius: borderRadius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: child,
+      ),
+    );
   }
 
   @override
@@ -797,6 +825,7 @@ class SlideBlockRenderer extends StatelessWidget {
       bgColorStr: block.backgroundColor,
       textColorStr: block.textColor,
       extra: block.extra,
+      glass: block.glass,
     );
   }
 
@@ -809,13 +838,27 @@ class SlideBlockRenderer extends StatelessWidget {
     String? bgColorStr,
     String? textColorStr,
     String? extra,
+    bool glass = false,
   }) {
-    final Color borderColor = parseHexColor(borderColorStr) ??
-        (isDark ? const Color(0xFF22C55E) : const Color(0xFF16A34A));
-    final Color bgColor = parseHexColor(bgColorStr) ??
-        (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9));
+    final Color? explicitBorder = parseHexColor(borderColorStr);
+    final Color defaultAccent =
+        isDark ? const Color(0xFF22C55E) : const Color(0xFF16A34A);
+    // The box border can go translucent under glass (that's the whole
+    // point), but the title text below reuses this same accent color --
+    // keep a separate, always-opaque version for that so an unset
+    // border under glass doesn't also wash out the title to near
+    // invisibility.
+    final Color borderColor = glass
+        ? (explicitBorder ?? Colors.white.withValues(alpha: 0.28))
+        : (explicitBorder ?? defaultAccent);
+    final Color titleAccent =
+        explicitBorder ?? (glass ? Colors.white : defaultAccent);
+    final Color bgColor = glass
+        ? _glassTint(parseHexColor(bgColorStr))
+        : (parseHexColor(bgColorStr) ??
+            (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9)));
     final Color textColor = parseHexColor(textColorStr) ??
-        (isDark ? const Color(0xFFFFFFFF) : const Color(0xFF0F172A));
+        (isDark || glass ? const Color(0xFFFFFFFF) : const Color(0xFF0F172A));
 
     final mode = (extra ?? 'boxed').toLowerCase().trim();
     double? widthFactor;
@@ -835,18 +878,25 @@ class SlideBlockRenderer extends StatelessWidget {
       widthFactor = 0.85;
     }
 
-    final cardWidget = Container(
+    final BorderRadius cardRadius = BorderRadius.circular(16);
+    Widget cardWidget = Container(
       decoration: BoxDecoration(
         color: bgColor,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: cardRadius,
         border: Border.all(color: borderColor, width: borderWidth),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        // A drop shadow would get clipped hard at the card's own edge
+        // by the ClipRRect glass wrapping needs below, reading as a
+        // stray line rather than a soft shadow -- skip it for glass,
+        // the blur+translucency already reads as "lifted" on its own.
+        boxShadow: glass
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.06),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
       child: Column(
@@ -859,7 +909,7 @@ class SlideBlockRenderer extends StatelessWidget {
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
-                color: borderColor,
+                color: titleAccent,
                 letterSpacing: 0.5,
               ),
             ),
@@ -869,6 +919,7 @@ class SlideBlockRenderer extends StatelessWidget {
         ],
       ),
     );
+    if (glass) cardWidget = _wrapGlass(cardWidget, borderRadius: cardRadius);
 
     return Container(
       width: double.infinity,
@@ -1149,11 +1200,19 @@ class SlideBlockRenderer extends StatelessWidget {
   /// freshly-added banner actually gets): amber background, black text,
   /// 16px padding, 12px vertical margin, 20px font, centered both ways.
   Widget _buildBannerBlock(BuildContext context) {
-    final Color bg = parseHexColor(block.backgroundColor) ??
-        const Color(0xFFF59E0B);
-    final Color? border = parseHexColor(block.borderColor);
-    final Color textColor =
-        parseHexColor(block.textColor) ?? const Color(0xFF000000);
+    final Color? explicitBg = parseHexColor(block.backgroundColor);
+    final Color bg = block.glass
+        ? _glassTint(explicitBg)
+        : (explicitBg ?? const Color(0xFFF59E0B));
+    final Color? explicitBorder = parseHexColor(block.borderColor);
+    final Color? border = block.glass
+        ? (explicitBorder ?? Colors.white.withValues(alpha: 0.28))
+        : explicitBorder;
+    // A flat black default (banner's non-glass default) reads poorly on
+    // a blurred, arbitrary slide background -- glass without an
+    // explicit text color falls back to white instead.
+    final Color textColor = parseHexColor(block.textColor) ??
+        (block.glass ? Colors.white : const Color(0xFF000000));
     final double padding = block.padding ?? 16;
     final double marginV = block.marginVertical ?? 12;
     final double fontSize = block.fontSize ?? 20;
@@ -1178,9 +1237,9 @@ class SlideBlockRenderer extends StatelessWidget {
       (_, _) => Alignment.center,
     };
 
-    return Container(
+    final BorderRadius radius = BorderRadius.circular(14);
+    Widget box = Container(
       width: double.infinity,
-      margin: EdgeInsets.symmetric(vertical: marginV),
       padding: EdgeInsets.all(padding),
       constraints: block.minHeight != null
           ? BoxConstraints(minHeight: block.minHeight!)
@@ -1188,7 +1247,7 @@ class SlideBlockRenderer extends StatelessWidget {
       alignment: boxAlignment,
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: radius,
         border: border != null
             ? Border.all(
                 color: border,
@@ -1206,6 +1265,12 @@ class SlideBlockRenderer extends StatelessWidget {
         ),
       ),
     );
+    if (block.glass) box = _wrapGlass(box, borderRadius: radius);
+
+    return Container(
+      margin: EdgeInsets.symmetric(vertical: marginV),
+      child: box,
+    );
   }
 
   /// A freeform styled line/paragraph of text -- unlike banner (always a
@@ -1218,8 +1283,15 @@ class SlideBlockRenderer extends StatelessWidget {
   /// widget's `build()` for why text is excluded from the generic
   /// wrapper despite reading those same fields itself.
   Widget _buildTextBlock(BuildContext context) {
-    final Color? bg = parseHexColor(block.backgroundColor);
-    final Color? border = parseHexColor(block.borderColor);
+    final Color? explicitBg = parseHexColor(block.backgroundColor);
+    final Color? explicitBorder = parseHexColor(block.borderColor);
+    // Glass implies a box even if the author never touched Background/
+    // Outline -- it's effectively a background choice of its own, so
+    // turning it on alone should still produce a visible frosted panel.
+    final Color? bg = block.glass ? _glassTint(explicitBg) : explicitBg;
+    final Color? border = block.glass
+        ? (explicitBorder ?? Colors.white.withValues(alpha: 0.28))
+        : explicitBorder;
     final Color textColor =
         _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155));
     final double fontSize = block.fontSize ?? 15.5;
@@ -1251,7 +1323,8 @@ class SlideBlockRenderer extends StatelessWidget {
       ),
     );
 
-    final bool boxed = bg != null || border != null;
+    final bool boxed = bg != null || border != null || block.glass;
+    final BorderRadius radius = BorderRadius.circular(14);
 
     // A box that hugs the text's own width, for when the box itself
     // (not just the text inside it) should look like a tag/chip rather
@@ -1264,42 +1337,40 @@ class SlideBlockRenderer extends StatelessWidget {
         'right' => Alignment.centerRight,
         _ => Alignment.centerLeft,
       };
+      Widget box = Container(
+        padding: const EdgeInsets.all(14.0),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: radius,
+          border: border != null
+              ? Border.all(
+                  color: border,
+                  width: block.borderWidth > 0 ? block.borderWidth : 1.5,
+                )
+              : null,
+        ),
+        child: text,
+      );
+      if (block.glass) box = _wrapGlass(box, borderRadius: radius);
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0),
-        child: Align(
-          alignment: boxAlignment,
-          child: Container(
-            padding: const EdgeInsets.all(14.0),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(14),
-              border: border != null
-                  ? Border.all(
-                      color: border,
-                      width: block.borderWidth > 0 ? block.borderWidth : 1.5,
-                    )
-                  : null,
-            ),
-            child: text,
-          ),
-        ),
+        child: Align(alignment: boxAlignment, child: box),
       );
     }
 
-    // Always a full-width box, even when unboxed (no bg/border) -- a
-    // plain Padding here would shrink-wrap to the text's own intrinsic
+    // Always a full-width box, even when unboxed (no bg/border/glass) --
+    // a plain Padding here would shrink-wrap to the text's own intrinsic
     // width, leaving `textAlign` nothing wider than the text itself to
     // align within, so center/right/justify would silently render as
     // left-aligned. width: double.infinity is what actually gives
     // textAlign room to work (same technique _buildBannerBlock uses).
-    return Container(
+    Widget box = Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12.0),
       padding: boxed ? const EdgeInsets.all(14.0) : EdgeInsets.zero,
       decoration: boxed
           ? BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: radius,
               border: border != null
                   ? Border.all(
                       color: border,
@@ -1309,6 +1380,11 @@ class SlideBlockRenderer extends StatelessWidget {
             )
           : null,
       child: text,
+    );
+    if (block.glass) box = _wrapGlass(box, borderRadius: radius);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12.0),
+      child: box,
     );
   }
 }

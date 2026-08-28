@@ -358,6 +358,36 @@ void main() {
       expect(block.strikethrough, isFalse);
     });
 
+    test('parses the glass flag on banner, card, and text blocks', () {
+      const glassJson = '''
+      {
+        "title": "Glass Effect",
+        "blocks": [
+          {"type": "banner", "content": "Frosted banner", "glass": true},
+          {"type": "card", "content": "Frosted card", "glass": true},
+          {"type": "text", "content": "Frosted text", "glass": true}
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(glassJson);
+      expect(result.isSuccess, isTrue);
+      final blocks = result.slides.first.blocks;
+      expect(blocks[0].type, SlideBlockType.banner);
+      expect(blocks[0].glass, isTrue);
+      expect(blocks[1].type, SlideBlockType.card);
+      expect(blocks[1].glass, isTrue);
+      expect(blocks[2].type, SlideBlockType.text);
+      expect(blocks[2].glass, isTrue);
+
+      // Default is false, and unrelated block types simply carry the
+      // field without it meaning anything to their own renderer.
+      final defaultResult = SlideJsonHelper.parseJson(
+        '{"title": "t", "blocks": [{"type": "heading", "content": "H"}]}',
+      );
+      expect(defaultResult.slides.first.blocks.first.glass, isFalse);
+    });
+
     test('"text" JSON type resolves to the text block, not paragraph', () {
       const aliasJson = '''
       {

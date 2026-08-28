@@ -41,6 +41,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? bannerText = block.textColor;
   String? bannerBorder = block.borderColor;
   double bannerBorderWidth = block.borderWidth;
+  bool bannerGlass = block.glass;
 
   // Card's own style fields -- see SlideBlockRenderer._buildCardBlock,
   // which reads these same 4 fields directly (and, notably, defaults
@@ -51,6 +52,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? cardText = block.textColor;
   String? cardBorder = block.borderColor;
   double cardBorderWidth = block.borderWidth > 0 ? block.borderWidth : 2.0;
+  bool cardGlass = block.glass;
 
   // Text's own style fields -- see SlideBlockRenderer._buildTextBlock,
   // which reads these plus the bold/italic/underline/strikethrough flags
@@ -68,6 +70,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   bool textUnderline = block.underline;
   bool textStrikethrough = block.strikethrough;
   bool textFitContent = block.fitContent;
+  bool textGlass = block.glass;
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -221,6 +224,19 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   onChanged: (val) => cardBorder = val,
                 ),
                 const SizedBox(height: 10),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  title: const Text(
+                    'Glass Effect (frosted, iOS-style)',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  value: cardGlass,
+                  onChanged: (val) =>
+                      setDialogState(() => cardGlass = val ?? false),
+                ),
+                const SizedBox(height: 10),
                 Row(
                   children: [
                     const Text('Outline Width', style: TextStyle(fontSize: 13)),
@@ -279,6 +295,19 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   label: 'Outline',
                   initialHex: bannerBorder,
                   onChanged: (val) => bannerBorder = val,
+                ),
+                const SizedBox(height: 10),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  title: const Text(
+                    'Glass Effect (frosted, iOS-style)',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  value: bannerGlass,
+                  onChanged: (val) =>
+                      setDialogState(() => bannerGlass = val ?? false),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -416,6 +445,18 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   value: textFitContent,
                   onChanged: (val) =>
                       setDialogState(() => textFitContent = val ?? false),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  title: const Text(
+                    'Glass Effect (frosted, iOS-style)',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  value: textGlass,
+                  onChanged: (val) =>
+                      setDialogState(() => textGlass = val ?? false),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -584,6 +625,13 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     : null,
                 fitContent:
                     block.type == SlideBlockType.text ? textFitContent : null,
+                glass: block.type == SlideBlockType.banner
+                    ? bannerGlass
+                    : block.type == SlideBlockType.card
+                        ? cardGlass
+                        : block.type == SlideBlockType.text
+                            ? textGlass
+                            : null,
               );
               Navigator.pop(ctx, updated);
             },

@@ -274,6 +274,7 @@ class SlideJsonHelper {
     final underline = map['underline'] == true;
     final strikethrough = map['strikethrough'] == true;
     final fitContent = map['fitContent'] == true;
+    final glass = map['glass'] == true;
 
     return SlideBlock(
       id: blockId,
@@ -296,6 +297,7 @@ class SlideJsonHelper {
       underline: underline,
       strikethrough: strikethrough,
       fitContent: fitContent,
+      glass: glass,
     );
   }
 
