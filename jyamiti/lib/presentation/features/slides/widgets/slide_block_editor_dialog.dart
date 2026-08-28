@@ -1,17 +1,20 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
-import 'slide_color_utils.dart';
 
 /// The block-edit dialog -- content/extra/caption fields per block type,
-/// plus the shared Style section (background/text/outline color +
-/// outline width) that applies to every block type. A standalone
-/// top-level function (not a method on any one screen's State) so it's
-/// reusable from both AdminSlideCmsScreen (editing a block on the active
-/// slide) and ColumnsBlockEditorScreen (editing a block nested inside one
+/// plus (banner only) the Banner Layout section. A standalone top-level
+/// function (not a method on any one screen's State) so it's reusable
+/// from both AdminSlideCmsScreen (editing a block on the active slide)
+/// and ColumnsBlockEditorScreen (editing a block nested inside one
 /// column) -- both just need "edit this one block, get back the edited
 /// version or null if cancelled" and can each decide for themselves where
 /// the result actually gets applied.
+///
+/// There's no UI here for background/text/outline color -- SlideBlock
+/// still carries those fields (banner's own default styling and any
+/// JSON-authored block still uses them), this dialog just doesn't offer
+/// a way to change them anymore.
 Future<SlideBlock?> showSlideBlockEditorDialog(
   BuildContext context,
   SlideBlock block,
@@ -19,11 +22,6 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   final contentCtrl = TextEditingController(text: block.content);
   final extraCtrl = TextEditingController(text: block.extra ?? '');
   final captionCtrl = TextEditingController(text: block.caption ?? '');
-
-  String? styleBg = block.backgroundColor;
-  String? styleText = block.textColor;
-  String? styleBorder = block.borderColor;
-  double styleBorderWidth = block.borderWidth;
 
   // Layout fields -- currently only shown/meaningful for the banner
   // block type (see SlideBlockRenderer._buildBannerBlock), but stored on
@@ -168,50 +166,6 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ),
                 ),
               ],
-              const SizedBox(height: 16),
-              const Divider(),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Style (optional)',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                ),
-              ),
-              const SizedBox(height: 10),
-              SlideColorPickerField(
-                label: 'Background',
-                initialHex: styleBg,
-                onChanged: (val) => styleBg = val,
-              ),
-              const SizedBox(height: 14),
-              SlideColorPickerField(
-                label: 'Text Color',
-                initialHex: styleText,
-                onChanged: (val) => styleText = val,
-              ),
-              const SizedBox(height: 14),
-              SlideColorPickerField(
-                label: 'Outline',
-                initialHex: styleBorder,
-                onChanged: (val) => styleBorder = val,
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  const Text('Outline Width', style: TextStyle(fontSize: 13)),
-                  Expanded(
-                    child: Slider(
-                      value: styleBorderWidth.clamp(0, 6),
-                      min: 0,
-                      max: 6,
-                      divisions: 12,
-                      label: styleBorderWidth.toStringAsFixed(1),
-                      onChanged: (val) =>
-                          setDialogState(() => styleBorderWidth = val),
-                    ),
-                  ),
-                ],
-              ),
               if (block.type == SlideBlockType.banner) ...[
                 const SizedBox(height: 16),
                 const Divider(),
@@ -321,13 +275,6 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                 caption:
                     captionCtrl.text.isNotEmpty ? captionCtrl.text : null,
                 clearCaption: captionCtrl.text.isEmpty,
-                backgroundColor: styleBg,
-                clearBackgroundColor: styleBg == null,
-                textColor: styleText,
-                clearTextColor: styleText == null,
-                borderColor: styleBorder,
-                clearBorderColor: styleBorder == null,
-                borderWidth: styleBorderWidth,
                 padding: block.type == SlideBlockType.banner
                     ? layoutPadding
                     : null,
