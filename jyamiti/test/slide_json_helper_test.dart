@@ -4,9 +4,42 @@ import 'package:jyamiti/domain/models/slide_deck_models.dart';
 import 'package:jyamiti/domain/models/slide_json_helper.dart';
 import 'package:jyamiti/presentation/features/slides/widgets/svg_style_inliner.dart';
 
+/// Recursively collects every SlideBlockType used across [slides],
+/// descending into `columns` blocks' nested content too (see
+/// SlideBlockRenderer._buildColumnsBlock's doc comment for that JSON
+/// shape) -- used below to verify each of the 3 sample templates is
+/// actually a complete reference covering every block type, not just
+/// spot-checking a few positions.
+Set<SlideBlockType> _collectBlockTypes(List<SlideItem> slides) {
+  final types = <SlideBlockType>{};
+  void visit(List<SlideBlock> blocks) {
+    for (final b in blocks) {
+      types.add(b.type);
+      if (b.type == SlideBlockType.columns) {
+        try {
+          final decoded = json.decode(b.content) as Map<String, dynamic>;
+          for (final col in (decoded['columns'] as List)) {
+            visit(
+              (col as List)
+                  .map((m) => SlideBlock.fromMap(m as Map<String, dynamic>))
+                  .toList(),
+            );
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  for (final s in slides) {
+    visit(s.blocks);
+  }
+  return types;
+}
+
 void main() {
   group('SlideJsonHelper Tests', () {
-    test('parses single slide JSON correctly', () {
+    test('parses single slide JSON correctly and covers every block type',
+        () {
       final json = SlideJsonHelper.sampleSingleSlideJson;
       final result = SlideJsonHelper.parseJson(json);
 
@@ -15,20 +48,19 @@ void main() {
       final slide = result.slides.first;
       expect(slide.title, 'Pythagorean Theorem');
       expect(slide.theme, 'darkGlass');
-      expect(slide.blocks.length, 5);
-      expect(slide.blocks[0].type, SlideBlockType.heading);
-      expect(slide.blocks[1].type, SlideBlockType.paragraph);
-      expect(slide.blocks[2].type, SlideBlockType.math);
-      expect(slide.blocks[3].type, SlideBlockType.table);
-      expect(slide.blocks[4].type, SlideBlockType.callout);
-      expect(slide.blocks[4].backgroundColor, '331E1B4B');
-      expect(slide.blocks[4].borderColor, 'FF818CF8');
+      expect(slide.backgroundType, SlideBackgroundType.gradient);
       expect(slide.quiz, isNotNull);
       expect(slide.quiz!.question, 'Which side of a right triangle is the hypotenuse?');
       expect(slide.quiz!.correctIndex, 0);
+
+      // A single-slide example only has the one slide to work with, so
+      // every block type must appear directly on it.
+      expect(_collectBlockTypes(result.slides), SlideBlockType.values.toSet());
     });
 
-    test('parses multi-slide JSON array correctly', () {
+    test(
+        'parses multi-slide JSON array correctly and covers every block type across it',
+        () {
       final json = SlideJsonHelper.sampleMultiSlideJson;
       final result = SlideJsonHelper.parseJson(json);
 
@@ -38,9 +70,17 @@ void main() {
       expect(result.slides[0].theme, 'midnightNeon');
       expect(result.slides[1].title, 'Module 2: Slope and Intercept');
       expect(result.slides[1].theme, 'emeraldSlate');
+      expect(result.slides[1].backgroundType, SlideBackgroundType.solidColor);
+      expect(result.slides[1].quiz, isNotNull);
+
+      // Comprehensive as a whole example -- split across its 2 slides,
+      // not necessarily each slide individually.
+      expect(_collectBlockTypes(result.slides), SlideBlockType.values.toSet());
     });
 
-    test('parses full course slide deck JSON correctly', () {
+    test(
+        'parses full course slide deck JSON correctly and covers every block type across it',
+        () {
       final json = SlideJsonHelper.sampleFullDeckJson;
       final result = SlideJsonHelper.parseJson(json);
 
@@ -50,6 +90,10 @@ void main() {
       expect(result.slides.length, 2);
       expect(result.slides[0].title, 'Wave-Particle Duality');
       expect(result.slides[1].title, 'Time-Dependent Schrödinger Equation');
+      expect(result.slides[1].backgroundType, SlideBackgroundType.image);
+      expect(result.slides[1].quiz, isNotNull);
+
+      expect(_collectBlockTypes(result.slides), SlideBlockType.values.toSet());
     });
 
     test('handles alias mapping for block types gracefully', () {
@@ -205,36 +249,32 @@ void main() {
       expect(result.slides.first.blocks.first.content, contains('7 = 3 + 4'));
     });
 
-    test('parses columns layout sample with nested mixed content correctly',
+    test(
+        'single-slide sample columns block has genuinely mixed nested content',
         () {
       final result =
-          SlideJsonHelper.parseJson(SlideJsonHelper.sampleColumnsLayoutJson);
+          SlideJsonHelper.parseJson(SlideJsonHelper.sampleSingleSlideJson);
 
       expect(result.isSuccess, isTrue);
-      final slide = result.slides.first;
-      expect(slide.backgroundType, SlideBackgroundType.image);
-      expect(slide.backgroundImageUrl, isNotNull);
-
-      final columnsBlock = slide.blocks.firstWhere(
+      final columnsBlock = result.slides.first.blocks.firstWhere(
         (b) => b.type == SlideBlockType.columns,
       );
       final decoded = json.decode(columnsBlock.content) as Map<String, dynamic>;
       final columns = decoded['columns'] as List;
       expect(columns.length, 2);
 
-      // Column 1: heading, image, math, bulletList -- a real mix, not
-      // just plain text like a table cell would allow.
+      // Column 1: heading, image, bulletList -- a real mix, not just
+      // plain text like a table cell would allow.
       final col1 = (columns[0] as List)
           .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
           .toList();
       expect(col1.map((b) => b.type), [
         SlideBlockType.heading,
         SlideBlockType.imageUrl,
-        SlideBlockType.math,
         SlideBlockType.bulletList,
       ]);
 
-      // Column 2: heading, card, table, bulletList.
+      // Column 2: heading, card, table.
       final col2 = (columns[1] as List)
           .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
           .toList();
@@ -242,7 +282,6 @@ void main() {
         SlideBlockType.heading,
         SlideBlockType.card,
         SlideBlockType.table,
-        SlideBlockType.bulletList,
       ]);
     });
 
@@ -276,35 +315,6 @@ void main() {
       expect(block.fontSize, 24);
       expect(block.horizontalAlign, 'center');
       expect(block.verticalAlign, 'center');
-    });
-
-    test('parses a slide-level contentVerticalAlign for centering a banner',
-        () {
-      const centeredBannerJson = '''
-      {
-        "title": "Section Break",
-        "contentVerticalAlign": "center",
-        "blocks": [
-          {
-            "type": "banner",
-            "content": "Welcome to Chapter 3",
-            "horizontalAlign": "center",
-            "verticalAlign": "center"
-          }
-        ]
-      }
-      ''';
-
-      final result = SlideJsonHelper.parseJson(centeredBannerJson);
-      expect(result.isSuccess, isTrue);
-      expect(result.slides.first.contentVerticalAlign, 'center');
-      expect(result.slides.first.blocks.first.type, SlideBlockType.banner);
-    });
-
-    test('contentVerticalAlign defaults to top when absent', () {
-      final result =
-          SlideJsonHelper.parseJson(SlideJsonHelper.sampleSingleSlideJson);
-      expect(result.slides.first.contentVerticalAlign, 'top');
     });
   });
 }

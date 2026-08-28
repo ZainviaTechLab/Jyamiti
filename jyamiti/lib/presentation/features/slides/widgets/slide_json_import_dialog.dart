@@ -357,10 +357,6 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                   value: SlideJsonHelper.sampleFullDeckJson,
                   child: const Text('Full Course Slide Deck'),
                 ),
-                PopupMenuItem(
-                  value: SlideJsonHelper.sampleColumnsLayoutJson,
-                  child: const Text('Multi-Column Layout (Mixed Content)'),
-                ),
               ],
             ),
           ],
