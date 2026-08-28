@@ -748,7 +748,18 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => StudentSlideViewerScreen(deck: tempDeck),
+                  builder: (_) => StudentSlideViewerScreen(
+                    deck: tempDeck,
+                    editable: true,
+                    // Live callback -- the preview screen's own Edit
+                    // Mode (add/reorder/edit/delete blocks directly on
+                    // the styled slide) reports every change back
+                    // immediately, so this screen's block-list view
+                    // reflects it as soon as you return to it, exactly
+                    // as if the edit had been made here directly.
+                    onSlidesChanged: (updated) =>
+                        setState(() => _slides = updated),
+                  ),
                 ),
               );
             },

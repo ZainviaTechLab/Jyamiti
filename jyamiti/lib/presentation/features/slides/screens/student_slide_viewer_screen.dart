@@ -5,6 +5,9 @@ import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../../../services/slide_cache_service.dart';
 import '../../../widgets/writing_pad_widget.dart';
+import '../widgets/columns_block_editor_screen.dart';
+import '../widgets/slide_block_defaults.dart';
+import '../widgets/slide_block_editor_dialog.dart';
 import '../widgets/slide_block_renderer.dart';
 import '../widgets/slide_color_utils.dart';
 
@@ -12,10 +15,35 @@ class StudentSlideViewerScreen extends StatefulWidget {
   final SlideDeck deck;
   final int initialSlideIndex;
 
+  /// Opts this screen into an Edit Mode toggle in the header, letting
+  /// whoever opened it add/reorder/edit/delete blocks directly on the
+  /// exact styled preview a student would see -- instead of only being
+  /// able to do that in the plainer block-list view. Defaults to false
+  /// so every OTHER place this screen is pushed from (real student
+  /// slide viewing, in student_learning_path_screen.dart,
+  /// syllabus_explorer_screen.dart, course_syllabus_screen.dart,
+  /// slide_decks_manager_screen.dart) is completely unaffected --
+  /// AdminSlideCmsScreen's "Live Student Preview" button is currently
+  /// the only caller that passes true. Deliberately scoped to block
+  /// management only (add/reorder/edit/delete blocks on the slide
+  /// currently in view) -- slide-level operations (add/delete a slide,
+  /// background, quiz) still only happen back in the CMS screen.
+  final bool editable;
+
+  /// Called with the full updated slide list after every block add/
+  /// reorder/edit/delete made while [editable] and edit mode is on --
+  /// lets the caller (AdminSlideCmsScreen) keep its own state in sync
+  /// live, while this screen stays open, rather than only handing
+  /// anything back once the user leaves. Ignored when [editable] is
+  /// false.
+  final ValueChanged<List<SlideItem>>? onSlidesChanged;
+
   const StudentSlideViewerScreen({
     super.key,
     required this.deck,
     this.initialSlideIndex = 0,
+    this.editable = false,
+    this.onSlidesChanged,
   });
 
   @override
@@ -27,6 +55,14 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
   late PageController _pageController;
   late int _currentSlideIndex;
   late SlideProgress _progress;
+
+  // Local, mutable working copy of the deck's slides -- only ever
+  // written to when widget.editable (see the block-mutation helpers
+  // below); read everywhere build() previously read widget.deck.slides
+  // directly, so the read-only path (editable: false, the vast
+  // majority of callers) renders identically to before this was added.
+  late List<SlideItem> _slides;
+  bool _editModeOn = false;
 
   // Active time tracking for analytics
   Timer? _timer;
@@ -44,7 +80,82 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
     _currentSlideIndex = widget.initialSlideIndex;
     _pageController = PageController(initialPage: widget.initialSlideIndex);
     _isOfflineActive = widget.deck.isDownloadedOffline;
+    _slides = List<SlideItem>.from(widget.deck.slides);
     _loadProgress();
+  }
+
+  // ---------------------------------------------------------------------
+  // Block management (only ever called when widget.editable) -- same
+  // add/reorder/edit/delete shape as AdminSlideCmsScreen's own handlers
+  // (_addBlockToActiveSlide/_editBlock/reorder/delete), just addressed
+  // by slideIdx here since this screen pages through the whole deck
+  // rather than editing one fixed "active" slide.
+  // ---------------------------------------------------------------------
+
+  void _updateSlide(int slideIdx, SlideItem Function(SlideItem) update) {
+    setState(() {
+      _slides = List<SlideItem>.from(_slides);
+      _slides[slideIdx] = update(_slides[slideIdx]);
+    });
+    widget.onSlidesChanged?.call(_slides);
+  }
+
+  void _addBlock(int slideIdx, SlideBlockType type) {
+    final defaults = defaultBlockContentFor(type);
+    final newBlock = applyBannerDefaults(
+      SlideBlock(
+        id: 'b_${DateTime.now().microsecondsSinceEpoch}',
+        type: type,
+        content: defaults.content,
+        extra: defaults.extra,
+      ),
+    );
+    _updateSlide(
+      slideIdx,
+      (slide) => slide.copyWith(blocks: [...slide.blocks, newBlock]),
+    );
+  }
+
+  Future<void> _editBlockAt(int slideIdx, int blockIdx) async {
+    final block = _slides[slideIdx].blocks[blockIdx];
+
+    final SlideBlock? updated;
+    if (block.type == SlideBlockType.columns) {
+      updated = await Navigator.push<SlideBlock>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ColumnsBlockEditorScreen(block: block),
+        ),
+      );
+    } else {
+      if (!mounted) return;
+      updated = await showSlideBlockEditorDialog(context, block);
+    }
+    if (updated == null || !mounted) return;
+
+    _updateSlide(slideIdx, (slide) {
+      final updatedBlocks = List<SlideBlock>.from(slide.blocks);
+      updatedBlocks[blockIdx] = updated!;
+      return slide.copyWith(blocks: updatedBlocks);
+    });
+  }
+
+  void _deleteBlockAt(int slideIdx, int blockIdx) {
+    _updateSlide(slideIdx, (slide) {
+      final updatedBlocks = List<SlideBlock>.from(slide.blocks)
+        ..removeAt(blockIdx);
+      return slide.copyWith(blocks: updatedBlocks);
+    });
+  }
+
+  void _reorderBlocks(int slideIdx, int oldIndex, int newIndex) {
+    if (newIndex > oldIndex) newIndex -= 1;
+    _updateSlide(slideIdx, (slide) {
+      final updatedBlocks = List<SlideBlock>.from(slide.blocks);
+      final moved = updatedBlocks.removeAt(oldIndex);
+      updatedBlocks.insert(newIndex, moved);
+      return slide.copyWith(blocks: updatedBlocks);
+    });
   }
 
   Future<void> _loadProgress() async {
@@ -241,12 +352,12 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = context.isDark;
-    if (_isLoadingProgress || widget.deck.slides.isEmpty) {
+    if (_isLoadingProgress || _slides.isEmpty) {
       return const Scaffold(body: Center(child: JyamitiLoader()));
     }
 
-    final totalSlides = widget.deck.slides.length;
-    final activeSlide = widget.deck.slides[_currentSlideIndex];
+    final totalSlides = _slides.length;
+    final activeSlide = _slides[_currentSlideIndex];
     final isBookmarked = _progress.bookmarkedSlides.contains(
       _currentSlideIndex,
     );
@@ -282,8 +393,8 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
                       onPageChanged: _onPageChanged,
                       itemCount: totalSlides,
                       itemBuilder: (context, idx) {
-                        final slide = widget.deck.slides[idx];
-                        return _buildSlideContent(context, slide, isDark);
+                        final slide = _slides[idx];
+                        return _buildSlideContent(context, idx, slide, isDark);
                       },
                     ),
                   ),
@@ -444,6 +555,21 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
               });
             },
           ),
+
+          // Edit Mode toggle -- only ever shown when this screen was
+          // opened as an editable preview (see widget.editable's doc
+          // comment); a real student never sees this button at all.
+          if (widget.editable)
+            IconButton(
+              icon: Icon(
+                _editModeOn ? Icons.edit_rounded : Icons.edit_outlined,
+                color: _editModeOn ? const Color(0xFF6366F1) : context.textColor,
+              ),
+              tooltip: _editModeOn
+                  ? 'Exit Edit Mode'
+                  : 'Edit Mode -- add/reorder/edit/delete blocks here',
+              onPressed: () => setState(() => _editModeOn = !_editModeOn),
+            ),
         ],
       ),
     );
@@ -451,95 +577,178 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
 
   Widget _buildSlideContent(
     BuildContext context,
+    int slideIdx,
     SlideItem slide,
     bool isDark,
   ) {
-    final Widget contentColumn = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Slide Header Badge
-        Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 10,
-            vertical: 4,
-          ),
-          decoration: BoxDecoration(
-            color: const Color(0xFF6366F1).withOpacity(0.18),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            'SLIDE ${slide.slideIndex + 1}',
-            style: const TextStyle(
-              color: Color(0xFF818CF8),
-              fontWeight: FontWeight.bold,
-              fontSize: 11,
-              letterSpacing: 1.1,
-            ),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24.0),
+      child: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 860),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Slide Header Badge
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'SLIDE ${slide.slideIndex + 1}',
+                  style: const TextStyle(
+                    color: Color(0xFF818CF8),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Modular Slide Blocks -- the plain read-only mapping
+              // (unchanged from before edit mode existed) unless edit
+              // mode is actually on, in which case each block gets a
+              // reorder handle + edit/delete controls, plus an Add
+              // Block bar underneath, mirroring AdminSlideCmsScreen's
+              // own block-list editor.
+              if (_editModeOn)
+                ..._buildEditableBlocks(context, slideIdx, slide, isDark)
+              else
+                ...slide.blocks.map(
+                  (block) => SlideBlockRenderer(block: block, isDark: isDark),
+                ),
+
+              // Embedded Interactive Quiz Card (If Present)
+              if (slide.quiz != null) ...[
+                const SizedBox(height: 24),
+                _buildEmbeddedQuizCard(
+                  context,
+                  slide.slideIndex,
+                  slide.quiz!,
+                  isDark,
+                ),
+              ],
+            ],
           ),
         ),
-        const SizedBox(height: 12),
-
-        // Modular Slide Blocks
-        ...slide.blocks.map(
-          (block) => SlideBlockRenderer(block: block, isDark: isDark),
-        ),
-
-        // Embedded Interactive Quiz Card (If Present)
-        if (slide.quiz != null) ...[
-          const SizedBox(height: 24),
-          _buildEmbeddedQuizCard(
-            context,
-            slide.slideIndex,
-            slide.quiz!,
-            isDark,
-          ),
-        ],
-      ],
+      ),
     );
+  }
 
-    final Widget constrainedContent = Container(
-      constraints: const BoxConstraints(maxWidth: 860),
-      child: contentColumn,
-    );
-
-    // 'top' (the default -- every existing deck) is the original,
-    // unconstrained-height behavior: content just starts below the
-    // padding like a normal scrollable document. 'center'/'bottom' are
-    // what actually make "a banner centered on an otherwise-blank slide"
-    // possible -- a block's own horizontalAlign/verticalAlign (see
-    // SlideBlock) only position that block's content within its OWN box,
-    // not where the block sits on the slide as a whole. Needs
-    // LayoutBuilder to know the viewport's real height before deciding
-    // how tall to force the content area to be; still scrolls normally
-    // if the content is taller than that (ConstrainedBox's minHeight is
-    // a minimum, not a cap).
-    if (slide.contentVerticalAlign == 'top') {
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Center(child: constrainedContent),
-      );
-    }
-
-    final Alignment align = slide.contentVerticalAlign == 'bottom'
-        ? Alignment.bottomCenter
-        : Alignment.center;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: ConstrainedBox(
-            // -48 accounts for the 24px top+bottom padding above, so the
-            // centering is against the actual visible height, not the
-            // padding-inclusive one.
-            constraints: BoxConstraints(
-              minHeight: (constraints.maxHeight - 48).clamp(0, double.infinity),
+  /// The edit-mode block list: drag-to-reorder (an explicit handle,
+  /// same reasoning as AdminSlideCmsScreen's own list -- each block
+  /// already has edit/delete tap targets a default long-press-anywhere
+  /// handle would fight with), plus an Add Block bar. Returns a list
+  /// (not a single widget) so callers can splice it into a larger
+  /// Column's children via the spread operator, same as the plain
+  /// block-mapping it replaces when edit mode is on.
+  List<Widget> _buildEditableBlocks(
+    BuildContext context,
+    int slideIdx,
+    SlideItem slide,
+    bool isDark,
+  ) {
+    return [
+      ReorderableListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        buildDefaultDragHandles: false,
+        itemCount: slide.blocks.length,
+        onReorder: (oldIndex, newIndex) =>
+            _reorderBlocks(slideIdx, oldIndex, newIndex),
+        itemBuilder: (context, blockIdx) {
+          final block = slide.blocks[blockIdx];
+          return Container(
+            key: ValueKey(block.id),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: const Color(0xFF6366F1).withValues(alpha: 0.4),
+                width: 1.4,
+              ),
+              borderRadius: BorderRadius.circular(14),
             ),
-            child: Align(alignment: align, child: constrainedContent),
-          ),
-        );
-      },
-    );
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    ReorderableDragStartListener(
+                      index: blockIdx,
+                      child: const Padding(
+                        padding: EdgeInsets.only(right: 8.0),
+                        child: Icon(
+                          Icons.drag_indicator_rounded,
+                          size: 18,
+                          color: Color(0xFF94A3B8),
+                        ),
+                      ),
+                    ),
+                    Chip(
+                      label: Text(
+                        block.type.name.toUpperCase(),
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Colors.white,
+                        ),
+                      ),
+                      backgroundColor: const Color(0xFF6366F1),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.edit_rounded, size: 16),
+                      tooltip: 'Edit block',
+                      onPressed: () => _editBlockAt(slideIdx, blockIdx),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.delete_rounded,
+                        size: 16,
+                        color: Colors.red,
+                      ),
+                      tooltip: 'Delete block',
+                      onPressed: () => _deleteBlockAt(slideIdx, blockIdx),
+                    ),
+                  ],
+                ),
+                SlideBlockRenderer(block: block, isDark: isDark),
+              ],
+            ),
+          );
+        },
+      ),
+      const SizedBox(height: 8),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: SlideBlockType.values.map((type) {
+            return Padding(
+              padding: const EdgeInsets.only(right: 6.0),
+              child: ActionChip(
+                avatar: Icon(iconForSlideBlockType(type), size: 14),
+                label: Text(
+                  type.name.toUpperCase(),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                onPressed: () => _addBlock(slideIdx, type),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    ];
   }
 
   Widget _buildEmbeddedQuizCard(
