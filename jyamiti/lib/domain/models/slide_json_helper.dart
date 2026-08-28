@@ -490,11 +490,14 @@ class SlideJsonHelper {
             "content": "Unit 3: Right Triangle Geometry",
             "backgroundColor": "FFF59E0B",
             "textColor": "FF000000",
+            "borderColor": "FF78350F",
+            "borderWidth": 2.0,
             "padding": 20.0,
             "marginVertical": 14.0,
             "fontSize": 24.0,
             "horizontalAlign": "center",
             "verticalAlign": "center",
+            "minHeight": 90.0,
             "glass": true
           },
           {
@@ -651,11 +654,14 @@ class SlideJsonHelper {
               "content": "Module 1: Coordinate Geometry",
               "backgroundColor": "FF0EA5E9",
               "textColor": "FFFFFFFF",
+              "borderColor": "FF075985",
+              "borderWidth": 2.0,
               "padding": 18.0,
               "marginVertical": 12.0,
               "fontSize": 22.0,
               "horizontalAlign": "left",
               "verticalAlign": "center",
+              "minHeight": 80.0,
               "glass": true
             },
             {
@@ -805,11 +811,14 @@ class SlideJsonHelper {
                 "content": "Chapter 4: Wave-Particle Duality",
                 "backgroundColor": "FFA78BFA",
                 "textColor": "FF000000",
+                "borderColor": "FF4C1D95",
+                "borderWidth": 2.0,
                 "padding": 18.0,
                 "marginVertical": 12.0,
                 "fontSize": 22.0,
                 "horizontalAlign": "center",
                 "verticalAlign": "center",
+                "minHeight": 100.0,
                 "glass": true
               },
               {
