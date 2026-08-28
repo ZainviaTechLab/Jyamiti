@@ -409,6 +409,33 @@ void main() {
       expect(block.horizontalAlign, 'center');
     });
 
+    test('parses fontFamily on text blocks', () {
+      const fontJson = '''
+      {
+        "title": "Custom Font",
+        "blocks": [
+          {
+            "type": "text",
+            "content": "Styled in Space Grotesk",
+            "fontFamily": "Space Grotesk"
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(fontJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.text);
+      expect(block.fontFamily, 'Space Grotesk');
+
+      // Unset means "use the theme's default font", not a specific name.
+      final defaultResult = SlideJsonHelper.parseJson(
+        '{"title": "t", "blocks": [{"type": "text", "content": "T"}]}',
+      );
+      expect(defaultResult.slides.first.blocks.first.fontFamily, isNull);
+    });
+
     test('"text" JSON type resolves to the text block, not paragraph', () {
       const aliasJson = '''
       {

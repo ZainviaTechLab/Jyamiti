@@ -72,6 +72,16 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   bool textStrikethrough = block.strikethrough;
   bool textFitContent = block.fitContent;
   bool textGlass = block.glass;
+  // Google Fonts family names GoogleFonts.getFont resolves at render
+  // time (see SlideBlockRenderer._buildTextBlock) -- kept to the same
+  // small curated set already used elsewhere across the app (Outfit
+  // for body text, Space Grotesk for display/headings, Fira Code for
+  // code) rather than exposing the entire Google Fonts catalog.
+  String textFontFamily =
+      ['Outfit', 'Space Grotesk', 'Fira Code', 'Merriweather']
+              .contains(block.fontFamily)
+          ? block.fontFamily!
+          : 'Default';
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -431,6 +441,32 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ),
                 ),
                 const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: textFontFamily,
+                  decoration: const InputDecoration(
+                    labelText: 'Font Family',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'Default', child: Text('Default')),
+                    DropdownMenuItem(value: 'Outfit', child: Text('Outfit')),
+                    DropdownMenuItem(
+                      value: 'Space Grotesk',
+                      child: Text('Space Grotesk'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Fira Code',
+                      child: Text('Fira Code (monospace)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Merriweather',
+                      child: Text('Merriweather (serif)'),
+                    ),
+                  ],
+                  onChanged: (val) => setDialogState(
+                      () => textFontFamily = val ?? 'Default'),
+                ),
+                const SizedBox(height: 14),
                 SlideColorPickerField(
                   label: 'Text Color',
                   initialHex: textFg,
@@ -649,6 +685,12 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                         : block.type == SlideBlockType.text
                             ? textGlass
                             : null,
+                fontFamily: block.type == SlideBlockType.text &&
+                        textFontFamily != 'Default'
+                    ? textFontFamily
+                    : null,
+                clearFontFamily: block.type == SlideBlockType.text &&
+                    textFontFamily == 'Default',
               );
               Navigator.pop(ctx, updated);
             },

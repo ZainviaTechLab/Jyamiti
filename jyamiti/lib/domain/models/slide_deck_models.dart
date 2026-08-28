@@ -76,6 +76,16 @@ class SlideBlock {
   // for any other block type.
   final bool glass;
 
+  // `text` block only: a Google Fonts family name (e.g. "Outfit",
+  // "Space Grotesk", "Fira Code") -- see SlideBlockRenderer._buildTextBlock,
+  // which resolves it via GoogleFonts.getFont. Null means "use the
+  // theme's default font", not "no font" -- the editor's own dropdown
+  // only ever offers names GoogleFonts.getFont can actually resolve,
+  // but a hand-written JSON import could still name a font that
+  // doesn't exist; GoogleFonts.getFont falls back to the default font
+  // silently in that case rather than throwing.
+  final String? fontFamily;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -98,6 +108,7 @@ class SlideBlock {
     this.strikethrough = false,
     this.fitContent = false,
     this.glass = false,
+    this.fontFamily,
   });
 
   SlideBlock copyWith({
@@ -133,6 +144,8 @@ class SlideBlock {
     bool? strikethrough,
     bool? fitContent,
     bool? glass,
+    String? fontFamily,
+    bool clearFontFamily = false,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -164,6 +177,7 @@ class SlideBlock {
       strikethrough: strikethrough ?? this.strikethrough,
       fitContent: fitContent ?? this.fitContent,
       glass: glass ?? this.glass,
+      fontFamily: clearFontFamily ? null : (fontFamily ?? this.fontFamily),
     );
   }
 
@@ -190,6 +204,7 @@ class SlideBlock {
       'strikethrough': strikethrough,
       'fitContent': fitContent,
       'glass': glass,
+      'fontFamily': fontFamily,
     };
   }
 
@@ -220,6 +235,7 @@ class SlideBlock {
       strikethrough: map['strikethrough'] == true,
       fitContent: map['fitContent'] == true,
       glass: map['glass'] == true,
+      fontFamily: map['fontFamily']?.toString(),
     );
   }
 

@@ -275,6 +275,7 @@ class SlideJsonHelper {
     final strikethrough = map['strikethrough'] == true;
     final fitContent = map['fitContent'] == true;
     final glass = map['glass'] == true;
+    final fontFamily = map['fontFamily']?.toString();
 
     return SlideBlock(
       id: blockId,
@@ -298,6 +299,7 @@ class SlideJsonHelper {
       strikethrough: strikethrough,
       fitContent: fitContent,
       glass: glass,
+      fontFamily: fontFamily,
     );
   }
 

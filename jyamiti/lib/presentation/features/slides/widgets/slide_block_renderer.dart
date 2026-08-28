@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../widgets/inline_youtube_player.dart';
@@ -1390,19 +1391,30 @@ class SlideBlockRenderer extends StatelessWidget {
       if (block.strikethrough) TextDecoration.lineThrough,
     ];
 
+    final TextStyle baseStyle = TextStyle(
+      fontSize: fontSize,
+      height: 1.5,
+      color: textColor,
+      fontWeight: block.bold ? FontWeight.w700 : FontWeight.w400,
+      fontStyle: block.italic ? FontStyle.italic : FontStyle.normal,
+      decoration: decorations.isEmpty
+          ? TextDecoration.none
+          : TextDecoration.combine(decorations),
+    );
+    // GoogleFonts.getFont resolves any family name it recognizes and
+    // merges it into baseStyle (keeping color/weight/decoration/etc
+    // intact) -- a name it doesn't recognize just falls back to the
+    // theme's default font rather than throwing, so a hand-written
+    // JSON import with a typo'd/unsupported family degrades quietly
+    // instead of breaking the slide.
+    final TextStyle textStyle = block.fontFamily != null
+        ? GoogleFonts.getFont(block.fontFamily!, textStyle: baseStyle)
+        : baseStyle;
+
     final text = Text(
       block.content,
       textAlign: textAlign,
-      style: TextStyle(
-        fontSize: fontSize,
-        height: 1.5,
-        color: textColor,
-        fontWeight: block.bold ? FontWeight.w700 : FontWeight.w400,
-        fontStyle: block.italic ? FontStyle.italic : FontStyle.normal,
-        decoration: decorations.isEmpty
-            ? TextDecoration.none
-            : TextDecoration.combine(decorations),
-      ),
+      style: textStyle,
     );
 
     final bool boxed = bg != null || border != null || block.glass;
