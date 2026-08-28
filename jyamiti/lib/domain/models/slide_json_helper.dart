@@ -167,6 +167,12 @@ class SlideJsonHelper {
       quiz = _parseQuiz(map['quiz'] as Map<String, dynamic>);
     }
 
+    final backgroundType = SlideBackgroundType.values.firstWhere(
+      (e) => e.name.toLowerCase() ==
+          (map['backgroundType'] ?? '').toString().toLowerCase(),
+      orElse: () => SlideBackgroundType.theme,
+    );
+
     return SlideItem(
       id: slideId,
       slideIndex: fallbackIndex,
@@ -175,6 +181,10 @@ class SlideJsonHelper {
       theme: theme,
       quiz: quiz,
       enableWhiteboard: enableWhiteboard,
+      backgroundType: backgroundType,
+      backgroundColor: map['backgroundColor']?.toString(),
+      backgroundColor2: map['backgroundColor2']?.toString(),
+      backgroundImageUrl: map['backgroundImageUrl']?.toString(),
     );
   }
 
@@ -203,15 +213,44 @@ class SlideJsonHelper {
       type = SlideBlockType.svg;
     }
 
+    // Table content is JSON-encoded {headers, rows} inside `content` (see
+    // SlideBlockRenderer._buildTableBlock's doc comment) -- but a hand-
+    // written import is more likely to put `headers`/`rows` directly at
+    // the block's top level rather than pre-stringify them, so accept
+    // that shape too when `content` itself didn't already resolve to
+    // something usable.
+    String resolvedContent = content;
+    if (type == SlideBlockType.table &&
+        content.isEmpty &&
+        (map['headers'] is List || map['rows'] is List)) {
+      resolvedContent = jsonEncode({
+        'headers': map['headers'] ?? [],
+        'rows': map['rows'] ?? [],
+      });
+    } else if (type == SlideBlockType.video && content.isEmpty) {
+      resolvedContent = map['videoUrl']?.toString() ??
+          map['youtube']?.toString() ??
+          map['videoId']?.toString() ??
+          '';
+    }
+
     final extra = map['extra']?.toString() ?? map['language']?.toString();
     final caption = map['caption']?.toString();
+    final backgroundColor = map['backgroundColor']?.toString();
+    final textColor = map['textColor']?.toString();
+    final borderColor = map['borderColor']?.toString();
+    final borderWidth = (map['borderWidth'] as num?)?.toDouble() ?? 0;
 
     return SlideBlock(
       id: blockId,
       type: type,
-      content: content,
+      content: resolvedContent,
       extra: extra,
       caption: caption,
+      backgroundColor: backgroundColor,
+      textColor: textColor,
+      borderColor: borderColor,
+      borderWidth: borderWidth,
     );
   }
 
@@ -260,6 +299,14 @@ class SlideJsonHelper {
       case 'vector':
       case 'tree':
         return SlideBlockType.svg;
+      case 'table':
+      case 'grid':
+      case 'datatable':
+        return SlideBlockType.table;
+      case 'video':
+      case 'youtube':
+      case 'embed':
+        return SlideBlockType.video;
       case 'paragraph':
       case 'text':
       case 'body':

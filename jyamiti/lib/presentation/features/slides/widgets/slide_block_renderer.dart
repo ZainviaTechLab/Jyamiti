@@ -1,8 +1,12 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import '../../../../domain/models/slide_deck_models.dart';
+import '../../../widgets/inline_youtube_player.dart';
+import 'slide_color_utils.dart';
 import 'svg_style_inliner.dart';
 
 class SlideBlockRenderer extends StatelessWidget {
@@ -15,8 +19,45 @@ class SlideBlockRenderer extends StatelessWidget {
     this.isDark = true,
   });
 
+  /// Resolves a text color for a text-dominant block: `block.textColor`
+  /// when the author set one, otherwise whichever of the two theme
+  /// defaults the block would have used anyway. Every text-heavy _build*
+  /// method below (heading/subheading/paragraph/bulletList/callout) goes
+  /// through this rather than hardcoding `isDark ? a : b` directly, so a
+  /// custom foreground color actually takes effect. Code/math/svg/image/
+  /// table blocks intentionally keep their own fixed color schemes --
+  /// recoloring syntax-highlighted code or a math formula's accent color
+  /// isn't generally what "custom text color" means for those.
+  Color _textColorOr(Color darkDefault, Color lightDefault) {
+    return parseHexColor(block.textColor) ??
+        (isDark ? darkDefault : lightDefault);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final Widget content = _buildContent(context);
+    final Color? bg = parseHexColor(block.backgroundColor);
+    final Color? border = parseHexColor(block.borderColor);
+    if (bg == null && border == null) return content;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6.0),
+      padding: const EdgeInsets.all(14.0),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: border != null
+            ? Border.all(
+                color: border,
+                width: block.borderWidth > 0 ? block.borderWidth : 1.5,
+              )
+            : null,
+      ),
+      child: content,
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     switch (block.type) {
       case SlideBlockType.heading:
         return _buildHeading(context);
@@ -36,10 +77,34 @@ class SlideBlockRenderer extends StatelessWidget {
         return _buildMathBlock(context);
       case SlideBlockType.svg:
         return _buildSvgBlock(context);
+      case SlideBlockType.table:
+        return _buildTableBlock(context);
+      case SlideBlockType.video:
+        return _buildVideoBlock(context);
     }
   }
 
   Widget _buildHeading(BuildContext context) {
+    final Color? custom = parseHexColor(block.textColor);
+    // A custom color overrides the default gradient treatment entirely --
+    // a flat ShaderMask-free Text with that exact color, rather than
+    // tinting the gradient (which would just look muddy).
+    if (custom != null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12.0, top: 8.0),
+        child: Text(
+          block.content,
+          style: TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w800,
+            color: custom,
+            height: 1.25,
+            letterSpacing: -0.5,
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0, top: 8.0),
       child: ShaderMask(
@@ -80,7 +145,7 @@ class SlideBlockRenderer extends StatelessWidget {
         style: TextStyle(
           fontSize: 20,
           fontWeight: FontWeight.w700,
-          color: isDark ? Colors.white : const Color(0xFF1E293B),
+          color: _textColorOr(Colors.white, const Color(0xFF1E293B)),
         ),
       ),
     );
@@ -98,7 +163,7 @@ class SlideBlockRenderer extends StatelessWidget {
           style: TextStyle(
             fontSize: 15.5,
             height: 1.55,
-            color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+            color: _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155)),
             fontWeight: FontWeight.w400,
           ),
         ),
@@ -116,7 +181,7 @@ class SlideBlockRenderer extends StatelessWidget {
             style: TextStyle(
               fontSize: 15.5,
               height: 1.55,
-              color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+              color: _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155)),
               fontWeight: FontWeight.w400,
             ),
           ),
@@ -164,7 +229,7 @@ class SlideBlockRenderer extends StatelessWidget {
           style: TextStyle(
             fontSize: 15.5,
             height: 1.55,
-            color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+            color: _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155)),
             fontWeight: FontWeight.w400,
           ),
         ),
@@ -400,9 +465,8 @@ class SlideBlockRenderer extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 15,
                       height: 1.45,
-                      color: isDark
-                          ? const Color(0xFFE2E8F0)
-                          : const Color(0xFF334155),
+                      color: _textColorOr(
+                          const Color(0xFFE2E8F0), const Color(0xFF334155)),
                     ),
                   ),
                 ),
@@ -459,9 +523,8 @@ class SlideBlockRenderer extends StatelessWidget {
               style: TextStyle(
                 fontSize: 14.5,
                 height: 1.45,
-                color: isDark
-                    ? const Color(0xFFF1F5F9)
-                    : const Color(0xFF1E293B),
+                color: _textColorOr(
+                    const Color(0xFFF1F5F9), const Color(0xFF1E293B)),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -552,6 +615,129 @@ class SlideBlockRenderer extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// `block.content` is a JSON-encoded {"headers": [...], "rows": [[...],
+  /// ...]} object -- consistent with this model's existing convention of
+  /// `content` being a flexible string whose format depends on `type`
+  /// (bulletList newline-joins its items into `content`, table
+  /// JSON-encodes a 2D grid into it, rather than adding a whole new field
+  /// to SlideBlock just for this one type).
+  Widget _buildTableBlock(BuildContext context) {
+    List<String> headers = [];
+    List<List<String>> rows = [];
+    try {
+      final data = json.decode(block.content) as Map<String, dynamic>;
+      headers = (data['headers'] as List? ?? [])
+          .map((e) => e.toString())
+          .toList();
+      rows = (data['rows'] as List? ?? [])
+          .map((r) => (r as List).map((c) => c.toString()).toList())
+          .toList();
+    } catch (_) {
+      // Malformed/empty table data -- render nothing rather than crash.
+    }
+
+    final Color gridColor =
+        isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final Color headerBg =
+        isDark ? const Color(0xFF1E293B) : const Color(0xFFEEF2FF);
+    final Color textColor =
+        _textColorOr(const Color(0xFFE2E8F0), const Color(0xFF334155));
+
+    if (headers.isEmpty && rows.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 10.0),
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          border: Border.all(color: gridColor),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          'Empty table',
+          style: TextStyle(color: textColor, fontStyle: FontStyle.italic),
+        ),
+      );
+    }
+
+    Widget cell(String text, {bool isHeader = false}) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Text(
+            text,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 13.5,
+              fontWeight: isHeader ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        );
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10.0),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: gridColor),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Table(
+          defaultColumnWidth: const IntrinsicColumnWidth(),
+          border: TableBorder(
+            horizontalInside: BorderSide(color: gridColor),
+            verticalInside: BorderSide(color: gridColor),
+          ),
+          children: [
+            if (headers.isNotEmpty)
+              TableRow(
+                decoration: BoxDecoration(color: headerBg),
+                children:
+                    headers.map((h) => cell(h, isHeader: true)).toList(),
+              ),
+            ...rows.map(
+              (r) => TableRow(children: r.map((c) => cell(c)).toList()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// `block.content` is a YouTube URL or bare video id -- reuses the
+  /// app's existing InlineYoutubePlayer (already used elsewhere, e.g. the
+  /// syllabus explorer) rather than embedding a player from scratch.
+  Widget _buildVideoBlock(BuildContext context) {
+    final String raw = block.content.trim();
+    final String videoId =
+        YoutubePlayerController.convertUrlToId(raw) ?? raw;
+
+    if (videoId.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 10.0),
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Text(
+          'No video URL set',
+          style: TextStyle(
+            color: _textColorOr(
+                const Color(0xFF94A3B8), const Color(0xFF64748B)),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 12.0),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16)),
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: InlineYoutubePlayer(videoId: videoId, videoUrl: raw),
       ),
     );
   }

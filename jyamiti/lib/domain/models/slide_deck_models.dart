@@ -10,6 +10,8 @@ enum SlideBlockType {
   imageUrl,
   math,
   svg,
+  table,
+  video,
 }
 
 class SlideBlock {
@@ -19,13 +21,60 @@ class SlideBlock {
   final String? extra; // Language for code, callout type, list items comma separated
   final String? caption;
 
+  // Advanced per-block styling -- all optional, all null by default so
+  // existing decks render exactly as before. Hex strings (no leading '#',
+  // e.g. "6366F1" or 8-digit "FF6366F1" with alpha) rather than Flutter
+  // Color values -- this file deliberately has no Flutter dependency (see
+  // SlideDeck's own doc comments elsewhere); parsing lives in
+  // slide_color_utils.dart at the widget layer instead.
+  final String? backgroundColor;
+  final String? textColor;
+  final String? borderColor;
+  final double borderWidth;
+
   SlideBlock({
     required this.id,
     required this.type,
     required this.content,
     this.extra,
     this.caption,
+    this.backgroundColor,
+    this.textColor,
+    this.borderColor,
+    this.borderWidth = 0,
   });
+
+  SlideBlock copyWith({
+    String? id,
+    SlideBlockType? type,
+    String? content,
+    String? extra,
+    bool clearExtra = false,
+    String? caption,
+    bool clearCaption = false,
+    String? backgroundColor,
+    bool clearBackgroundColor = false,
+    String? textColor,
+    bool clearTextColor = false,
+    String? borderColor,
+    bool clearBorderColor = false,
+    double? borderWidth,
+  }) {
+    return SlideBlock(
+      id: id ?? this.id,
+      type: type ?? this.type,
+      content: content ?? this.content,
+      extra: clearExtra ? null : (extra ?? this.extra),
+      caption: clearCaption ? null : (caption ?? this.caption),
+      backgroundColor: clearBackgroundColor
+          ? null
+          : (backgroundColor ?? this.backgroundColor),
+      textColor: clearTextColor ? null : (textColor ?? this.textColor),
+      borderColor:
+          clearBorderColor ? null : (borderColor ?? this.borderColor),
+      borderWidth: borderWidth ?? this.borderWidth,
+    );
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -34,6 +83,10 @@ class SlideBlock {
       'content': content,
       'extra': extra,
       'caption': caption,
+      'backgroundColor': backgroundColor,
+      'textColor': textColor,
+      'borderColor': borderColor,
+      'borderWidth': borderWidth,
     };
   }
 
@@ -48,6 +101,10 @@ class SlideBlock {
       content: map['content'] ?? '',
       extra: map['extra'],
       caption: map['caption'],
+      backgroundColor: map['backgroundColor'],
+      textColor: map['textColor'],
+      borderColor: map['borderColor'],
+      borderWidth: (map['borderWidth'] as num?)?.toDouble() ?? 0,
     );
   }
 
@@ -92,6 +149,13 @@ class SlideQuiz {
       SlideQuiz.fromMap(json.decode(source));
 }
 
+/// What a slide's background actually is. `theme` (the default) keeps the
+/// existing behavior -- one of the named palettes in `SlideItem.theme`,
+/// applied by whatever's rendering the slide. The other three let a
+/// specific slide override that with its own solid color, two-color
+/// gradient, or background image.
+enum SlideBackgroundType { theme, solidColor, gradient, image }
+
 class SlideItem {
   final String id;
   final int slideIndex;
@@ -101,6 +165,15 @@ class SlideItem {
   final SlideQuiz? quiz;
   final bool enableWhiteboard;
 
+  // Advanced per-slide background -- backgroundType defaults to `theme`
+  // (existing behavior: render via the named `theme` palette above), so
+  // every existing deck keeps rendering exactly as before. The other
+  // fields only matter when backgroundType picks them.
+  final SlideBackgroundType backgroundType;
+  final String? backgroundColor; // solidColor, or gradient's first stop
+  final String? backgroundColor2; // gradient's second stop
+  final String? backgroundImageUrl;
+
   SlideItem({
     required this.id,
     required this.slideIndex,
@@ -109,7 +182,49 @@ class SlideItem {
     this.theme = 'darkGlass',
     this.quiz,
     this.enableWhiteboard = true,
+    this.backgroundType = SlideBackgroundType.theme,
+    this.backgroundColor,
+    this.backgroundColor2,
+    this.backgroundImageUrl,
   });
+
+  SlideItem copyWith({
+    String? id,
+    int? slideIndex,
+    String? title,
+    List<SlideBlock>? blocks,
+    String? theme,
+    SlideQuiz? quiz,
+    bool clearQuiz = false,
+    bool? enableWhiteboard,
+    SlideBackgroundType? backgroundType,
+    String? backgroundColor,
+    bool clearBackgroundColor = false,
+    String? backgroundColor2,
+    bool clearBackgroundColor2 = false,
+    String? backgroundImageUrl,
+    bool clearBackgroundImageUrl = false,
+  }) {
+    return SlideItem(
+      id: id ?? this.id,
+      slideIndex: slideIndex ?? this.slideIndex,
+      title: title ?? this.title,
+      blocks: blocks ?? this.blocks,
+      theme: theme ?? this.theme,
+      quiz: clearQuiz ? null : (quiz ?? this.quiz),
+      enableWhiteboard: enableWhiteboard ?? this.enableWhiteboard,
+      backgroundType: backgroundType ?? this.backgroundType,
+      backgroundColor: clearBackgroundColor
+          ? null
+          : (backgroundColor ?? this.backgroundColor),
+      backgroundColor2: clearBackgroundColor2
+          ? null
+          : (backgroundColor2 ?? this.backgroundColor2),
+      backgroundImageUrl: clearBackgroundImageUrl
+          ? null
+          : (backgroundImageUrl ?? this.backgroundImageUrl),
+    );
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -120,10 +235,15 @@ class SlideItem {
       'theme': theme,
       'quiz': quiz?.toMap(),
       'enableWhiteboard': enableWhiteboard,
+      'backgroundType': backgroundType.name,
+      'backgroundColor': backgroundColor,
+      'backgroundColor2': backgroundColor2,
+      'backgroundImageUrl': backgroundImageUrl,
     };
   }
 
   factory SlideItem.fromMap(Map<String, dynamic> map) {
+    final rawBgType = (map['backgroundType'] ?? '').toString().toLowerCase();
     return SlideItem(
       id: map['id'] ?? '',
       slideIndex: map['slideIndex']?.toInt() ?? 0,
@@ -136,6 +256,13 @@ class SlideItem {
       theme: map['theme'] ?? 'darkGlass',
       quiz: map['quiz'] != null ? SlideQuiz.fromMap(map['quiz']) : null,
       enableWhiteboard: map['enableWhiteboard'] ?? true,
+      backgroundType: SlideBackgroundType.values.firstWhere(
+        (e) => e.name.toLowerCase() == rawBgType,
+        orElse: () => SlideBackgroundType.theme,
+      ),
+      backgroundColor: map['backgroundColor'],
+      backgroundColor2: map['backgroundColor2'],
+      backgroundImageUrl: map['backgroundImageUrl'],
     );
   }
 

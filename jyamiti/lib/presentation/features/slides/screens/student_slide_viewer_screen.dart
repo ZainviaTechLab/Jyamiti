@@ -6,6 +6,7 @@ import '../../../../providers/theme_provider.dart';
 import '../../../../services/slide_cache_service.dart';
 import '../../../widgets/writing_pad_widget.dart';
 import '../widgets/slide_block_renderer.dart';
+import '../widgets/slide_color_utils.dart';
 
 class StudentSlideViewerScreen extends StatefulWidget {
   final SlideDeck deck;
@@ -194,6 +195,49 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
     }
   }
 
+  /// Resolves a slide's actual background: the named-theme decoration
+  /// (existing behavior, and still the default -- `backgroundType ==
+  /// SlideBackgroundType.theme`) unless the slide overrides it with its
+  /// own solid color, gradient, or image (see SlideItem's own doc
+  /// comments). Falls back to the theme decoration if an override field
+  /// that's actually needed is missing (e.g. `image` picked but no URL
+  /// set yet), rather than rendering nothing.
+  BoxDecoration _getSlideDecoration(SlideItem slide, bool isDark) {
+    switch (slide.backgroundType) {
+      case SlideBackgroundType.solidColor:
+        final color = parseHexColor(slide.backgroundColor);
+        if (color != null) return BoxDecoration(color: color);
+        break;
+      case SlideBackgroundType.gradient:
+        final c1 = parseHexColor(slide.backgroundColor);
+        final c2 = parseHexColor(slide.backgroundColor2);
+        if (c1 != null && c2 != null) {
+          return BoxDecoration(
+            gradient: LinearGradient(
+              colors: [c1, c2],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          );
+        }
+        break;
+      case SlideBackgroundType.image:
+        final url = slide.backgroundImageUrl;
+        if (url != null && url.trim().isNotEmpty) {
+          return BoxDecoration(
+            image: DecorationImage(
+              image: NetworkImage(url),
+              fit: BoxFit.cover,
+            ),
+          );
+        }
+        break;
+      case SlideBackgroundType.theme:
+        break;
+    }
+    return _getThemeDecoration(slide.theme, isDark);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = context.isDark;
@@ -232,7 +276,7 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
                 // Slide Content View
                 Expanded(
                   child: Container(
-                    decoration: _getThemeDecoration(activeSlide.theme, isDark),
+                    decoration: _getSlideDecoration(activeSlide, isDark),
                     child: PageView.builder(
                       controller: _pageController,
                       onPageChanged: _onPageChanged,
@@ -418,65 +462,27 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Slide Header Banner Row (SLIDE pill badge on left + Slide Title on right)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 18.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    // SLIDE Badge
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF6366F1).withValues(alpha: 0.22)
-                            : const Color(0xFFEEF2FF),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: isDark
-                              ? const Color(0xFF818CF8).withValues(alpha: 0.35)
-                              : const Color(0xFFC7D2FE),
-                          width: 1.2,
-                        ),
-                      ),
-                      child: Text(
-                        'SLIDE ${slide.slideIndex + 1}',
-                        style: TextStyle(
-                          color: isDark
-                              ? const Color(0xFFA5B4FC)
-                              : const Color(0xFF4F46E5),
-                          fontWeight: FontWeight.w800,
-                          fontSize: 12,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                    ),
-
-                    // Slide Title
-                    if (slide.title.trim().isNotEmpty)
-                      Flexible(
-                        child: Text(
-                          slide.title,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: isDark
-                                ? const Color(0xFFF8FAFC)
-                                : const Color(0xFF0F172A),
-                            letterSpacing: -0.2,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.right,
-                        ),
-                      ),
-                  ],
+              // Slide Header Badge
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'SLIDE ${slide.slideIndex + 1}',
+                  style: const TextStyle(
+                    color: Color(0xFF818CF8),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    letterSpacing: 1.1,
+                  ),
                 ),
               ),
+              const SizedBox(height: 12),
 
               // Modular Slide Blocks
               ...slide.blocks.map(
