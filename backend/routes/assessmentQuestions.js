@@ -104,8 +104,8 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN', 'TUTOR']), uploa
 // POST / - Create a new question
 router.post('/', authenticateToken, requireRole(['ADMIN', 'TUTOR']), async (req, res) => {
   try {
-    const { grade, type, descriptiveText, text, isSvg, questionImage, options, rightOptions, geometryNodes, geometryLinesCount, hideGeometryNodes, correctAnswers, marks, shortAnswerPrefix, shortAnswerSuffix, shortAnswerHint, svgLabels, isClasswork, category, tag } = req.body;
-    
+    const { grade, type, descriptiveText, text, isSvg, questionImage, options, rightOptions, geometryNodes, geometryLinesCount, hideGeometryNodes, correctAnswers, marks, shortAnswerPrefix, shortAnswerSuffix, shortAnswerHint, svgLabels, explanation, explanationSteps, isClasswork, category, tag } = req.body;
+
     if (!grade || !type || !text) {
       return res.status(400).json({ message: 'Grade, type, and text are required fields.' });
     }
@@ -128,6 +128,8 @@ router.post('/', authenticateToken, requireRole(['ADMIN', 'TUTOR']), async (req,
       shortAnswerSuffix: shortAnswerSuffix || '',
       shortAnswerHint: shortAnswerHint || '',
       svgLabels: svgLabels || [],
+      explanation: explanation || '',
+      explanationSteps: explanationSteps || [],
       isClasswork: isClasswork === true || isClasswork === 'true',
       category: category || (isClasswork ? 'classwork' : 'practice'),
       tag: tag || ''
@@ -143,12 +145,14 @@ router.post('/', authenticateToken, requireRole(['ADMIN', 'TUTOR']), async (req,
 // PUT /:id - Edit an existing question
 router.put('/:id', authenticateToken, requireRole(['ADMIN', 'TUTOR']), async (req, res) => {
   try {
-    const { grade, type, descriptiveText, text, isSvg, questionImage, options, rightOptions, geometryNodes, geometryLinesCount, hideGeometryNodes, correctAnswers, marks, shortAnswerPrefix, shortAnswerSuffix, shortAnswerHint, svgLabels, isClasswork, category, tag } = req.body;
+    const { grade, type, descriptiveText, text, isSvg, questionImage, options, rightOptions, geometryNodes, geometryLinesCount, hideGeometryNodes, correctAnswers, marks, shortAnswerPrefix, shortAnswerSuffix, shortAnswerHint, svgLabels, explanation, explanationSteps, isClasswork, category, tag } = req.body;
 
     const question = await AssessmentQuestion.findByIdAndUpdate(
       req.params.id,
-      { 
+      {
         grade, type, descriptiveText, text, isSvg, questionImage, options, rightOptions, geometryNodes, geometryLinesCount, hideGeometryNodes, correctAnswers, marks, shortAnswerPrefix, shortAnswerSuffix, shortAnswerHint, svgLabels,
+        explanation: explanation || '',
+        explanationSteps: explanationSteps || [],
         isClasswork: isClasswork === true || isClasswork === 'true',
         category: category || (isClasswork ? 'classwork' : 'practice'),
         tag: tag || ''
