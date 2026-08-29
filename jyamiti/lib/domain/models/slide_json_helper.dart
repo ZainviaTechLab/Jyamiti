@@ -824,7 +824,9 @@ class SlideJsonHelper {
             {
               "type": "bulletList",
               "content": "Positive slope rises left to right\nNegative slope falls left to right\nZero slope is a horizontal line",
-              "extra": "numbered"
+              "extra": "numbered",
+              "textColor": "FF34D399",
+              "borderColor": "FF10B981"
             },
             {
               "type": "callout",
@@ -1035,7 +1037,9 @@ class SlideJsonHelper {
               {
                 "type": "bulletList",
                 "content": "Governs how a quantum state evolves in time\nLinear and deterministic\nConserves total probability",
-                "extra": "numbered"
+                "extra": "numbered",
+                "textColor": "FFA78BFA",
+                "borderColor": "FF818CF8"
               },
               {
                 "type": "callout",
