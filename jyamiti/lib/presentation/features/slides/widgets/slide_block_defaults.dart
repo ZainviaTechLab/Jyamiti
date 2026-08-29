@@ -2,6 +2,99 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 
+/// A tap target on a block's type label ("PARAGRAPH", "TEXT", "CARD", ...)
+/// that lets you change what kind of block it is in place -- e.g.
+/// paragraph -> text, text -> card -- rather than deleting it and adding
+/// a fresh one. Shows a bottom sheet of every SlideBlockType (reusing
+/// [iconForSlideBlockType] for each row's icon); returns the picked type,
+/// or null if dismissed without choosing one (including tapping the
+/// already-current type, since that's a no-op).
+///
+/// Deliberately just picks a type -- it does NOT touch content/extra/
+/// caption/style fields at all. Every block type's content is at most a
+/// plain string (or, for table/columns, a JSON string the renderer
+/// already wraps in try/catch and renders nothing rather than crashes
+/// on if it doesn't parse -- see SlideBlockRenderer._buildTableBlock/
+/// _buildColumnsBlock's own doc comments), so keeping whatever content
+/// was already there is always safe, and it's exactly what "change
+/// paragraph to text, keeping what I wrote" means -- callers apply the
+/// result via `block.copyWith(type: newType)`, nothing more.
+Future<SlideBlockType?> pickSlideBlockType(
+  BuildContext context,
+  SlideBlockType current,
+) {
+  return showModalBottomSheet<SlideBlockType>(
+    context: context,
+    showDragHandle: true,
+    builder: (ctx) => SafeArea(
+      child: ListView(
+        shrinkWrap: true,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 4, 20, 8),
+            child: Text(
+              'Change Block Type',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+          ),
+          ...SlideBlockType.values.map((type) {
+            final isCurrent = type == current;
+            return ListTile(
+              leading: Icon(
+                iconForSlideBlockType(type),
+                color: isCurrent ? const Color(0xFF6366F1) : null,
+              ),
+              title: Text(
+                displayNameForSlideBlockType(type),
+                style: TextStyle(
+                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                  color: isCurrent ? const Color(0xFF6366F1) : null,
+                ),
+              ),
+              trailing:
+                  isCurrent ? const Icon(Icons.check_rounded, color: Color(0xFF6366F1)) : null,
+              onTap: isCurrent ? null : () => Navigator.pop(ctx, type),
+            );
+          }),
+        ],
+      ),
+    ),
+  );
+}
+
+/// The user-facing label for a block type -- shown on "Add Block" bars,
+/// block-list type chips, the edit dialog's title, and
+/// [pickSlideBlockType]'s picker rows. Kept separate from the enum's own
+/// identifier (`type.name`) specifically so a friendlier label doesn't
+/// require renaming the underlying enum value: `bulletList` shows as
+/// "LIST" here (it now covers both bullet and numbered styles via
+/// `extra` -- see SlideBlockRenderer._buildBulletList) while staying
+/// `SlideBlockType.bulletList` internally. Renaming the enum itself
+/// would risk every already-saved deck's bulletList blocks silently
+/// falling back to paragraph on load, since SlideBlock.fromMap matches
+/// strictly against `e.name.toLowerCase()` with no alias handling.
+String displayNameForSlideBlockType(SlideBlockType type) {
+  switch (type) {
+    case SlideBlockType.bulletList:
+      return 'LIST';
+    case SlideBlockType.heading:
+    case SlideBlockType.subheading:
+    case SlideBlockType.paragraph:
+    case SlideBlockType.code:
+    case SlideBlockType.callout:
+    case SlideBlockType.imageUrl:
+    case SlideBlockType.math:
+    case SlideBlockType.svg:
+    case SlideBlockType.table:
+    case SlideBlockType.video:
+    case SlideBlockType.card:
+    case SlideBlockType.columns:
+    case SlideBlockType.banner:
+    case SlideBlockType.text:
+      return type.name.toUpperCase();
+  }
+}
+
 /// The icon shown for each block type in "Add Block" bars and block-list
 /// cards -- a top-level function (not a method on any one screen's State)
 /// so both AdminSlideCmsScreen and ColumnsBlockEditorScreen can share it

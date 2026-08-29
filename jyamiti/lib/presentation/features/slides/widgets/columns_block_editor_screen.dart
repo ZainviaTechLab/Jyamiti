@@ -102,6 +102,17 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
     setState(() => _columns[colIdx].removeAt(blockIdx));
   }
 
+  /// Changes what kind of block this is (e.g. paragraph -> text, text ->
+  /// card) via the type label's own tap target -- see
+  /// pickSlideBlockType's doc comment for why content/extra/caption/
+  /// style fields are all left exactly as they were.
+  Future<void> _changeBlockTypeInColumn(int colIdx, int blockIdx) async {
+    final block = _columns[colIdx][blockIdx];
+    final newType = await pickSlideBlockType(context, block.type);
+    if (newType == null || !mounted) return;
+    setState(() => _columns[colIdx][blockIdx] = block.copyWith(type: newType));
+  }
+
   void _reorderInColumn(int colIdx, int oldIndex, int newIndex) {
     setState(() {
       if (newIndex > oldIndex) newIndex -= 1;
@@ -190,7 +201,7 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
                   padding: const EdgeInsets.only(right: 4.0),
                   child: IconButton(
                     icon: Icon(iconForSlideBlockType(type), size: 18),
-                    tooltip: 'Add ${type.name}',
+                    tooltip: 'Add ${displayNameForSlideBlockType(type)}',
                     onPressed: () => _addBlockToColumn(colIdx, type),
                   ),
                 );
@@ -245,12 +256,27 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
                                     ),
                                   ),
                                   Expanded(
-                                    child: Text(
-                                      b.type.name.toUpperCase(),
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                        color: Color(0xFF6366F1),
+                                    child: InkWell(
+                                      onTap: () =>
+                                          _changeBlockTypeInColumn(colIdx, blockIdx),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            displayNameForSlideBlockType(b.type),
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF6366F1),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Icon(
+                                            Icons.swap_horiz_rounded,
+                                            size: 12,
+                                            color: Color(0xFF6366F1),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),

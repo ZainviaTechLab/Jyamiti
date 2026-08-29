@@ -545,7 +545,10 @@ class SlideJsonHelper {
           {
             "type": "bulletList",
             "content":
-                "Applies only to right-angled triangles\nForms the basis of coordinate geometry\nDiscovered independently across many ancient cultures"
+                "Applies only to right-angled triangles\nForms the basis of coordinate geometry\nDiscovered independently across many ancient cultures",
+            "extra": "numbered",
+            "textColor": "FFFBBF24",
+            "borderColor": "FF34D399"
           },
           {
             "type": "callout",
@@ -746,7 +749,8 @@ class SlideJsonHelper {
             },
             {
               "type": "bulletList",
-              "content": "Positive slope rises left to right\nNegative slope falls left to right\nZero slope is a horizontal line"
+              "content": "Positive slope rises left to right\nNegative slope falls left to right\nZero slope is a horizontal line",
+              "extra": "numbered"
             },
             {
               "type": "callout",
@@ -919,7 +923,8 @@ class SlideJsonHelper {
               },
               {
                 "type": "bulletList",
-                "content": "Governs how a quantum state evolves in time\nLinear and deterministic\nConserves total probability"
+                "content": "Governs how a quantum state evolves in time\nLinear and deterministic\nConserves total probability",
+                "extra": "numbered"
               },
               {
                 "type": "callout",

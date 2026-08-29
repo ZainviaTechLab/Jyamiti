@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
+import 'slide_block_defaults.dart';
 import 'slide_color_utils.dart';
 
 /// The block-edit dialog -- content/extra/caption fields per block type,
@@ -18,7 +19,12 @@ import 'slide_color_utils.dart';
 /// Layout / Card Style / Text Style below) since coloring IS what those
 /// three fundamentally are (a colored bar; a bordered box; freeform
 /// styled text), not optional styling on top of some other content the
-/// way it would be for a heading or a paragraph.
+/// way it would be for a heading or a paragraph. bulletList gets a
+/// narrower List Style section with just a Text Color field -- the
+/// renderer (SlideBlockRenderer._buildBulletList) already read
+/// block.textColor even while this dialog had no UI for it, so this is
+/// purely exposing an existing, already-working field, not new
+/// rendering behavior.
 Future<SlideBlock?> showSlideBlockEditorDialog(
   BuildContext context,
   SlideBlock block,
@@ -88,6 +94,18 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
       ? block.fontFamily!
       : 'Default';
 
+  // bulletList's own colors -- SlideBlockRenderer._buildBulletList reads
+  // block.textColor (item text) and block.borderColor (the bullet dot /
+  // number marker, reusing that field since bulletList never otherwise
+  // draws a border) via _textColorOr/parseHexColor. Text color's field
+  // already worked before this dialog had any UI for it (every other
+  // block type lost its color controls when the generic Style section
+  // was removed; bulletList never had one added back since, unlike
+  // banner/card/text, coloring isn't core to what a list IS) -- marker
+  // color support was added to the renderer alongside this UI.
+  String? bulletTextColor = block.textColor;
+  String? bulletMarkerColor = block.borderColor;
+
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
   // Save (see SlideBlockRenderer._buildTableBlock's doc comment for the
@@ -115,7 +133,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
     context: context,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setDialogState) => AlertDialog(
-        title: Text('Edit ${block.type.name.toUpperCase()} Block'),
+        title: Text('Edit ${displayNameForSlideBlockType(block.type)} Block'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -282,6 +300,46 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   selected: {cardHorizontalAlign},
                   onSelectionChanged: (sel) =>
                       setDialogState(() => cardHorizontalAlign = sel.first),
+                ),
+              ],
+              if (block.type == SlideBlockType.bulletList) ...[
+                const SizedBox(height: 16),
+                const Divider(),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'List Style',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text('List Type', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'bullet', label: Text('Bullet')),
+                    ButtonSegment(value: 'numbered', label: Text('Numbered')),
+                  ],
+                  selected: {
+                    extraCtrl.text.toLowerCase().trim() == 'numbered'
+                        ? 'numbered'
+                        : 'bullet'
+                  },
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => extraCtrl.text = sel.first),
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Text Color',
+                  initialHex: bulletTextColor,
+                  onChanged: (val) => bulletTextColor = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Marker Color (bullet / number)',
+                  initialHex: bulletMarkerColor,
+                  onChanged: (val) => bulletMarkerColor = val,
                 ),
               ],
               if (block.type == SlideBlockType.code ||
@@ -634,22 +692,30 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                         ? cardText
                         : block.type == SlideBlockType.text
                             ? textFg
-                            : null,
+                            : block.type == SlideBlockType.bulletList
+                                ? bulletTextColor
+                                : null,
                 clearTextColor: (block.type == SlideBlockType.banner &&
                         bannerText == null) ||
                     (block.type == SlideBlockType.card && cardText == null) ||
-                    (block.type == SlideBlockType.text && textFg == null),
+                    (block.type == SlideBlockType.text && textFg == null) ||
+                    (block.type == SlideBlockType.bulletList &&
+                        bulletTextColor == null),
                 borderColor: block.type == SlideBlockType.banner
                     ? bannerBorder
                     : block.type == SlideBlockType.card
                         ? cardBorder
                         : block.type == SlideBlockType.text
                             ? textBorder
-                            : null,
+                            : block.type == SlideBlockType.bulletList
+                                ? bulletMarkerColor
+                                : null,
                 clearBorderColor: (block.type == SlideBlockType.banner &&
                         bannerBorder == null) ||
                     (block.type == SlideBlockType.card && cardBorder == null) ||
-                    (block.type == SlideBlockType.text && textBorder == null),
+                    (block.type == SlideBlockType.text && textBorder == null) ||
+                    (block.type == SlideBlockType.bulletList &&
+                        bulletMarkerColor == null),
                 borderWidth: block.type == SlideBlockType.banner
                     ? bannerBorderWidth
                     : block.type == SlideBlockType.card

@@ -148,6 +148,22 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
     });
   }
 
+  /// Changes what kind of block this is (e.g. paragraph -> text, text ->
+  /// card) via the type label's own tap target -- see
+  /// pickSlideBlockType's doc comment for why content/extra/caption/
+  /// style fields are all left exactly as they were.
+  Future<void> _changeBlockType(int slideIdx, int blockIdx) async {
+    final block = _slides[slideIdx].blocks[blockIdx];
+    final newType = await pickSlideBlockType(context, block.type);
+    if (newType == null || !mounted) return;
+
+    _updateSlide(slideIdx, (slide) {
+      final updatedBlocks = List<SlideBlock>.from(slide.blocks);
+      updatedBlocks[blockIdx] = block.copyWith(type: newType);
+      return slide.copyWith(blocks: updatedBlocks);
+    });
+  }
+
   void _reorderBlocks(int slideIdx, int oldIndex, int newIndex) {
     if (newIndex > oldIndex) newIndex -= 1;
     _updateSlide(slideIdx, (slide) {
@@ -691,17 +707,26 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
                         ),
                       ),
                     ),
-                    Chip(
-                      label: Text(
-                        block.type.name.toUpperCase(),
-                        style: const TextStyle(
-                          fontSize: 9,
+                    InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () => _changeBlockType(slideIdx, blockIdx),
+                      child: Chip(
+                        label: Text(
+                          displayNameForSlideBlockType(block.type),
+                          style: const TextStyle(
+                            fontSize: 9,
+                            color: Colors.white,
+                          ),
+                        ),
+                        avatar: const Icon(
+                          Icons.swap_horiz_rounded,
+                          size: 12,
                           color: Colors.white,
                         ),
+                        backgroundColor: const Color(0xFF6366F1),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                      backgroundColor: const Color(0xFF6366F1),
-                      visualDensity: VisualDensity.compact,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     const Spacer(),
                     IconButton(
@@ -736,7 +761,7 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
               child: ActionChip(
                 avatar: Icon(iconForSlideBlockType(type), size: 14),
                 label: Text(
-                  type.name.toUpperCase(),
+                  displayNameForSlideBlockType(type),
                   style: const TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.bold,

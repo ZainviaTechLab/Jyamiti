@@ -386,6 +386,24 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     });
   }
 
+  /// Changes what kind of block this is (e.g. paragraph -> text, text ->
+  /// card) via the type label's own tap target -- see
+  /// pickSlideBlockType's doc comment for why content/extra/caption/
+  /// style fields are all left exactly as they were.
+  Future<void> _changeBlockType(int blockIndex) async {
+    final block = _slides[_activeSlideIndex].blocks[blockIndex];
+    final newType = await pickSlideBlockType(context, block.type);
+    if (newType == null || !mounted) return;
+
+    setState(() {
+      final currentSlide = _slides[_activeSlideIndex];
+      final updatedBlocks = List<SlideBlock>.from(currentSlide.blocks);
+      updatedBlocks[blockIndex] = block.copyWith(type: newType);
+      _slides[_activeSlideIndex] =
+          currentSlide.copyWith(blocks: updatedBlocks);
+    });
+  }
+
   void _configureQuiz() {
     final currentQuiz = _slides[_activeSlideIndex].quiz;
     final qCtrl = TextEditingController(text: currentQuiz?.question ?? '');
@@ -1009,7 +1027,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                         child: ActionChip(
                           avatar: Icon(_getIconForBlock(type), size: 14),
                           label: Text(
-                            type.name.toUpperCase(),
+                            displayNameForSlideBlockType(type),
                             style: const TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.bold,
@@ -1069,15 +1087,24 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                                       ),
                                     ),
                                   ),
-                                  Chip(
-                                    label: Text(
-                                      block.type.name.toUpperCase(),
-                                      style: const TextStyle(
-                                        fontSize: 9,
+                                  InkWell(
+                                    borderRadius: BorderRadius.circular(16),
+                                    onTap: () => _changeBlockType(blockIdx),
+                                    child: Chip(
+                                      label: Text(
+                                        displayNameForSlideBlockType(block.type),
+                                        style: const TextStyle(
+                                          fontSize: 9,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                      avatar: const Icon(
+                                        Icons.swap_horiz_rounded,
+                                        size: 12,
                                         color: Colors.white,
                                       ),
+                                      backgroundColor: const Color(0xFF6366F1),
                                     ),
-                                    backgroundColor: const Color(0xFF6366F1),
                                   ),
                                   const Spacer(),
                                   IconButton(

@@ -120,18 +120,22 @@ class SlideBlockRenderer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Banner, card, and text all fully own their own background/text/
-    // outline rendering already (banner: its whole layout, see
+    // Banner, card, text, and bulletList all read block.borderColor (and,
+    // except bulletList, backgroundColor) directly for their own
+    // purposes already (banner: its whole layout, see
     // _buildBannerBlock's doc comment; card: _buildCardBlock/
     // _buildSingleCard's own decoration; text: _buildTextBlock's own
-    // decoration) -- routing any of them through the generic wrapper
-    // below too would double them up: their own colored/bordered box,
-    // wrapped in a second outer box using the identical color/border,
-    // since all three read directly from block.backgroundColor/
-    // textColor/borderColor.
+    // decoration; bulletList: _buildBulletList's marker color) --
+    // routing any of them through the generic wrapper below too would
+    // apply that same color a second time as an outer box/border around
+    // content that was never meant to be boxed at all (bulletList) or
+    // double it up with what the type already draws itself.
     if (block.type == SlideBlockType.banner) return _buildBannerBlock(context);
     if (block.type == SlideBlockType.card) return _buildCardBlock(context);
     if (block.type == SlideBlockType.text) return _buildTextBlock(context);
+    if (block.type == SlideBlockType.bulletList) {
+      return _buildBulletList(context);
+    }
 
     final Widget content = _buildContent(context);
     final Color? bg = parseHexColor(block.backgroundColor);
@@ -166,6 +170,8 @@ class SlideBlockRenderer extends StatelessWidget {
       case SlideBlockType.code:
         return _buildCodeBlock(context);
       case SlideBlockType.bulletList:
+        // Never actually reached -- build() special-cases bulletList
+        // before this switch runs, same reason as banner/card/text.
         return _buildBulletList(context);
       case SlideBlockType.callout:
         return _buildCallout(context);
@@ -554,27 +560,56 @@ class SlideBlockRenderer extends StatelessWidget {
     final List<String> items = block.content.contains('\n')
         ? block.content.split('\n').where((s) => s.trim().isNotEmpty).toList()
         : [block.content];
+    // Displayed as "LIST" in the UI now (see displayNameForSlideBlockType's
+    // doc comment) -- still SlideBlockType.bulletList/`_buildBulletList`
+    // underneath, unchanged, so already-saved decks keep working exactly
+    // as before. `numbered` is the only other style so far ("1.", "2.",
+    // ..." instead of a bullet dot); anything else in `extra` (including
+    // unset) means the original plain bullet.
+    final bool numbered = (block.extra ?? '').toLowerCase().trim() == 'numbered';
+    // Reuses borderColor for the marker (bullet dot / number) rather
+    // than adding a new field -- bulletList doesn't otherwise draw a
+    // border, so the field was sitting unused for this type anyway.
+    final Color markerColor =
+        parseHexColor(block.borderColor) ?? const Color(0xFF6366F1);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: items.map((item) {
-          final cleanItem = item.replaceFirst(RegExp(r'^[-*•]\s*'), '');
+        children: items.asMap().entries.map((entry) {
+          final cleanItem =
+              entry.value.replaceFirst(RegExp(r'^[-*•]\s*'), '');
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 4.0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  margin: const EdgeInsets.only(top: 6, right: 10),
-                  width: 7,
-                  height: 7,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF6366F1),
-                    shape: BoxShape.circle,
-                  ),
-                ),
+                numbered
+                    ? Padding(
+                        padding: const EdgeInsets.only(right: 8.0),
+                        child: SizedBox(
+                          width: 20,
+                          child: Text(
+                            '${entry.key + 1}.',
+                            style: TextStyle(
+                              fontSize: 15,
+                              height: 1.45,
+                              fontWeight: FontWeight.w700,
+                              color: markerColor,
+                            ),
+                          ),
+                        ),
+                      )
+                    : Container(
+                        margin: const EdgeInsets.only(top: 6, right: 10),
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: markerColor,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
                 Expanded(
                   child: Text(
                     cleanItem,

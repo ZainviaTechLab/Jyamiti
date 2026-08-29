@@ -436,6 +436,31 @@ void main() {
       expect(defaultResult.slides.first.blocks.first.fontFamily, isNull);
     });
 
+    test('parses numbered list style, textColor, and marker borderColor on bulletList blocks', () {
+      const listJson = '''
+      {
+        "title": "Numbered List",
+        "blocks": [
+          {
+            "type": "bulletList",
+            "content": "First\\nSecond\\nThird",
+            "extra": "numbered",
+            "textColor": "FFFBBF24",
+            "borderColor": "FF34D399"
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(listJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.bulletList);
+      expect(block.extra, 'numbered');
+      expect(block.borderColor, 'FF34D399');
+      expect(block.textColor, 'FFFBBF24');
+    });
+
     test('"text" JSON type resolves to the text block, not paragraph', () {
       const aliasJson = '''
       {
