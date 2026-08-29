@@ -636,6 +636,18 @@ class SlideJsonHelper {
       },
       {
         "type": "columns",
+        "backgroundColor": "220F172A",
+        "borderColor": "FF34D399",
+        "borderWidth": 1.0,
+        "borderRadius": 16.0,
+        "padding": 12.0,
+        "marginVertical": 8.0,
+        "width": 0.95,
+        "minHeight": 220.0,
+        "horizontalAlign": "left",
+        "verticalAlign": "top",
+        "selfAlign": "center",
+        "selfAlignVertical": "center",
         "columns": [
           [
             {"type": "heading", "content": "Diagram"},
@@ -684,9 +696,12 @@ class SlideJsonHelper {
         "borderWidth": 1.5,
         "borderRadius": 18.0,
         "padding": 16.0,
+        "marginVertical": 10.0,
+        "width": 0.9,
         "minHeight": 160.0,
         "horizontalAlign": "center",
         "verticalAlign": "center",
+        "selfAlign": "center",
         "selfAlignVertical": "bottom",
         "children": [
           {"type": "subheading", "content": "Quick Recap"},
@@ -774,6 +789,17 @@ class SlideJsonHelper {
         },
         {
           "type": "columns",
+          "backgroundColor": "220F172A",
+          "borderColor": "FF0EA5E9",
+          "borderWidth": 1.0,
+          "borderRadius": 16.0,
+          "padding": 12.0,
+          "marginVertical": 8.0,
+          "width": 0.95,
+          "minHeight": 220.0,
+          "horizontalAlign": "left",
+          "verticalAlign": "top",
+          "selfAlign": "center",
           "columns": [
             [
               {"type": "heading", "content": "Quadrants"},
@@ -810,9 +836,12 @@ class SlideJsonHelper {
           "borderWidth": 1.5,
           "borderRadius": 18.0,
           "padding": 16.0,
+          "marginVertical": 10.0,
+          "width": 0.9,
           "minHeight": 160.0,
           "horizontalAlign": "center",
           "verticalAlign": "center",
+          "selfAlign": "center",
           "selfAlignVertical": "center",
           "children": [
             {"type": "subheading", "content": "Quick Recap"},
@@ -961,6 +990,18 @@ class SlideJsonHelper {
           },
           {
             "type": "columns",
+            "backgroundColor": "220F172A",
+            "borderColor": "FFA78BFA",
+            "borderWidth": 1.0,
+            "borderRadius": 16.0,
+            "padding": 12.0,
+            "marginVertical": 8.0,
+            "width": 0.95,
+            "minHeight": 220.0,
+            "horizontalAlign": "left",
+            "verticalAlign": "top",
+            "selfAlign": "center",
+            "selfAlignVertical": "bottom",
             "columns": [
               [
                 {"type": "heading", "content": "Wave Model"},
@@ -1010,7 +1051,11 @@ class SlideJsonHelper {
             "borderWidth": 1.5,
             "borderRadius": 18.0,
             "padding": 16.0,
+            "marginVertical": 10.0,
             "width": 0.85,
+            "minHeight": 140.0,
+            "horizontalAlign": "center",
+            "verticalAlign": "center",
             "selfAlign": "center",
             "selfAlignVertical": "top",
             "children": [
