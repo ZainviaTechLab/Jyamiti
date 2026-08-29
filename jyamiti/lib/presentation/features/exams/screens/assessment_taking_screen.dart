@@ -762,7 +762,10 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
     } else if (q['type'] == 'FILL_IN_BLANKS') {
       final String text = q['text'] ?? '';
       int blankCount = 0;
-      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+      final regExp = RegExp(
+        r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]',
+        caseSensitive: false,
+      );
       final Iterable<Match> matches = regExp.allMatches(text);
       blankCount = matches.length;
       if (blankCount == 0 && q['correctAnswers'] is List) {
@@ -971,24 +974,33 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
         }
       }
     } else if (q['type'] == 'DESCRIPTIVE') {
-      final List<dynamic> currentAns = _selectedAnswers[_currentQuestionIndex] ?? ["", "", ""];
-      final String typedText = currentAns.isNotEmpty ? currentAns[0].toString() : "";
-      final String imgUrl = currentAns.length > 1 ? currentAns[1].toString() : "";
-      final String presetAns = (q['correctAnswers'] is List && (q['correctAnswers'] as List).isNotEmpty)
+      final List<dynamic> currentAns =
+          _selectedAnswers[_currentQuestionIndex] ?? ["", "", ""];
+      final String typedText = currentAns.isNotEmpty
+          ? currentAns[0].toString()
+          : "";
+      final String imgUrl = currentAns.length > 1
+          ? currentAns[1].toString()
+          : "";
+      final String presetAns =
+          (q['correctAnswers'] is List &&
+              (q['correctAnswers'] as List).isNotEmpty)
           ? q['correctAnswers'][0].toString()
           : (q['explanation'] ?? '');
       final int maxMarks = (q['marks'] as num? ?? 10).toInt();
 
-      final Map<String, dynamic> aiResult = await DeepseekService.evaluateDescriptiveAnswer(
-        questionPrompt: q['text'] ?? '',
-        presetAnswer: presetAns,
-        studentAnswerText: typedText,
-        imageUrl: imgUrl,
-        maxMarks: maxMarks,
-      );
+      final Map<String, dynamic> aiResult =
+          await DeepseekService.evaluateDescriptiveAnswer(
+            questionPrompt: q['text'] ?? '',
+            presetAnswer: presetAns,
+            studentAnswerText: typedText,
+            imageUrl: imgUrl,
+            maxMarks: maxMarks,
+          );
 
       final bool isPassed = aiResult['isCorrect'] == true;
-      final num awardedScore = aiResult['score'] as num? ?? (isPassed ? maxMarks : 0);
+      final num awardedScore =
+          aiResult['score'] as num? ?? (isPassed ? maxMarks : 0);
 
       setState(() {
         while (_selectedAnswers[_currentQuestionIndex]!.length < 3) {
@@ -1438,7 +1450,9 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
               ),
             ),
 
-            if (_currentPhase == 2 && _showWritingPad && _isWritingPadFullScreen)
+            if (_currentPhase == 2 &&
+                _showWritingPad &&
+                _isWritingPadFullScreen)
               Positioned.fill(
                 child: Container(
                   color: context.isDark
@@ -1446,9 +1460,12 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                       : const Color(0xFFFCFDFE),
                   child: WritingPadWidget(
                     key: _writingPadKey,
-                    questionText: _questions.isNotEmpty &&
+                    questionText:
+                        _questions.isNotEmpty &&
                             _currentQuestionIndex < _questions.length
-                        ? _extractQuestionText(_questions[_currentQuestionIndex])
+                        ? _extractQuestionText(
+                            _questions[_currentQuestionIndex],
+                          )
                         : '',
                     isFullScreen: true,
                     onToggleFullScreen: () {
@@ -1481,9 +1498,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
       case 3:
         return _buildResultsScreen();
       default:
-        return const Center(
-          child: JyamitiLoader(color: Color(0xFF6366F1)),
-        );
+        return const Center(child: JyamitiLoader(color: Color(0xFF6366F1)));
     }
   }
 
@@ -1851,16 +1866,25 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
         'content',
         'stem',
         'qText',
-        'q_text'
+        'q_text',
       ]) {
-        if (q.containsKey(key) && q[key] != null && q[key].toString().trim().isNotEmpty) {
+        if (q.containsKey(key) &&
+            q[key] != null &&
+            q[key].toString().trim().isNotEmpty) {
           return q[key].toString().trim();
         }
       }
     }
     try {
       final dynamic obj = q;
-      final text = (obj.questionText ?? obj.question ?? obj.title ?? obj.descriptiveText ?? obj.text ?? '').toString();
+      final text =
+          (obj.questionText ??
+                  obj.question ??
+                  obj.title ??
+                  obj.descriptiveText ??
+                  obj.text ??
+                  '')
+              .toString();
       if (text.trim().isNotEmpty) return text.trim();
     } catch (_) {}
 
@@ -1908,11 +1932,13 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
     List<dynamic> effectiveQuestions = _questions;
     if (isPracticeMode) {
       if (_practiceViewMode == 'TUTOR') {
-        effectiveQuestions =
-            _questions.where((q) => _isQuestionClasswork(q)).toList();
+        effectiveQuestions = _questions
+            .where((q) => _isQuestionClasswork(q))
+            .toList();
       } else if (_practiceViewMode == 'STUDENT') {
-        effectiveQuestions =
-            _questions.where((q) => !_isQuestionClasswork(q)).toList();
+        effectiveQuestions = _questions
+            .where((q) => !_isQuestionClasswork(q))
+            .toList();
       }
     }
 
@@ -1961,8 +1987,9 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                   ElevatedButton.icon(
                     onPressed: () {
                       setState(() {
-                        _practiceViewMode =
-                            _practiceViewMode == 'TUTOR' ? 'STUDENT' : 'TUTOR';
+                        _practiceViewMode = _practiceViewMode == 'TUTOR'
+                            ? 'STUDENT'
+                            : 'TUTOR';
                         _currentQuestionIndex = 0;
                       });
                     },
@@ -2259,205 +2286,261 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                     // inline with the blanks, so this card would otherwise just
                     // show the same text again (or an empty card).
                     if (q['type'] != 'FILL_IN_BLANKS')
-                    Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: context.isDark
-                                ? Colors.black.withOpacity(0.3)
-                                : const Color(0xFF4F46E5).withOpacity(0.04),
-                            blurRadius: 30,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(20),
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                          child: Container(
-                            padding: const EdgeInsets.all(24),
-                            decoration: BoxDecoration(
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
                               color: context.isDark
-                                  ? Colors.white.withOpacity(0.03)
-                                  : Colors.white.withOpacity(0.95),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: context.isDark
-                                    ? context.textColor.withOpacity(0.08)
-                                    : const Color(0xFF8B5CF6).withOpacity(0.15),
-                                width: 1.5,
-                              ),
+                                  ? Colors.black.withOpacity(0.3)
+                                  : const Color(0xFF4F46E5).withOpacity(0.04),
+                              blurRadius: 30,
+                              offset: const Offset(0, 10),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Descriptive text (above the image if present)
-                                if (q['descriptiveText'] != null &&
-                                    q['descriptiveText']
-                                        .toString()
-                                        .trim()
-                                        .isNotEmpty) ...[
-                                  LatexRichText(
-                                    text: q['descriptiveText']
-                                        .toString()
-                                        .trim(),
-                                    style: GoogleFonts.outfit(
-                                      color: context.textColor.withOpacity(0.9),
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                            child: Container(
+                              padding: const EdgeInsets.all(24),
+                              decoration: BoxDecoration(
+                                color: context.isDark
+                                    ? Colors.white.withOpacity(0.03)
+                                    : Colors.white.withOpacity(0.95),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: context.isDark
+                                      ? context.textColor.withOpacity(0.08)
+                                      : const Color(
+                                          0xFF8B5CF6,
+                                        ).withOpacity(0.15),
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Descriptive text (above the image if present)
+                                  if (q['descriptiveText'] != null &&
+                                      q['descriptiveText']
+                                          .toString()
+                                          .trim()
+                                          .isNotEmpty) ...[
+                                    LatexRichText(
+                                      text: q['descriptiveText']
+                                          .toString()
+                                          .trim(),
+                                      style: GoogleFonts.outfit(
+                                        color: context.textColor.withOpacity(
+                                          0.9,
+                                        ),
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                ],
+                                    const SizedBox(height: 16),
+                                  ],
 
-                                // Render geometric canvas or question image
-                                if (q['type'] == 'GEOMETRIC') ...[
-                                  _buildAnswerInputs(q, selected),
-                                  const SizedBox(height: 16),
-                                ] else if (q['questionImage'] != null &&
-                                    q['questionImage']
-                                        .toString()
-                                        .isNotEmpty) ...[
-                                  Center(
-                                    child: GestureDetector(
-                                      onTap: () {
-                                        showDialog(
-                                          context: context,
-                                          builder: (context) => Dialog(
-                                            backgroundColor: Colors.transparent,
-                                            insetPadding: const EdgeInsets.all(
-                                              16,
-                                            ),
-                                            child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Align(
-                                                  alignment: Alignment.topRight,
-                                                  child: IconButton(
-                                                    icon: Icon(
-                                                      Icons.close,
-                                                      color: context.textColor,
-                                                      size: 28,
-                                                    ),
-                                                    onPressed: () =>
-                                                        Navigator.pop(context),
+                                  // Render geometric canvas or question image
+                                  if (q['type'] == 'GEOMETRIC') ...[
+                                    _buildAnswerInputs(q, selected),
+                                    const SizedBox(height: 16),
+                                  ] else if (q['questionImage'] != null &&
+                                      q['questionImage']
+                                          .toString()
+                                          .isNotEmpty) ...[
+                                    Center(
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          showDialog(
+                                            context: context,
+                                            builder: (dialogContext) {
+                                              // Cap the enlarged image to a
+                                              // fraction of the actual screen
+                                              // size -- without this, the bare
+                                              // AspectRatio(4/3) below (no
+                                              // `height` given, unlike the
+                                              // small inline thumbnail) sizes
+                                              // itself against the
+                                              // InteractiveViewer's effectively
+                                              // unbounded constraints and can
+                                              // render far larger than the
+                                              // viewport, especially on large/
+                                              // desktop screens where there's
+                                              // more nominal space to expand
+                                              // into -- pushing the dialog's
+                                              // content off-screen instead of
+                                              // fitting within it.
+                                              final screenSize = MediaQuery.of(
+                                                dialogContext,
+                                              ).size;
+                                              final maxDialogWidth =
+                                                  screenSize.width * 0.9;
+                                              final maxDialogHeight =
+                                                  screenSize.height * 0.85;
+                                              return Dialog(
+                                                backgroundColor:
+                                                    Colors.transparent,
+                                                insetPadding:
+                                                    const EdgeInsets.all(16),
+                                                child: ConstrainedBox(
+                                                  constraints: BoxConstraints(
+                                                    maxWidth: maxDialogWidth,
+                                                    maxHeight: maxDialogHeight,
                                                   ),
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Container(
-                                                  decoration: BoxDecoration(
-                                                    color: context.isDark
-                                                        ? const Color(
-                                                            0xFF1E293B,
-                                                          )
-                                                        : Colors.white,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          16,
+                                                  child: Column(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Align(
+                                                        alignment:
+                                                            Alignment.topRight,
+                                                        child: IconButton(
+                                                          icon: Icon(
+                                                            Icons.close,
+                                                            color: context
+                                                                .textColor,
+                                                            size: 28,
+                                                          ),
+                                                          onPressed: () =>
+                                                              Navigator.pop(
+                                                                dialogContext,
+                                                              ),
                                                         ),
-                                                    border: Border.all(
-                                                      color:
-                                                          context.glassBorder,
-                                                    ),
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: Colors.black
-                                                            .withOpacity(0.5),
-                                                        blurRadius: 20,
-                                                        offset: const Offset(
-                                                          0,
-                                                          10,
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Flexible(
+                                                        child: Container(
+                                                          decoration: BoxDecoration(
+                                                            color:
+                                                                context.isDark
+                                                                ? const Color(
+                                                                    0xFF1E293B,
+                                                                  )
+                                                                : Colors.white,
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  16,
+                                                                ),
+                                                            border: Border.all(
+                                                              color: context
+                                                                  .glassBorder,
+                                                            ),
+                                                            boxShadow: [
+                                                              BoxShadow(
+                                                                color: Colors
+                                                                    .black
+                                                                    .withOpacity(
+                                                                      0.5,
+                                                                    ),
+                                                                blurRadius: 20,
+                                                                offset:
+                                                                    const Offset(
+                                                                      0,
+                                                                      10,
+                                                                    ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                          child: ClipRRect(
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  15,
+                                                                ),
+                                                            child: InteractiveViewer(
+                                                              minScale: 1.0,
+                                                              maxScale: 4.0,
+                                                              child: SvgLabelOverlay(
+                                                                imagePath:
+                                                                    q['questionImage'],
+                                                                isSvg:
+                                                                    q['isSvg'] ==
+                                                                    true,
+                                                                labels:
+                                                                    q['svgLabels'] ??
+                                                                    [],
+                                                                aspectRatio:
+                                                                    4 / 3,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(
+                                                        height: 12,
+                                                      ),
+                                                      Text(
+                                                        'Pinch to zoom / Drag to pan',
+                                                        style: TextStyle(
+                                                          color: context
+                                                              .textColor54,
+                                                          fontSize: 12,
                                                         ),
                                                       ),
                                                     ],
                                                   ),
-                                                  child: ClipRRect(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          15,
-                                                        ),
-                                                    child: InteractiveViewer(
-                                                      minScale: 1.0,
-                                                      maxScale: 4.0,
-                                                      child: SvgLabelOverlay(
-                                                        imagePath:
-                                                            q['questionImage'],
-                                                        isSvg:
-                                                            q['isSvg'] == true,
-                                                        labels:
-                                                            q['svgLabels'] ??
-                                                            [],
-                                                        aspectRatio: 4 / 3,
-                                                      ),
-                                                    ),
-                                                  ),
                                                 ),
-                                                const SizedBox(height: 12),
-                                                Text(
-                                                  'Pinch to zoom / Drag to pan',
-                                                  style: TextStyle(
-                                                    color: context.textColor54,
-                                                    fontSize: 12,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
+                                              );
+                                            },
+                                          );
+                                        },
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
                                           ),
-                                        );
-                                      },
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: Stack(
-                                          alignment: Alignment.bottomRight,
-                                          children: [
-                                            SvgLabelOverlay(
-                                              imagePath: q['questionImage'],
-                                              isSvg: q['isSvg'] == true,
-                                              labels: q['svgLabels'] ?? [],
-                                              height: 180,
-                                            ),
-                                            Container(
-                                              margin: const EdgeInsets.all(8),
-                                              padding: const EdgeInsets.all(4),
-                                              decoration: BoxDecoration(
-                                                color: Colors.black54,
-                                                borderRadius:
-                                                    BorderRadius.circular(6),
+                                          child: Stack(
+                                            alignment: Alignment.bottomRight,
+                                            children: [
+                                              SvgLabelOverlay(
+                                                imagePath: q['questionImage'],
+                                                isSvg: q['isSvg'] == true,
+                                                labels: q['svgLabels'] ?? [],
+                                                height: 180,
                                               ),
-                                              child: Icon(
-                                                Icons.zoom_in,
-                                                color: context.textColor70,
-                                                size: 18,
+                                              Container(
+                                                margin: const EdgeInsets.all(8),
+                                                padding: const EdgeInsets.all(
+                                                  4,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black54,
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                ),
+                                                child: Icon(
+                                                  Icons.zoom_in,
+                                                  color: context.textColor70,
+                                                  size: 18,
+                                                ),
                                               ),
-                                            ),
-                                          ],
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                ],
+                                    const SizedBox(height: 16),
+                                  ],
 
-                                // Question text (below the image, extra bold)
-                                // FILL_IN_BLANKS never reaches here: the whole card is
-                                // skipped for that type (see above).
-                                if (q['type'] != 'INLINE_SELECT')
-                                  LatexRichText(
-                                    text: q['text'],
-                                    style: GoogleFonts.outfit(
-                                      color: context.textColor,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w800,
+                                  // Question text (below the image, extra bold)
+                                  // FILL_IN_BLANKS never reaches here: the whole card is
+                                  // skipped for that type (see above).
+                                  if (q['type'] != 'INLINE_SELECT')
+                                    LatexRichText(
+                                      text: q['text'],
+                                      style: GoogleFonts.outfit(
+                                        color: context.textColor,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w800,
+                                      ),
                                     ),
-                                  ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
                     if (q['type'] != 'FILL_IN_BLANKS')
                       const SizedBox(height: 18),
 
@@ -3016,7 +3099,10 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
           _selectedAnswers[_currentQuestionIndex] ?? [];
 
       int globalBlankIdx = 0;
-      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+      final regExp = RegExp(
+        r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]',
+        caseSensitive: false,
+      );
 
       final List<Widget> lineWidgets = [];
       int currentOffset = 0;
@@ -3048,7 +3134,10 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
           expectedAnswer = correctAnswers[blankIdx].toString().trim();
         }
 
-        final bool isCorrect = _areAnswersEquivalent(currentValue, expectedAnswer);
+        final bool isCorrect = _areAnswersEquivalent(
+          currentValue,
+          expectedAnswer,
+        );
         final bool isInputLatex = _isLatex(expectedAnswer);
 
         if (isInputLatex) {
@@ -3058,7 +3147,10 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
             GestureDetector(
               onTap: showResult
                   ? null
-                  : () => _showMathDialog(_currentQuestionIndex, inputIdx: blankIdx),
+                  : () => _showMathDialog(
+                      _currentQuestionIndex,
+                      inputIdx: blankIdx,
+                    ),
               child: Container(
                 width: 140,
                 height: 40,
@@ -3095,7 +3187,9 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                           text: '\$$currentValue\$',
                           style: TextStyle(
                             color: showResult
-                                ? (isCorrect ? Colors.green[700] : Colors.red[700])
+                                ? (isCorrect
+                                      ? Colors.green[700]
+                                      : Colors.red[700])
                                 : context.textColor,
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
@@ -3153,10 +3247,12 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                 ),
                 onChanged: (val) {
                   setState(() {
-                    while (_selectedAnswers[_currentQuestionIndex]!.length <= blankIdx) {
+                    while (_selectedAnswers[_currentQuestionIndex]!.length <=
+                        blankIdx) {
                       _selectedAnswers[_currentQuestionIndex]!.add("");
                     }
-                    _selectedAnswers[_currentQuestionIndex]![blankIdx] = val.trim();
+                    _selectedAnswers[_currentQuestionIndex]![blankIdx] = val
+                        .trim();
                   });
                   _saveProgress();
                 },
@@ -3284,10 +3380,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
             const SizedBox(height: 12),
             Text(
               'Write your solution on paper, snap a picture or pick an image, or use the digital drawing pad. DeepSeek AI will evaluate the semantic meaning of your answer.',
-              style: TextStyle(
-                color: context.textColor60,
-                fontSize: 13,
-              ),
+              style: TextStyle(color: context.textColor60, fontSize: 13),
             ),
             const SizedBox(height: 16),
 
@@ -3354,7 +3447,8 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                               file.name,
                               fieldName: 'file',
                             );
-                            final resBody = await streamedRes.stream.bytesToString();
+                            final resBody = await streamedRes.stream
+                                .bytesToString();
                             if (streamedRes.statusCode == 200) {
                               final data = jsonDecode(resBody);
                               setState(() {
@@ -3515,7 +3609,9 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                       ),
                     ),
                     if (aiResult['semanticComparison'] != null &&
-                        aiResult['semanticComparison'].toString().isNotEmpty) ...[
+                        aiResult['semanticComparison']
+                            .toString()
+                            .isNotEmpty) ...[
                       const SizedBox(height: 10),
                       Container(
                         padding: const EdgeInsets.all(10),
@@ -5545,7 +5641,10 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
                   children: [
                     // Step Badge: e.g., "1 / 3"
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFF3B82F6).withOpacity(0.15),
                         borderRadius: BorderRadius.circular(6),
@@ -5616,10 +5715,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
           width: 24,
           height: 24,
           child: Center(
-            child: JyamitiLoader(
-              strokeWidth: 1.5,
-              color: Color(0xFF6366F1),
-            ),
+            child: JyamitiLoader(strokeWidth: 1.5, color: Color(0xFF6366F1)),
           ),
         ),
         errorBuilder: (context, error, stackTrace) => Icon(
@@ -5640,10 +5736,7 @@ class _AssessmentTakingScreenState extends State<AssessmentTakingScreen> {
             width: 24,
             height: 24,
             child: Center(
-              child: JyamitiLoader(
-                strokeWidth: 1.5,
-                color: Color(0xFF6366F1),
-              ),
+              child: JyamitiLoader(strokeWidth: 1.5, color: Color(0xFF6366F1)),
             ),
           );
         },
