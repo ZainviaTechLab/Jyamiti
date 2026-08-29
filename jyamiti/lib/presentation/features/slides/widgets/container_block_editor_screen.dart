@@ -42,6 +42,7 @@ class _ContainerBlockEditorScreenState
   String _horizontalAlign = 'left';
   String _verticalAlign = 'top';
   String _selfAlign = 'center';
+  String _selfAlignVertical = 'off';
 
   @override
   void initState() {
@@ -58,6 +59,7 @@ class _ContainerBlockEditorScreenState
     _horizontalAlign = widget.block.horizontalAlign ?? 'left';
     _verticalAlign = widget.block.verticalAlign ?? 'top';
     _selfAlign = widget.block.selfAlign ?? 'center';
+    _selfAlignVertical = widget.block.selfAlignVertical ?? 'off';
   }
 
   List<SlideBlock> _parseChildren(String content) {
@@ -72,8 +74,9 @@ class _ContainerBlockEditorScreenState
   }
 
   void _save() {
-    final content =
-        jsonEncode({'children': _children.map((b) => b.toMap()).toList()});
+    final content = jsonEncode({
+      'children': _children.map((b) => b.toMap()).toList(),
+    });
     Navigator.pop(
       context,
       widget.block.copyWith(
@@ -93,6 +96,10 @@ class _ContainerBlockEditorScreenState
         horizontalAlign: _horizontalAlign,
         verticalAlign: _verticalAlign,
         selfAlign: _selfAlign,
+        selfAlignVertical: _selfAlignVertical == 'off'
+            ? null
+            : _selfAlignVertical,
+        clearSelfAlignVertical: _selfAlignVertical == 'off',
       ),
     );
   }
@@ -199,8 +206,7 @@ class _ContainerBlockEditorScreenState
               borderColor: _border,
               onBorderColorChanged: (val) => setState(() => _border = val),
               borderWidth: _borderWidth,
-              onBorderWidthChanged: (val) =>
-                  setState(() => _borderWidth = val),
+              onBorderWidthChanged: (val) => setState(() => _borderWidth = val),
               borderRadius: _borderRadius,
               onBorderRadiusChanged: (val) =>
                   setState(() => _borderRadius = val),
@@ -220,6 +226,9 @@ class _ContainerBlockEditorScreenState
                   setState(() => _verticalAlign = val),
               selfAlign: _selfAlign,
               onSelfAlignChanged: (val) => setState(() => _selfAlign = val),
+              selfAlignVertical: _selfAlignVertical,
+              onSelfAlignVerticalChanged: (val) =>
+                  setState(() => _selfAlignVertical = val),
             ),
             const SizedBox(height: 16),
             const Divider(),
@@ -316,8 +325,7 @@ class _ContainerBlockEditorScreenState
                               ),
                               const Spacer(),
                               IconButton(
-                                icon:
-                                    const Icon(Icons.edit_rounded, size: 16),
+                                icon: const Icon(Icons.edit_rounded, size: 16),
                                 onPressed: () => _editChild(idx),
                               ),
                               IconButton(

@@ -47,8 +47,7 @@ Set<SlideBlockType> _collectBlockTypes(List<SlideItem> slides) {
 
 void main() {
   group('SlideJsonHelper Tests', () {
-    test('parses single slide JSON correctly and covers every block type',
-        () {
+    test('parses single slide JSON correctly and covers every block type', () {
       final json = SlideJsonHelper.sampleSingleSlideJson;
       final result = SlideJsonHelper.parseJson(json);
 
@@ -59,7 +58,10 @@ void main() {
       expect(slide.theme, 'darkGlass');
       expect(slide.backgroundType, SlideBackgroundType.gradient);
       expect(slide.quiz, isNotNull);
-      expect(slide.quiz!.question, 'Which side of a right triangle is the hypotenuse?');
+      expect(
+        slide.quiz!.question,
+        'Which side of a right triangle is the hypotenuse?',
+      );
       expect(slide.quiz!.correctIndex, 0);
 
       // A single-slide example only has the one slide to work with, so
@@ -68,42 +70,50 @@ void main() {
     });
 
     test(
-        'parses multi-slide JSON array correctly and covers every block type across it',
-        () {
-      final json = SlideJsonHelper.sampleMultiSlideJson;
-      final result = SlideJsonHelper.parseJson(json);
+      'parses multi-slide JSON array correctly and covers every block type across it',
+      () {
+        final json = SlideJsonHelper.sampleMultiSlideJson;
+        final result = SlideJsonHelper.parseJson(json);
 
-      expect(result.isSuccess, isTrue);
-      expect(result.slides.length, 2);
-      expect(result.slides[0].title, 'Module 1: Coordinate Geometry');
-      expect(result.slides[0].theme, 'midnightNeon');
-      expect(result.slides[1].title, 'Module 2: Slope and Intercept');
-      expect(result.slides[1].theme, 'emeraldSlate');
-      expect(result.slides[1].backgroundType, SlideBackgroundType.solidColor);
-      expect(result.slides[1].quiz, isNotNull);
+        expect(result.isSuccess, isTrue);
+        expect(result.slides.length, 2);
+        expect(result.slides[0].title, 'Module 1: Coordinate Geometry');
+        expect(result.slides[0].theme, 'midnightNeon');
+        expect(result.slides[1].title, 'Module 2: Slope and Intercept');
+        expect(result.slides[1].theme, 'emeraldSlate');
+        expect(result.slides[1].backgroundType, SlideBackgroundType.solidColor);
+        expect(result.slides[1].quiz, isNotNull);
 
-      // Comprehensive as a whole example -- split across its 2 slides,
-      // not necessarily each slide individually.
-      expect(_collectBlockTypes(result.slides), SlideBlockType.values.toSet());
-    });
+        // Comprehensive as a whole example -- split across its 2 slides,
+        // not necessarily each slide individually.
+        expect(
+          _collectBlockTypes(result.slides),
+          SlideBlockType.values.toSet(),
+        );
+      },
+    );
 
     test(
-        'parses full course slide deck JSON correctly and covers every block type across it',
-        () {
-      final json = SlideJsonHelper.sampleFullDeckJson;
-      final result = SlideJsonHelper.parseJson(json);
+      'parses full course slide deck JSON correctly and covers every block type across it',
+      () {
+        final json = SlideJsonHelper.sampleFullDeckJson;
+        final result = SlideJsonHelper.parseJson(json);
 
-      expect(result.isSuccess, isTrue);
-      expect(result.deckTitle, 'Quantum Mechanics & Wave Functions');
-      expect(result.courseName, 'Advanced Physics');
-      expect(result.slides.length, 2);
-      expect(result.slides[0].title, 'Wave-Particle Duality');
-      expect(result.slides[1].title, 'Time-Dependent Schrödinger Equation');
-      expect(result.slides[1].backgroundType, SlideBackgroundType.image);
-      expect(result.slides[1].quiz, isNotNull);
+        expect(result.isSuccess, isTrue);
+        expect(result.deckTitle, 'Quantum Mechanics & Wave Functions');
+        expect(result.courseName, 'Advanced Physics');
+        expect(result.slides.length, 2);
+        expect(result.slides[0].title, 'Wave-Particle Duality');
+        expect(result.slides[1].title, 'Time-Dependent Schrödinger Equation');
+        expect(result.slides[1].backgroundType, SlideBackgroundType.image);
+        expect(result.slides[1].quiz, isNotNull);
 
-      expect(_collectBlockTypes(result.slides), SlideBlockType.values.toSet());
-    });
+        expect(
+          _collectBlockTypes(result.slides),
+          SlideBlockType.values.toSet(),
+        );
+      },
+    );
 
     test('handles alias mapping for block types gracefully', () {
       final customJson = '''
@@ -150,9 +160,13 @@ void main() {
             slideIndex: 0,
             title: 'Sine and Cosine',
             blocks: [
-              SlideBlock(id: 'b1', type: SlideBlockType.heading, content: 'Trig Functions'),
+              SlideBlock(
+                id: 'b1',
+                type: SlideBlockType.heading,
+                content: 'Trig Functions',
+              ),
             ],
-          )
+          ),
         ],
         createdAt: DateTime.now(),
       );
@@ -170,8 +184,10 @@ void main() {
       expect(parseSlideResult.slides.first.title, 'Sine and Cosine');
     });
 
-    test('parses LLM SVG branch diagram and LaTeX paragraph slide correctly', () {
-      const llmJson = '''
+    test(
+      'parses LLM SVG branch diagram and LaTeX paragraph slide correctly',
+      () {
+        const llmJson = '''
       {
         "title": "A systematic way to list all eight expressions",
         "courseName": "Mathematics",
@@ -195,19 +211,26 @@ void main() {
       }
       ''';
 
-      final result = SlideJsonHelper.parseJson(llmJson);
-      expect(result.isSuccess, isTrue);
-      expect(result.deckTitle, 'A systematic way to list all eight expressions');
-      expect(result.courseName, 'Mathematics');
-      expect(result.slides.length, 1);
+        final result = SlideJsonHelper.parseJson(llmJson);
+        expect(result.isSuccess, isTrue);
+        expect(
+          result.deckTitle,
+          'A systematic way to list all eight expressions',
+        );
+        expect(result.courseName, 'Mathematics');
+        expect(result.slides.length, 1);
 
-      final slide = result.slides.first;
-      expect(slide.blocks.length, 2);
-      expect(slide.blocks[0].type, SlideBlockType.svg);
-      expect(slide.blocks[0].content, contains('<svg'));
-      expect(slide.blocks[1].type, SlideBlockType.paragraph);
-      expect(slide.blocks[1].content, contains(r'$$2 \times 2 \times 2 = 8$$'));
-    });
+        final slide = result.slides.first;
+        expect(slide.blocks.length, 2);
+        expect(slide.blocks[0].type, SlideBlockType.svg);
+        expect(slide.blocks[0].content, contains('<svg'));
+        expect(slide.blocks[1].type, SlideBlockType.paragraph);
+        expect(
+          slide.blocks[1].content,
+          contains(r'$$2 \times 2 \times 2 = 8$$'),
+        );
+      },
+    );
 
     test('SvgStyleInliner inlines CSS classes and strips style tags', () {
       const rawSvg =
@@ -218,7 +241,12 @@ void main() {
       // Style block must be stripped to prevent flutter_svg unhandled element warnings
       expect(processed.contains('<style'), isFalse);
       // Background rect must be injected with rounded corners
-      expect(processed.contains("<rect width='100%' height='100%' fill='#0b2240' rx='16' ry='16' />"), isTrue);
+      expect(
+        processed.contains(
+          "<rect width='100%' height='100%' fill='#0b2240' rx='16' ry='16' />",
+        ),
+        isTrue,
+      );
       // .line class must receive stroke and stroke-width attributes
       expect(processed.contains("stroke='#ffffff'"), isTrue);
       expect(processed.contains("stroke-width='2'"), isTrue);
@@ -228,8 +256,10 @@ void main() {
       expect(processed.contains("font-weight='bold'"), isTrue);
     });
 
-    test('parses and handles native card blocks with custom border and content', () {
-      const cardJson = '''
+    test(
+      'parses and handles native card blocks with custom border and content',
+      () {
+        const cardJson = '''
       {
         "title": "Consecutive Numbers",
         "slides": [
@@ -250,50 +280,54 @@ void main() {
       }
       ''';
 
-      final result = SlideJsonHelper.parseJson(cardJson);
-      expect(result.isSuccess, isTrue);
-      expect(result.slides.first.blocks.first.type, SlideBlockType.card);
-      expect(result.slides.first.blocks.first.caption, 'Set 1');
-      expect(result.slides.first.blocks.first.borderColor, '#f472b6');
-      expect(result.slides.first.blocks.first.content, contains('7 = 3 + 4'));
-    });
+        final result = SlideJsonHelper.parseJson(cardJson);
+        expect(result.isSuccess, isTrue);
+        expect(result.slides.first.blocks.first.type, SlideBlockType.card);
+        expect(result.slides.first.blocks.first.caption, 'Set 1');
+        expect(result.slides.first.blocks.first.borderColor, '#f472b6');
+        expect(result.slides.first.blocks.first.content, contains('7 = 3 + 4'));
+      },
+    );
 
     test(
-        'single-slide sample columns block has genuinely mixed nested content',
-        () {
-      final result =
-          SlideJsonHelper.parseJson(SlideJsonHelper.sampleSingleSlideJson);
+      'single-slide sample columns block has genuinely mixed nested content',
+      () {
+        final result = SlideJsonHelper.parseJson(
+          SlideJsonHelper.sampleSingleSlideJson,
+        );
 
-      expect(result.isSuccess, isTrue);
-      final columnsBlock = result.slides.first.blocks.firstWhere(
-        (b) => b.type == SlideBlockType.columns,
-      );
-      final decoded = json.decode(columnsBlock.content) as Map<String, dynamic>;
-      final columns = decoded['columns'] as List;
-      expect(columns.length, 2);
+        expect(result.isSuccess, isTrue);
+        final columnsBlock = result.slides.first.blocks.firstWhere(
+          (b) => b.type == SlideBlockType.columns,
+        );
+        final decoded =
+            json.decode(columnsBlock.content) as Map<String, dynamic>;
+        final columns = decoded['columns'] as List;
+        expect(columns.length, 2);
 
-      // Column 1: heading, image, bulletList, text -- a real mix, not
-      // just plain text like a table cell would allow.
-      final col1 = (columns[0] as List)
-          .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
-          .toList();
-      expect(col1.map((b) => b.type), [
-        SlideBlockType.heading,
-        SlideBlockType.imageUrl,
-        SlideBlockType.bulletList,
-        SlideBlockType.text,
-      ]);
+        // Column 1: heading, image, bulletList, text -- a real mix, not
+        // just plain text like a table cell would allow.
+        final col1 = (columns[0] as List)
+            .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+            .toList();
+        expect(col1.map((b) => b.type), [
+          SlideBlockType.heading,
+          SlideBlockType.imageUrl,
+          SlideBlockType.bulletList,
+          SlideBlockType.text,
+        ]);
 
-      // Column 2: heading, card, table.
-      final col2 = (columns[1] as List)
-          .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
-          .toList();
-      expect(col2.map((b) => b.type), [
-        SlideBlockType.heading,
-        SlideBlockType.card,
-        SlideBlockType.table,
-      ]);
-    });
+        // Column 2: heading, card, table.
+        final col2 = (columns[1] as List)
+            .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+            .toList();
+        expect(col2.map((b) => b.type), [
+          SlideBlockType.heading,
+          SlideBlockType.card,
+          SlideBlockType.table,
+        ]);
+      },
+    );
 
     test('parses banner blocks with layout fields correctly', () {
       const bannerJson = '''
@@ -397,8 +431,7 @@ void main() {
       expect(defaultResult.slides.first.blocks.first.glass, isFalse);
     });
 
-    test('parses glassStyle, defaulting to unset (frosted) when not given',
-        () {
+    test('parses glassStyle, defaulting to unset (frosted) when not given', () {
       const styledJson = '''
       {
         "title": "Glass Styles",
@@ -486,8 +519,10 @@ void main() {
       expect(blocks[1].textColor, 'FF38BDF8');
     });
 
-    test('parses numbered list style, textColor, and marker borderColor on bulletList blocks', () {
-      const listJson = '''
+    test(
+      'parses numbered list style, textColor, and marker borderColor on bulletList blocks',
+      () {
+        const listJson = '''
       {
         "title": "Numbered List",
         "blocks": [
@@ -502,19 +537,20 @@ void main() {
       }
       ''';
 
-      final result = SlideJsonHelper.parseJson(listJson);
-      expect(result.isSuccess, isTrue);
-      final block = result.slides.first.blocks.first;
-      expect(block.type, SlideBlockType.bulletList);
-      expect(block.extra, 'numbered');
-      expect(block.borderColor, 'FF34D399');
-      expect(block.textColor, 'FFFBBF24');
-    });
+        final result = SlideJsonHelper.parseJson(listJson);
+        expect(result.isSuccess, isTrue);
+        final block = result.slides.first.blocks.first;
+        expect(block.type, SlideBlockType.bulletList);
+        expect(block.extra, 'numbered');
+        expect(block.borderColor, 'FF34D399');
+        expect(block.textColor, 'FFFBBF24');
+      },
+    );
 
     test(
-        'parses the generic Container styling on a type that has no own styling',
-        () {
-      const containerJson = '''
+      'parses the generic Container styling on a type that has no own styling',
+      () {
+        const containerJson = '''
       {
         "title": "Boxed Table",
         "blocks": [
@@ -532,30 +568,41 @@ void main() {
             "minHeight": 200.0,
             "horizontalAlign": "center",
             "verticalAlign": "center",
-            "selfAlign": "right"
+            "selfAlign": "right",
+            "selfAlignVertical": "bottom"
           }
         ]
       }
       ''';
 
-      final result = SlideJsonHelper.parseJson(containerJson);
-      expect(result.isSuccess, isTrue);
-      final block = result.slides.first.blocks.first;
-      expect(block.type, SlideBlockType.table);
-      expect(block.backgroundColor, 'FF0F172A');
-      expect(block.borderColor, 'FF6366F1');
-      expect(block.borderRadius, 20.0);
-      expect(block.padding, 18.0);
-      expect(block.marginVertical, 10.0);
-      expect(block.width, 0.75);
-      expect(block.minHeight, 200.0);
-      expect(block.horizontalAlign, 'center');
-      expect(block.verticalAlign, 'center');
-      expect(block.selfAlign, 'right');
+        final result = SlideJsonHelper.parseJson(containerJson);
+        expect(result.isSuccess, isTrue);
+        final block = result.slides.first.blocks.first;
+        expect(block.type, SlideBlockType.table);
+        expect(block.backgroundColor, 'FF0F172A');
+        expect(block.borderColor, 'FF6366F1');
+        expect(block.borderRadius, 20.0);
+        expect(block.padding, 18.0);
+        expect(block.marginVertical, 10.0);
+        expect(block.width, 0.75);
+        expect(block.minHeight, 200.0);
+        expect(block.horizontalAlign, 'center');
+        expect(block.verticalAlign, 'center');
+        expect(block.selfAlign, 'right');
+        expect(block.selfAlignVertical, 'bottom');
+      },
+    );
+
+    test('selfAlignVertical defaults to null when not given', () {
+      final block = SlideBlock(
+        id: 'x',
+        type: SlideBlockType.container,
+        content: '{"children": []}',
+      );
+      expect(block.selfAlignVertical, isNull);
     });
 
-    test('parses a container block holding a flat list of mixed children',
-        () {
+    test('parses a container block holding a flat list of mixed children', () {
       const containerBlockJson = '''
       {
         "title": "Grouped Content",
@@ -594,9 +641,10 @@ void main() {
       ]);
     });
 
-    test('parses a container nested inside a columns block, and vice versa',
-        () {
-      const nestedJson = '''
+    test(
+      'parses a container nested inside a columns block, and vice versa',
+      () {
+        const nestedJson = '''
       {
         "title": "Nesting Check",
         "blocks": [
@@ -633,35 +681,38 @@ void main() {
       }
       ''';
 
-      final result = SlideJsonHelper.parseJson(nestedJson);
-      expect(result.isSuccess, isTrue);
-      final blocks = result.slides.first.blocks;
+        final result = SlideJsonHelper.parseJson(nestedJson);
+        expect(result.isSuccess, isTrue);
+        final blocks = result.slides.first.blocks;
 
-      final columnsBlock = blocks[0];
-      expect(columnsBlock.type, SlideBlockType.columns);
-      final colDecoded =
-          json.decode(columnsBlock.content) as Map<String, dynamic>;
-      final firstColumn = (colDecoded['columns'] as List).first as List;
-      expect(
-        SlideBlock.fromMap(firstColumn.first as Map<String, dynamic>).type,
-        SlideBlockType.container,
-      );
+        final columnsBlock = blocks[0];
+        expect(columnsBlock.type, SlideBlockType.columns);
+        final colDecoded =
+            json.decode(columnsBlock.content) as Map<String, dynamic>;
+        final firstColumn = (colDecoded['columns'] as List).first as List;
+        expect(
+          SlideBlock.fromMap(firstColumn.first as Map<String, dynamic>).type,
+          SlideBlockType.container,
+        );
 
-      final containerBlock = blocks[1];
-      expect(containerBlock.type, SlideBlockType.container);
-      final containerDecoded =
-          json.decode(containerBlock.content) as Map<String, dynamic>;
-      final containerChildren = containerDecoded['children'] as List;
-      expect(
-        SlideBlock.fromMap(containerChildren.first as Map<String, dynamic>)
-            .type,
-        SlideBlockType.columns,
-      );
-    });
+        final containerBlock = blocks[1];
+        expect(containerBlock.type, SlideBlockType.container);
+        final containerDecoded =
+            json.decode(containerBlock.content) as Map<String, dynamic>;
+        final containerChildren = containerDecoded['children'] as List;
+        expect(
+          SlideBlock.fromMap(
+            containerChildren.first as Map<String, dynamic>,
+          ).type,
+          SlideBlockType.columns,
+        );
+      },
+    );
 
-    test('"box" and "container" JSON aliases resolve to the container block, not card',
-        () {
-      const aliasJson = '''
+    test(
+      '"box" and "container" JSON aliases resolve to the container block, not card',
+      () {
+        const aliasJson = '''
       {
         "title": "Alias Check",
         "blocks": [
@@ -672,13 +723,14 @@ void main() {
       }
       ''';
 
-      final result = SlideJsonHelper.parseJson(aliasJson);
-      expect(result.isSuccess, isTrue);
-      final blocks = result.slides.first.blocks;
-      expect(blocks[0].type, SlideBlockType.container);
-      expect(blocks[1].type, SlideBlockType.container);
-      expect(blocks[2].type, SlideBlockType.card);
-    });
+        final result = SlideJsonHelper.parseJson(aliasJson);
+        expect(result.isSuccess, isTrue);
+        final blocks = result.slides.first.blocks;
+        expect(blocks[0].type, SlideBlockType.container);
+        expect(blocks[1].type, SlideBlockType.container);
+        expect(blocks[2].type, SlideBlockType.card);
+      },
+    );
 
     test('"text" JSON type resolves to the text block, not paragraph', () {
       const aliasJson = '''

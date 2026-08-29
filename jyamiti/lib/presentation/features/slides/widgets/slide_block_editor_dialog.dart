@@ -116,13 +116,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   // Outfit/Space Grotesk/Fira Code are already used elsewhere across
   // the app (body/display/code respectively); Merriweather and Comic
   // Neue round it out with a serif and a casual/handwritten option.
-  String textFontFamily = [
-    'Outfit',
-    'Space Grotesk',
-    'Fira Code',
-    'Merriweather',
-    'Comic Neue',
-  ].contains(block.fontFamily)
+  String textFontFamily =
+      [
+        'Outfit',
+        'Space Grotesk',
+        'Fira Code',
+        'Merriweather',
+        'Comic Neue',
+      ].contains(block.fontFamily)
       ? block.fontFamily!
       : 'Default';
 
@@ -171,6 +172,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String containerHorizontalAlign = block.horizontalAlign ?? 'left';
   String containerVerticalAlign = block.verticalAlign ?? 'top';
   String containerSelfAlign = block.selfAlign ?? 'center';
+  String containerSelfAlignVertical = block.selfAlignVertical ?? 'off';
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -178,13 +180,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   // JSON shape).
   List<String> tableHeaders = ['Column A', 'Column B'];
   List<List<String>> tableRows = [
-    ['', '']
+    ['', ''],
   ];
   if (block.type == SlideBlockType.table) {
     try {
       final data = json.decode(block.content) as Map<String, dynamic>;
-      tableHeaders =
-          (data['headers'] as List? ?? []).map((e) => e.toString()).toList();
+      tableHeaders = (data['headers'] as List? ?? [])
+          .map((e) => e.toString())
+          .toList();
       tableRows = (data['rows'] as List? ?? [])
           .map((r) => (r as List).map((c) => c.toString()).toList())
           .toList();
@@ -215,27 +218,27 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   controller: contentCtrl,
                   maxLines:
                       block.type == SlideBlockType.code ||
-                              block.type == SlideBlockType.paragraph ||
-                              block.type == SlideBlockType.bulletList ||
-                              block.type == SlideBlockType.svg ||
-                              block.type == SlideBlockType.card ||
-                              block.type == SlideBlockType.text
-                          ? 6
-                          : 2,
+                          block.type == SlideBlockType.paragraph ||
+                          block.type == SlideBlockType.bulletList ||
+                          block.type == SlideBlockType.svg ||
+                          block.type == SlideBlockType.card ||
+                          block.type == SlideBlockType.text
+                      ? 6
+                      : 2,
                   decoration: InputDecoration(
                     labelText: block.type == SlideBlockType.svg
                         ? 'SVG XML Code'
                         : block.type == SlideBlockType.card
-                            ? 'Card Content (Text or LaTeX equations)'
-                            : block.type == SlideBlockType.video
-                                ? 'YouTube URL or Video ID'
-                                : block.type == SlideBlockType.imageUrl
-                                    ? 'Image URL'
-                                    : block.type == SlideBlockType.banner
-                                        ? 'Banner Title'
-                                        : block.type == SlideBlockType.text
-                                            ? 'Text Content'
-                                            : 'Content',
+                        ? 'Card Content (Text or LaTeX equations)'
+                        : block.type == SlideBlockType.video
+                        ? 'YouTube URL or Video ID'
+                        : block.type == SlideBlockType.imageUrl
+                        ? 'Image URL'
+                        : block.type == SlideBlockType.banner
+                        ? 'Banner Title'
+                        : block.type == SlideBlockType.text
+                        ? 'Text Content'
+                        : 'Content',
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -265,13 +268,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   block.type == SlideBlockType.card) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: [
-                    'full',
-                    'original',
-                    'boxed',
-                    'compact',
-                    'small',
-                  ].contains(extraCtrl.text.toLowerCase().trim())
+                  value:
+                      [
+                        'full',
+                        'original',
+                        'boxed',
+                        'compact',
+                        'small',
+                      ].contains(extraCtrl.text.toLowerCase().trim())
                       ? extraCtrl.text.toLowerCase().trim()
                       : (block.type == SlideBlockType.card ? 'boxed' : 'full'),
                   decoration: const InputDecoration(
@@ -310,8 +314,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'Card Style',
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -379,8 +382,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'List Style',
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -394,7 +396,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   selected: {
                     extraCtrl.text.toLowerCase().trim() == 'numbered'
                         ? 'numbered'
-                        : 'bullet'
+                        : 'bullet',
                   },
                   onSelectionChanged: (sel) =>
                       setDialogState(() => extraCtrl.text = sel.first),
@@ -432,8 +434,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'Banner Layout',
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -506,8 +507,8 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                         max: 48,
                         divisions: 24,
                         label: layoutMarginVertical.toStringAsFixed(0),
-                        onChanged: (val) => setDialogState(
-                            () => layoutMarginVertical = val),
+                        onChanged: (val) =>
+                            setDialogState(() => layoutMarginVertical = val),
                       ),
                     ),
                   ],
@@ -529,8 +530,10 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ],
                 ),
                 const SizedBox(height: 10),
-                const Text('Horizontal Alignment',
-                    style: TextStyle(fontSize: 13)),
+                const Text(
+                  'Horizontal Alignment',
+                  style: TextStyle(fontSize: 13),
+                ),
                 const SizedBox(height: 6),
                 SegmentedButton<String>(
                   segments: const [
@@ -539,12 +542,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     ButtonSegment(value: 'right', label: Text('Right')),
                   ],
                   selected: {layoutHorizontalAlign},
-                  onSelectionChanged: (sel) => setDialogState(
-                      () => layoutHorizontalAlign = sel.first),
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => layoutHorizontalAlign = sel.first),
                 ),
                 const SizedBox(height: 10),
-                const Text('Vertical Alignment',
-                    style: TextStyle(fontSize: 13)),
+                const Text(
+                  'Vertical Alignment',
+                  style: TextStyle(fontSize: 13),
+                ),
                 const SizedBox(height: 6),
                 SegmentedButton<String>(
                   segments: const [
@@ -564,8 +569,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'Text Style',
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -595,8 +599,8 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                       child: Text('Comic Neue (casual)'),
                     ),
                   ],
-                  onChanged: (val) => setDialogState(
-                      () => textFontFamily = val ?? 'Default'),
+                  onChanged: (val) =>
+                      setDialogState(() => textFontFamily = val ?? 'Default'),
                 ),
                 const SizedBox(height: 14),
                 SlideColorPickerField(
@@ -671,8 +675,10 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ],
                 ),
                 const SizedBox(height: 10),
-                const Text('Horizontal Alignment',
-                    style: TextStyle(fontSize: 13)),
+                const Text(
+                  'Horizontal Alignment',
+                  style: TextStyle(fontSize: 13),
+                ),
                 const SizedBox(height: 6),
                 SegmentedButton<String>(
                   segments: const [
@@ -692,8 +698,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     FilterChip(
                       label: const Text('Bold'),
                       selected: textBold,
-                      onSelected: (val) =>
-                          setDialogState(() => textBold = val),
+                      onSelected: (val) => setDialogState(() => textBold = val),
                     ),
                     FilterChip(
                       label: const Text('Italic'),
@@ -723,8 +728,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'Container (optional)',
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -837,8 +841,10 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ],
                 ),
                 const SizedBox(height: 10),
-                const Text('Item Alignment (content inside the box)',
-                    style: TextStyle(fontSize: 13)),
+                const Text(
+                  'Item Alignment (content inside the box)',
+                  style: TextStyle(fontSize: 13),
+                ),
                 const SizedBox(height: 6),
                 SegmentedButton<String>(
                   segments: const [
@@ -848,7 +854,8 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ],
                   selected: {containerHorizontalAlign},
                   onSelectionChanged: (sel) => setDialogState(
-                      () => containerHorizontalAlign = sel.first),
+                    () => containerHorizontalAlign = sel.first,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 SegmentedButton<String>(
@@ -858,12 +865,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     ButtonSegment(value: 'bottom', label: Text('Bottom')),
                   ],
                   selected: {containerVerticalAlign},
-                  onSelectionChanged: (sel) => setDialogState(
-                      () => containerVerticalAlign = sel.first),
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => containerVerticalAlign = sel.first),
                 ),
                 const SizedBox(height: 10),
-                const Text('Self Align (position the box itself, if narrower)',
-                    style: TextStyle(fontSize: 13)),
+                const Text(
+                  'Self Align (position the box itself, if narrower)',
+                  style: TextStyle(fontSize: 13),
+                ),
                 const SizedBox(height: 6),
                 SegmentedButton<String>(
                   segments: const [
@@ -874,6 +883,24 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   selected: {containerSelfAlign},
                   onSelectionChanged: (sel) =>
                       setDialogState(() => containerSelfAlign = sel.first),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Self Align Vertical (position on the slide itself)',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'off', label: Text('Off')),
+                    ButtonSegment(value: 'top', label: Text('Top')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'bottom', label: Text('Bottom')),
+                  ],
+                  selected: {containerSelfAlignVertical},
+                  onSelectionChanged: (sel) => setDialogState(
+                    () => containerSelfAlignVertical = sel.first,
+                  ),
                 ),
               ],
             ],
@@ -895,47 +922,46 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
               // here). Feeds both glass and glassStyle below.
               final String? effectiveGlassChoice =
                   block.type == SlideBlockType.banner
-                      ? bannerGlassChoice
-                      : block.type == SlideBlockType.card
-                          ? cardGlassChoice
-                          : block.type == SlideBlockType.text
-                              ? textGlassChoice
-                              : null;
+                  ? bannerGlassChoice
+                  : block.type == SlideBlockType.card
+                  ? cardGlassChoice
+                  : block.type == SlideBlockType.text
+                  ? textGlassChoice
+                  : null;
               final updated = block.copyWith(
                 content: newContent,
                 extra: extraCtrl.text.isNotEmpty ? extraCtrl.text : null,
                 clearExtra: extraCtrl.text.isEmpty,
-                caption:
-                    captionCtrl.text.isNotEmpty ? captionCtrl.text : null,
+                caption: captionCtrl.text.isNotEmpty ? captionCtrl.text : null,
                 clearCaption: captionCtrl.text.isEmpty,
                 backgroundColor: block.type == SlideBlockType.banner
                     ? bannerBg
                     : block.type == SlideBlockType.card
-                        ? cardBg
-                        : block.type == SlideBlockType.text
-                            ? textBg
-                            : containerEligible
-                                ? containerBg
-                                : null,
+                    ? cardBg
+                    : block.type == SlideBlockType.text
+                    ? textBg
+                    : containerEligible
+                    ? containerBg
+                    : null,
                 clearBackgroundColor:
                     (block.type == SlideBlockType.banner && bannerBg == null) ||
-                        (block.type == SlideBlockType.card && cardBg == null) ||
-                        (block.type == SlideBlockType.text && textBg == null) ||
-                        (containerEligible && containerBg == null),
+                    (block.type == SlideBlockType.card && cardBg == null) ||
+                    (block.type == SlideBlockType.text && textBg == null) ||
+                    (containerEligible && containerBg == null),
                 textColor: block.type == SlideBlockType.banner
                     ? bannerText
                     : block.type == SlideBlockType.card
-                        ? cardText
-                        : block.type == SlideBlockType.text
-                            ? textFg
-                            : block.type == SlideBlockType.bulletList
-                                ? bulletTextColor
-                                : (block.type == SlideBlockType.heading ||
-                                        block.type ==
-                                            SlideBlockType.subheading)
-                                    ? headingTextColor
-                                    : null,
-                clearTextColor: (block.type == SlideBlockType.banner &&
+                    ? cardText
+                    : block.type == SlideBlockType.text
+                    ? textFg
+                    : block.type == SlideBlockType.bulletList
+                    ? bulletTextColor
+                    : (block.type == SlideBlockType.heading ||
+                          block.type == SlideBlockType.subheading)
+                    ? headingTextColor
+                    : null,
+                clearTextColor:
+                    (block.type == SlideBlockType.banner &&
                         bannerText == null) ||
                     (block.type == SlideBlockType.card && cardText == null) ||
                     (block.type == SlideBlockType.text && textFg == null) ||
@@ -947,15 +973,16 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                 borderColor: block.type == SlideBlockType.banner
                     ? bannerBorder
                     : block.type == SlideBlockType.card
-                        ? cardBorder
-                        : block.type == SlideBlockType.text
-                            ? textBorder
-                            : block.type == SlideBlockType.bulletList
-                                ? bulletMarkerColor
-                                : containerEligible
-                                    ? containerBorder
-                                    : null,
-                clearBorderColor: (block.type == SlideBlockType.banner &&
+                    ? cardBorder
+                    : block.type == SlideBlockType.text
+                    ? textBorder
+                    : block.type == SlideBlockType.bulletList
+                    ? bulletMarkerColor
+                    : containerEligible
+                    ? containerBorder
+                    : null,
+                clearBorderColor:
+                    (block.type == SlideBlockType.banner &&
                         bannerBorder == null) ||
                     (block.type == SlideBlockType.card && cardBorder == null) ||
                     (block.type == SlideBlockType.text && textBorder == null) ||
@@ -965,42 +992,42 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                 borderWidth: block.type == SlideBlockType.banner
                     ? bannerBorderWidth
                     : block.type == SlideBlockType.card
-                        ? cardBorderWidth
-                        : block.type == SlideBlockType.text
-                            ? textBorderWidth
-                            : containerEligible
-                                ? containerBorderWidth
-                                : null,
+                    ? cardBorderWidth
+                    : block.type == SlideBlockType.text
+                    ? textBorderWidth
+                    : containerEligible
+                    ? containerBorderWidth
+                    : null,
                 padding: block.type == SlideBlockType.banner
                     ? layoutPadding
                     : containerEligible
-                        ? containerPadding
-                        : null,
+                    ? containerPadding
+                    : null,
                 marginVertical: block.type == SlideBlockType.banner
                     ? layoutMarginVertical
                     : containerEligible
-                        ? containerMargin
-                        : null,
+                    ? containerMargin
+                    : null,
                 borderRadius: containerEligible ? containerBorderRadius : null,
                 fontSize: block.type == SlideBlockType.banner
                     ? layoutFontSize
                     : block.type == SlideBlockType.text
-                        ? textFontSize
-                        : null,
+                    ? textFontSize
+                    : null,
                 horizontalAlign: block.type == SlideBlockType.banner
                     ? layoutHorizontalAlign
                     : block.type == SlideBlockType.text
-                        ? textHorizontalAlign
-                        : block.type == SlideBlockType.card
-                            ? cardHorizontalAlign
-                            : containerEligible
-                                ? containerHorizontalAlign
-                                : null,
+                    ? textHorizontalAlign
+                    : block.type == SlideBlockType.card
+                    ? cardHorizontalAlign
+                    : containerEligible
+                    ? containerHorizontalAlign
+                    : null,
                 verticalAlign: block.type == SlideBlockType.banner
                     ? layoutVerticalAlign
                     : containerEligible
-                        ? containerVerticalAlign
-                        : null,
+                    ? containerVerticalAlign
+                    : null,
                 width: containerEligible
                     ? (containerWidth >= 100 ? null : containerWidth / 100)
                     : null,
@@ -1010,28 +1037,40 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     : null,
                 clearMinHeight: containerEligible && containerMinHeight <= 0,
                 selfAlign: containerEligible ? containerSelfAlign : null,
+                selfAlignVertical: containerEligible
+                    ? (containerSelfAlignVertical == 'off'
+                          ? null
+                          : containerSelfAlignVertical)
+                    : null,
+                clearSelfAlignVertical:
+                    containerEligible && containerSelfAlignVertical == 'off',
                 bold: block.type == SlideBlockType.text ? textBold : null,
                 italic: block.type == SlideBlockType.text ? textItalic : null,
-                underline:
-                    block.type == SlideBlockType.text ? textUnderline : null,
+                underline: block.type == SlideBlockType.text
+                    ? textUnderline
+                    : null,
                 strikethrough: block.type == SlideBlockType.text
                     ? textStrikethrough
                     : null,
-                fitContent:
-                    block.type == SlideBlockType.text ? textFitContent : null,
+                fitContent: block.type == SlideBlockType.text
+                    ? textFitContent
+                    : null,
                 glass: effectiveGlassChoice == null
                     ? null
                     : effectiveGlassChoice != 'off',
-                glassStyle: effectiveGlassChoice == null ||
+                glassStyle:
+                    effectiveGlassChoice == null ||
                         effectiveGlassChoice == 'off'
                     ? null
                     : effectiveGlassChoice,
                 clearGlassStyle: effectiveGlassChoice == 'off',
-                fontFamily: block.type == SlideBlockType.text &&
+                fontFamily:
+                    block.type == SlideBlockType.text &&
                         textFontFamily != 'Default'
                     ? textFontFamily
                     : null,
-                clearFontFamily: block.type == SlideBlockType.text &&
+                clearFontFamily:
+                    block.type == SlideBlockType.text &&
                     textFontFamily == 'Default',
               );
               Navigator.pop(ctx, updated);

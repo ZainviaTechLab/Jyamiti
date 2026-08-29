@@ -52,8 +52,9 @@ Future<SlideBlockType?> pickSlideBlockType(
                   color: isCurrent ? const Color(0xFF6366F1) : null,
                 ),
               ),
-              trailing:
-                  isCurrent ? const Icon(Icons.check_rounded, color: Color(0xFF6366F1)) : null,
+              trailing: isCurrent
+                  ? const Icon(Icons.check_rounded, color: Color(0xFF6366F1))
+                  : null,
               onTap: isCurrent ? null : () => Navigator.pop(ctx, type),
             );
           }),
@@ -162,9 +163,7 @@ SlideBlock applyBannerDefaults(SlideBlock block) {
 /// A freshly-added block's starting content/extra -- same reasoning as
 /// [iconForSlideBlockType] for being a shared top-level function rather
 /// than a method duplicated per screen.
-({String content, String? extra}) defaultBlockContentFor(
-  SlideBlockType type,
-) {
+({String content, String? extra}) defaultBlockContentFor(SlideBlockType type) {
   switch (type) {
     case SlideBlockType.heading:
       return (content: 'New Section Title', extra: null);
@@ -173,7 +172,7 @@ SlideBlock applyBannerDefaults(SlideBlock block) {
     case SlideBlockType.paragraph:
       return (
         content: 'Explanation paragraph text for students...',
-        extra: null
+        extra: null,
       );
     case SlideBlockType.code:
       return (
@@ -187,10 +186,7 @@ SlideBlock applyBannerDefaults(SlideBlock block) {
         extra: null,
       );
     case SlideBlockType.callout:
-      return (
-        content: 'Important note or tip for students.',
-        extra: 'info',
-      );
+      return (content: 'Important note or tip for students.', extra: 'info');
     case SlideBlockType.imageUrl:
       return (
         content:
@@ -241,7 +237,8 @@ SlideBlock applyBannerDefaults(SlideBlock block) {
       return (content: 'New Banner Section Title', extra: null);
     case SlideBlockType.text:
       return (
-        content: 'Styled text -- color, size, alignment and formatting '
+        content:
+            'Styled text -- color, size, alignment and formatting '
             'are all adjustable in Text Style below.',
         extra: null,
       );
@@ -250,10 +247,7 @@ SlideBlock applyBannerDefaults(SlideBlock block) {
       // container block's content is JSON-encoded {children: [blockMap,
       // ...]}, a single flat list (unlike columns' list-of-lists).
       // Starts empty.
-      return (
-        content: jsonEncode({'children': []}),
-        extra: null,
-      );
+      return (content: jsonEncode({'children': []}), extra: null);
   }
 }
 
@@ -295,6 +289,12 @@ class ContainerStyleSection extends StatelessWidget {
   final ValueChanged<String> onVerticalAlignChanged;
   final String selfAlign;
   final ValueChanged<String> onSelfAlignChanged;
+  // selfAlignVertical: 'off'/'top'/'center'/'bottom' -- positions the
+  // whole block within an area at least as tall as the visible slide
+  // (see SlideBlock.selfAlignVertical's own doc comment). 'off' means
+  // null/unset, the existing default (plain in-flow rendering).
+  final String selfAlignVertical;
+  final ValueChanged<String> onSelfAlignVerticalChanged;
 
   const ContainerStyleSection({
     super.key,
@@ -320,6 +320,8 @@ class ContainerStyleSection extends StatelessWidget {
     required this.onVerticalAlignChanged,
     required this.selfAlign,
     required this.onSelfAlignChanged,
+    required this.selfAlignVertical,
+    required this.onSelfAlignVerticalChanged,
   });
 
   @override
@@ -435,8 +437,10 @@ class ContainerStyleSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 10),
-        const Text('Item Alignment (content inside the box)',
-            style: TextStyle(fontSize: 13)),
+        const Text(
+          'Item Alignment (content inside the box)',
+          style: TextStyle(fontSize: 13),
+        ),
         const SizedBox(height: 6),
         Row(
           children: [
@@ -471,8 +475,10 @@ class ContainerStyleSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 10),
-        const Text('Self Align (position the box itself, if narrower)',
-            style: TextStyle(fontSize: 13)),
+        const Text(
+          'Self Align (position the box itself, if narrower)',
+          style: TextStyle(fontSize: 13),
+        ),
         const SizedBox(height: 6),
         SegmentedButton<String>(
           segments: const [
@@ -482,6 +488,22 @@ class ContainerStyleSection extends StatelessWidget {
           ],
           selected: {selfAlign},
           onSelectionChanged: (sel) => onSelfAlignChanged(sel.first),
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'Self Align Vertical (position on the slide itself)',
+          style: TextStyle(fontSize: 13),
+        ),
+        const SizedBox(height: 6),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'off', label: Text('Off')),
+            ButtonSegment(value: 'top', label: Text('Top')),
+            ButtonSegment(value: 'center', label: Text('Center')),
+            ButtonSegment(value: 'bottom', label: Text('Bottom')),
+          ],
+          selected: {selfAlignVertical},
+          onSelectionChanged: (sel) => onSelfAlignVerticalChanged(sel.first),
         ),
       ],
     );

@@ -360,10 +360,7 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
         final url = slide.backgroundImageUrl;
         if (url != null && url.trim().isNotEmpty) {
           return BoxDecoration(
-            image: DecorationImage(
-              image: NetworkImage(url),
-              fit: BoxFit.cover,
-            ),
+            image: DecorationImage(image: NetworkImage(url), fit: BoxFit.cover),
           );
         }
         break;
@@ -444,7 +441,9 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
             if (_isFullWhiteboardActive)
               Positioned.fill(
                 child: Container(
-                  color: isDark ? const Color(0xFF0F172A) : const Color(0xFFFCFDFE),
+                  color: isDark
+                      ? const Color(0xFF0F172A)
+                      : const Color(0xFFFCFDFE),
                   child: WritingPadWidget(
                     isTransparentBg: false,
                     isFullScreen: true,
@@ -587,7 +586,9 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
             IconButton(
               icon: Icon(
                 _editModeOn ? Icons.edit_rounded : Icons.edit_outlined,
-                color: _editModeOn ? const Color(0xFF6366F1) : context.textColor,
+                color: _editModeOn
+                    ? const Color(0xFF6366F1)
+                    : context.textColor,
               ),
               tooltip: _editModeOn
                   ? 'Exit Edit Mode'
@@ -605,63 +606,126 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
     SlideItem slide,
     bool isDark,
   ) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
-      child: Center(
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 860),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Slide Header Badge
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6366F1).withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'SLIDE ${slide.slideIndex + 1}',
-                  style: const TextStyle(
-                    color: Color(0xFF818CF8),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                    letterSpacing: 1.1,
+    // LayoutBuilder here (outside the SingleChildScrollView) is what
+    // actually discovers the real, finite slide viewport height --
+    // once inside a scrolling widget, height constraints go unbounded
+    // by design (that's what makes it scrollable), so a block deeper
+    // in the tree has no way to know "how tall is the visible slide"
+    // on its own. That measured height is what lets
+    // _buildPositionedBlock reserve a same-height area for any block
+    // requesting selfAlignVertical, below.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Center(
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 860),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Slide Header Badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6366F1).withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'SLIDE ${slide.slideIndex + 1}',
+                      style: const TextStyle(
+                        color: Color(0xFF818CF8),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 12),
+
+                  // Modular Slide Blocks -- the plain read-only mapping
+                  // (unchanged from before edit mode existed) unless
+                  // edit mode is actually on, in which case each block
+                  // gets a reorder handle + edit/delete controls, plus
+                  // an Add Block bar underneath, mirroring
+                  // AdminSlideCmsScreen's own block-list editor.
+                  // selfAlignVertical positioning (see
+                  // _buildPositionedBlock) only applies in this
+                  // read-only path -- not worth the complexity while
+                  // actively editing, and this read-only view is the
+                  // one that actually represents what gets presented.
+                  if (_editModeOn)
+                    ..._buildEditableBlocks(context, slideIdx, slide, isDark)
+                  else
+                    ...slide.blocks.map(
+                      (block) => _buildPositionedBlock(
+                        block,
+                        isDark,
+                        constraints.maxHeight,
+                      ),
+                    ),
+
+                  // Embedded Interactive Quiz Card (If Present)
+                  if (slide.quiz != null) ...[
+                    const SizedBox(height: 24),
+                    _buildEmbeddedQuizCard(
+                      context,
+                      slide.slideIndex,
+                      slide.quiz!,
+                      isDark,
+                    ),
+                  ],
+                ],
               ),
-              const SizedBox(height: 12),
-
-              // Modular Slide Blocks -- the plain read-only mapping
-              // (unchanged from before edit mode existed) unless edit
-              // mode is actually on, in which case each block gets a
-              // reorder handle + edit/delete controls, plus an Add
-              // Block bar underneath, mirroring AdminSlideCmsScreen's
-              // own block-list editor.
-              if (_editModeOn)
-                ..._buildEditableBlocks(context, slideIdx, slide, isDark)
-              else
-                ...slide.blocks.map(
-                  (block) => SlideBlockRenderer(block: block, isDark: isDark),
-                ),
-
-              // Embedded Interactive Quiz Card (If Present)
-              if (slide.quiz != null) ...[
-                const SizedBox(height: 24),
-                _buildEmbeddedQuizCard(
-                  context,
-                  slide.slideIndex,
-                  slide.quiz!,
-                  isDark,
-                ),
-              ],
-            ],
+            ),
           ),
-        ),
+        );
+      },
+    );
+  }
+
+  /// Wraps [block] in a ConstrainedBox(minHeight: [availableHeight]) +
+  /// Align when it requests selfAlignVertical -- reserves an area at
+  /// least as tall as the slide's own visible viewport and positions
+  /// the block within it (top/center/bottom, honoring selfAlign for
+  /// the horizontal axis too). Every other block (selfAlignVertical
+  /// unset, the default) renders exactly as before -- plain, in-flow,
+  /// natural size.
+  Widget _buildPositionedBlock(
+    SlideBlock block,
+    bool isDark,
+    double availableHeight,
+  ) {
+    final renderedBlock = SlideBlockRenderer(block: block, isDark: isDark);
+    if (block.selfAlignVertical == null) return renderedBlock;
+
+    final Alignment alignment = switch ((
+      block.selfAlign,
+      block.selfAlignVertical,
+    )) {
+      ('left', 'top') => Alignment.topLeft,
+      ('left', 'bottom') => Alignment.bottomLeft,
+      ('left', _) => Alignment.centerLeft,
+      ('right', 'top') => Alignment.topRight,
+      ('right', 'bottom') => Alignment.bottomRight,
+      ('right', _) => Alignment.centerRight,
+      (_, 'top') => Alignment.topCenter,
+      (_, 'bottom') => Alignment.bottomCenter,
+      (_, _) => Alignment.center,
+    };
+
+    // -48 accounts for the 24px top+bottom padding on the
+    // SingleChildScrollView above, so this reserves the actual visible
+    // height, not the padding-inclusive one -- same reasoning the old
+    // (removed) SlideItem.contentVerticalAlign used.
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        minHeight: (availableHeight - 48).clamp(0, double.infinity),
       ),
+      child: Align(alignment: alignment, child: renderedBlock),
     );
   }
 

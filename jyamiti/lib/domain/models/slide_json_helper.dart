@@ -114,13 +114,17 @@ class SlideJsonHelper {
   }
 
   /// Parses a single slide map with fallback mechanisms and normalization
-  static SlideItem _parseSingleSlide(Map<String, dynamic> map, int fallbackIndex) {
+  static SlideItem _parseSingleSlide(
+    Map<String, dynamic> map,
+    int fallbackIndex,
+  ) {
     final now = DateTime.now().microsecondsSinceEpoch;
     final slideId = map['id']?.toString().isNotEmpty == true
         ? map['id'].toString()
         : 'slide_${now}_$fallbackIndex';
 
-    final title = map['title']?.toString() ??
+    final title =
+        map['title']?.toString() ??
         map['heading']?.toString() ??
         'Slide ${fallbackIndex + 1}';
 
@@ -141,7 +145,8 @@ class SlideJsonHelper {
 
     // If blocks list was empty, provide a default paragraph block if content exists in root
     if (blocks.isEmpty) {
-      final fallbackContent = map['content']?.toString() ?? map['body']?.toString();
+      final fallbackContent =
+          map['content']?.toString() ?? map['body']?.toString();
       if (fallbackContent != null && fallbackContent.isNotEmpty) {
         blocks.add(
           SlideBlock(
@@ -168,7 +173,8 @@ class SlideJsonHelper {
     }
 
     final backgroundType = SlideBackgroundType.values.firstWhere(
-      (e) => e.name.toLowerCase() ==
+      (e) =>
+          e.name.toLowerCase() ==
           (map['backgroundType'] ?? '').toString().toLowerCase(),
       orElse: () => SlideBackgroundType.theme,
     );
@@ -199,8 +205,12 @@ class SlideJsonHelper {
         ? map['id'].toString()
         : 'b_${now}_${slideIndex}_$blockIndex';
 
-    final rawType = (map['type'] ?? 'paragraph').toString().toLowerCase().trim();
-    final content = map['content']?.toString() ??
+    final rawType = (map['type'] ?? 'paragraph')
+        .toString()
+        .toLowerCase()
+        .trim();
+    final content =
+        map['content']?.toString() ??
         map['text']?.toString() ??
         map['code']?.toString() ??
         map['latex']?.toString() ??
@@ -228,7 +238,8 @@ class SlideJsonHelper {
         'rows': map['rows'] ?? [],
       });
     } else if (type == SlideBlockType.video && content.isEmpty) {
-      resolvedContent = map['videoUrl']?.toString() ??
+      resolvedContent =
+          map['videoUrl']?.toString() ??
           map['youtube']?.toString() ??
           map['videoId']?.toString() ??
           '';
@@ -298,6 +309,7 @@ class SlideJsonHelper {
     final borderRadius = (map['borderRadius'] as num?)?.toDouble();
     final width = (map['width'] as num?)?.toDouble();
     final selfAlign = map['selfAlign']?.toString();
+    final selfAlignVertical = map['selfAlignVertical']?.toString();
 
     return SlideBlock(
       id: blockId,
@@ -326,6 +338,7 @@ class SlideJsonHelper {
       borderRadius: borderRadius,
       width: width,
       selfAlign: selfAlign,
+      selfAlignVertical: selfAlignVertical,
     );
   }
 
@@ -507,607 +520,588 @@ class SlideJsonHelper {
   // across the full set.
 
   static String get sampleSingleSlideJson => _prettyEncoder.convert({
-        "title": "Pythagorean Theorem",
-        "theme": "darkGlass",
-        "enableWhiteboard": true,
-        "backgroundType": "gradient",
-        "backgroundColor": "FF2E1065",
-        "backgroundColor2": "FF0F172A",
+    "title": "Pythagorean Theorem",
+    "theme": "darkGlass",
+    "enableWhiteboard": true,
+    "backgroundType": "gradient",
+    "backgroundColor": "FF2E1065",
+    "backgroundColor2": "FF0F172A",
+    "blocks": [
+      {
+        "type": "banner",
+        "content": "Unit 3: Right Triangle Geometry",
+        "backgroundColor": "FFF59E0B",
+        "textColor": "FF000000",
+        "borderColor": "FF78350F",
+        "borderWidth": 2.0,
+        "padding": 20.0,
+        "marginVertical": 14.0,
+        "fontSize": 24.0,
+        "horizontalAlign": "center",
+        "verticalAlign": "center",
+        "minHeight": 90.0,
+        "glass": true,
+        "glassStyle": "subtle",
+      },
+      {"type": "heading", "content": "Fundamental Geometry"},
+      {
+        "type": "subheading",
+        "content": "Right Triangles & The Hypotenuse",
+        "textColor": "FFFBBF24",
+      },
+      {
+        "type": "paragraph",
+        "content":
+            "In mathematics, the Pythagorean theorem is a fundamental relation in Euclidean geometry among the three sides of a right triangle -- written inline as \$a^2 + b^2 = c^2\$ for quick reference.",
+      },
+      {
+        "type": "text",
+        "content": "Highlight: the theorem only holds for RIGHT triangles.",
+        "textColor": "FFFBBF24",
+        "backgroundColor": "331E293B",
+        "borderColor": "FFFBBF24",
+        "borderWidth": 1.5,
+        "fontSize": 17.0,
+        "horizontalAlign": "center",
+        "bold": true,
+        "underline": true,
+        "fitContent": true,
+        "fontFamily": "Space Grotesk",
+      },
+      {
+        "type": "math",
+        "content": "a^2 + b^2 = c^2",
+        "backgroundColor": "331E293B",
+        "borderColor": "FF6366F1",
+        "borderWidth": 1.5,
+        "borderRadius": 20.0,
+        "padding": 18.0,
+        "width": 0.6,
+        "selfAlign": "center",
+      },
+      {
+        "type": "svg",
+        "content":
+            "<svg viewBox='0 0 400 200' xmlns='http://www.w3.org/2000/svg'>\n  <rect width='400' height='200' fill='#0b2240' rx='12'/>\n  <polygon points='60,160 300,160 60,40' fill='none' stroke='#6366f1' stroke-width='3'/>\n  <text x='200' y='105' fill='#ffffff' font-size='16' text-anchor='middle' font-weight='bold'>Right Triangle</text>\n</svg>",
+        "extra": "boxed",
+      },
+      {
+        "type": "code",
+        "content":
+            "import 'dart:math';\n\ndouble hypotenuse(double a, double b) {\n  return sqrt(a * a + b * b);\n}",
+        "extra": "dart",
+      },
+      {
+        "type": "bulletList",
+        "content":
+            "Applies only to right-angled triangles\nForms the basis of coordinate geometry\nDiscovered independently across many ancient cultures",
+        "extra": "numbered",
+        "textColor": "FFFBBF24",
+        "borderColor": "FF34D399",
+      },
+      {
+        "type": "callout",
+        "content":
+            "Remember: c represents the length of the hypotenuse opposite the right angle.",
+        "extra": "tip",
+      },
+      {
+        "type": "imageUrl",
+        "content":
+            "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800",
+        "caption": "A right triangle with labeled sides",
+      },
+      {
+        "type": "table",
+        "headers": ["a", "b", "c (hypotenuse)"],
+        "rows": [
+          ["3", "4", "5"],
+          ["5", "12", "13"],
+          ["8", "15", "17"],
+        ],
+      },
+      {
+        "type": "video",
+        "content": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "caption": "Watch: a visual proof of the theorem",
+      },
+      {
+        "type": "card",
+        "caption": "Practice Set",
+        "content": "3-4-5\n5-12-13\n8-15-17",
+        "extra": "boxed",
+        "borderColor": "FF10B981",
+        "horizontalAlign": "center",
+        "glass": true,
+      },
+      {
+        "type": "columns",
+        "columns": [
+          [
+            {"type": "heading", "content": "Diagram"},
+            {
+              "type": "imageUrl",
+              "content":
+                  "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=600",
+              "caption": "Right triangle, sides labeled",
+            },
+            {
+              "type": "bulletList",
+              "content": "Two legs\nOne hypotenuse\nOne right angle",
+            },
+            {
+              "type": "text",
+              "content": "Tip: label the right angle first.",
+              "textColor": "FF34D399",
+              "fontSize": 14.0,
+              "italic": true,
+            },
+          ],
+          [
+            {"type": "heading", "content": "Formula"},
+            {
+              "type": "card",
+              "caption": "Key Formula",
+              "content": "a^2 + b^2 = c^2",
+              "extra": "boxed",
+              "borderColor": "FFF472B6",
+            },
+            {
+              "type": "table",
+              "headers": ["Term", "Meaning"],
+              "rows": [
+                ["a, b", "the two legs"],
+                ["c", "the hypotenuse"],
+              ],
+            },
+          ],
+        ],
+      },
+      {
+        "type": "container",
+        "backgroundColor": "331E293B",
+        "borderColor": "FFA78BFA",
+        "borderWidth": 1.5,
+        "borderRadius": 18.0,
+        "padding": 16.0,
+        "minHeight": 160.0,
+        "horizontalAlign": "center",
+        "verticalAlign": "center",
+        "selfAlignVertical": "bottom",
+        "children": [
+          {"type": "subheading", "content": "Quick Recap"},
+          {
+            "type": "text",
+            "content":
+                "Everything above in one glance: a^2 + b^2 = c^2, always true for right triangles.",
+            "italic": true,
+          },
+        ],
+      },
+    ],
+    "quiz": {
+      "question": "Which side of a right triangle is the hypotenuse?",
+      "options": [
+        "The side opposite the right angle",
+        "The shortest side",
+        "The adjacent vertical side",
+        "None of the above",
+      ],
+      "correctIndex": 0,
+      "explanation":
+          "The hypotenuse is the longest side of a right-angled triangle, directly opposite the 90-degree angle.",
+    },
+  });
+
+  static String get sampleMultiSlideJson => _prettyEncoder.convert([
+    {
+      "title": "Module 1: Coordinate Geometry",
+      "theme": "midnightNeon",
+      "blocks": [
+        {
+          "type": "banner",
+          "content": "Module 1: Coordinate Geometry",
+          "backgroundColor": "FF0EA5E9",
+          "textColor": "FFFFFFFF",
+          "borderColor": "FF075985",
+          "borderWidth": 2.0,
+          "padding": 18.0,
+          "marginVertical": 12.0,
+          "fontSize": 22.0,
+          "horizontalAlign": "left",
+          "verticalAlign": "center",
+          "minHeight": 80.0,
+          "glass": true,
+          "glassStyle": "subtle",
+        },
+        {"type": "heading", "content": "Introduction to 2D Cartesian Plane"},
+        {
+          "type": "subheading",
+          "content": "Distance Between Two Points",
+          "textColor": "FF38BDF8",
+        },
+        {
+          "type": "paragraph",
+          "content":
+              "Every point in the plane is represented by an ordered pair of real numbers (x, y).",
+        },
+        {
+          "type": "text",
+          "content":
+              "Distance is always non-negative -- it's the magnitude of displacement.",
+          "textColor": "FF38BDF8",
+          "fontSize": 16.0,
+          "horizontalAlign": "left",
+          "italic": true,
+          "fontFamily": "Outfit",
+        },
+        {
+          "type": "math",
+          "content": "d = \\sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}",
+          "backgroundColor": "331E293B",
+          "borderColor": "FF0EA5E9",
+          "borderWidth": 1.5,
+          "borderRadius": 20.0,
+          "padding": 18.0,
+          "width": 0.6,
+          "selfAlign": "center",
+        },
+        {
+          "type": "svg",
+          "content":
+              "<svg viewBox='0 0 400 200' xmlns='http://www.w3.org/2000/svg'>\n  <rect width='400' height='200' fill='#0b2240' rx='12'/>\n  <circle cx='120' cy='140' r='6' fill='#38bdf8'/>\n  <circle cx='280' cy='60' r='6' fill='#38bdf8'/>\n  <line x1='120' y1='140' x2='280' y2='60' stroke='#818cf8' stroke-width='2'/>\n  <text x='200' y='185' fill='#ffffff' font-size='14' text-anchor='middle'>Distance between two points</text>\n</svg>",
+          "extra": "boxed",
+        },
+        {
+          "type": "columns",
+          "columns": [
+            [
+              {"type": "heading", "content": "Quadrants"},
+              {
+                "type": "bulletList",
+                "content":
+                    "Quadrant I: (+, +)\nQuadrant II: (-, +)\nQuadrant III: (-, -)\nQuadrant IV: (+, -)",
+              },
+            ],
+            [
+              {"type": "heading", "content": "Example Points"},
+              {
+                "type": "table",
+                "headers": ["Point", "Quadrant"],
+                "rows": [
+                  ["(3, 2)", "I"],
+                  ["(-4, 1)", "II"],
+                ],
+              },
+              {
+                "type": "text",
+                "content": "Note the sign pattern above.",
+                "textColor": "FFA78BFA",
+                "fontSize": 14.0,
+                "underline": true,
+              },
+            ],
+          ],
+        },
+        {
+          "type": "container",
+          "backgroundColor": "331E1B4B",
+          "borderColor": "FF818CF8",
+          "borderWidth": 1.5,
+          "borderRadius": 18.0,
+          "padding": 16.0,
+          "minHeight": 160.0,
+          "horizontalAlign": "center",
+          "verticalAlign": "center",
+          "selfAlignVertical": "center",
+          "children": [
+            {"type": "subheading", "content": "Quick Recap"},
+            {
+              "type": "bulletList",
+              "content":
+                  "Distance is always positive\nQuadrants number counter-clockwise from top-right",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      "title": "Module 2: Slope and Intercept",
+      "theme": "emeraldSlate",
+      "backgroundType": "solidColor",
+      "backgroundColor": "FF0F172A",
+      "blocks": [
+        {
+          "type": "code",
+          "content":
+              "# Calculating slope in Python\ndef slope(p1, p2):\n    return (p2[1] - p1[1]) / (p2[0] - p1[0])",
+          "extra": "python",
+        },
+        {
+          "type": "bulletList",
+          "content":
+              "Positive slope rises left to right\nNegative slope falls left to right\nZero slope is a horizontal line",
+          "extra": "numbered",
+          "textColor": "FF34D399",
+          "borderColor": "FF10B981",
+        },
+        {
+          "type": "callout",
+          "content":
+              "If denominator is zero, the line is strictly vertical with undefined slope.",
+          "extra": "warning",
+        },
+        {
+          "type": "imageUrl",
+          "content":
+              "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800",
+          "caption": "Lines of varying slope",
+        },
+        {
+          "type": "table",
+          "headers": ["Slope", "Line Behavior"],
+          "rows": [
+            ["m > 0", "Rises left to right"],
+            ["m < 0", "Falls left to right"],
+            ["m = 0", "Horizontal"],
+          ],
+        },
+        {
+          "type": "video",
+          "content": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+          "caption": "Watch: slope-intercept form explained",
+        },
+        {
+          "type": "card",
+          "caption": "Practice Set",
+          "content": "y = 2x + 3\ny = -x + 7\n2y = 4x - 6",
+          "extra": "boxed",
+          "borderColor": "FF10B981",
+          "horizontalAlign": "right",
+          "glass": true,
+        },
+      ],
+      "quiz": {
+        "question": "In y = mx + b, what does b represent?",
+        "options": [
+          "The y-intercept",
+          "The slope",
+          "The x-intercept",
+          "The domain",
+        ],
+        "correctIndex": 0,
+        "explanation": "b is the y-intercept -- the value of y when x = 0.",
+      },
+    },
+  ]);
+
+  static String get sampleFullDeckJson => _prettyEncoder.convert({
+    "title": "Quantum Mechanics & Wave Functions",
+    "description":
+        "Comprehensive introduction to Schrödinger's equation and state vectors.",
+    "courseName": "Advanced Physics",
+    "slides": [
+      {
+        "title": "Wave-Particle Duality",
+        "theme": "sunsetViolet",
         "blocks": [
           {
             "type": "banner",
-            "content": "Unit 3: Right Triangle Geometry",
-            "backgroundColor": "FFF59E0B",
+            "content": "Chapter 4: Wave-Particle Duality",
+            "backgroundColor": "FFA78BFA",
             "textColor": "FF000000",
-            "borderColor": "FF78350F",
+            "borderColor": "FF4C1D95",
             "borderWidth": 2.0,
-            "padding": 20.0,
-            "marginVertical": 14.0,
-            "fontSize": 24.0,
+            "padding": 18.0,
+            "marginVertical": 12.0,
+            "fontSize": 22.0,
             "horizontalAlign": "center",
             "verticalAlign": "center",
-            "minHeight": 90.0,
+            "minHeight": 100.0,
             "glass": true,
-            "glassStyle": "subtle"
+            "glassStyle": "subtle",
           },
-          {
-            "type": "heading",
-            "content": "Fundamental Geometry"
-          },
+          {"type": "heading", "content": "The de Broglie Hypothesis"},
           {
             "type": "subheading",
-            "content": "Right Triangles & The Hypotenuse",
-            "textColor": "FFFBBF24"
+            "content": "Matter Waves",
+            "textColor": "FFA78BFA",
           },
           {
             "type": "paragraph",
-            "content": "In mathematics, the Pythagorean theorem is a fundamental relation in Euclidean geometry among the three sides of a right triangle -- written inline as \$a^2 + b^2 = c^2\$ for quick reference."
+            "content":
+                "Matter exhibits wave-like properties with a wavelength inversely proportional to momentum.",
           },
           {
             "type": "text",
-            "content": "Highlight: the theorem only holds for RIGHT triangles.",
-            "textColor": "FFFBBF24",
-            "backgroundColor": "331E293B",
-            "borderColor": "FFFBBF24",
-            "borderWidth": 1.5,
-            "fontSize": 17.0,
-            "horizontalAlign": "center",
-            "bold": true,
-            "underline": true,
-            "fitContent": true,
-            "fontFamily": "Space Grotesk"
+            "content": "Historical note (superseded by later experiments).",
+            "textColor": "FFF87171",
+            "fontSize": 15.0,
+            "horizontalAlign": "right",
+            "italic": true,
+            "strikethrough": true,
+            "fontFamily": "Merriweather",
           },
           {
             "type": "math",
-            "content": "a^2 + b^2 = c^2",
+            "content": "\\lambda = \\frac{h}{p}",
             "backgroundColor": "331E293B",
-            "borderColor": "FF6366F1",
+            "borderColor": "FFA78BFA",
             "borderWidth": 1.5,
             "borderRadius": 20.0,
             "padding": 18.0,
             "width": 0.6,
-            "selfAlign": "center"
+            "selfAlign": "center",
           },
           {
             "type": "svg",
             "content":
-                "<svg viewBox='0 0 400 200' xmlns='http://www.w3.org/2000/svg'>\n  <rect width='400' height='200' fill='#0b2240' rx='12'/>\n  <polygon points='60,160 300,160 60,40' fill='none' stroke='#6366f1' stroke-width='3'/>\n  <text x='200' y='105' fill='#ffffff' font-size='16' text-anchor='middle' font-weight='bold'>Right Triangle</text>\n</svg>",
-            "extra": "boxed"
-          },
-          {
-            "type": "code",
-            "content":
-                "import 'dart:math';\n\ndouble hypotenuse(double a, double b) {\n  return sqrt(a * a + b * b);\n}",
-            "extra": "dart"
-          },
-          {
-            "type": "bulletList",
-            "content":
-                "Applies only to right-angled triangles\nForms the basis of coordinate geometry\nDiscovered independently across many ancient cultures",
-            "extra": "numbered",
-            "textColor": "FFFBBF24",
-            "borderColor": "FF34D399"
-          },
-          {
-            "type": "callout",
-            "content": "Remember: c represents the length of the hypotenuse opposite the right angle.",
-            "extra": "tip"
-          },
-          {
-            "type": "imageUrl",
-            "content":
-                "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800",
-            "caption": "A right triangle with labeled sides"
-          },
-          {
-            "type": "table",
-            "headers": ["a", "b", "c (hypotenuse)"],
-            "rows": [
-              ["3", "4", "5"],
-              ["5", "12", "13"],
-              ["8", "15", "17"]
-            ]
-          },
-          {
-            "type": "video",
-            "content": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "caption": "Watch: a visual proof of the theorem"
-          },
-          {
-            "type": "card",
-            "caption": "Practice Set",
-            "content": "3-4-5\n5-12-13\n8-15-17",
+                "<svg viewBox='0 0 400 200' xmlns='http://www.w3.org/2000/svg'>\n  <rect width='400' height='200' fill='#1e1b4b' rx='12'/>\n  <path d='M20 100 Q 70 40, 120 100 T 220 100 T 320 100 T 420 100' stroke='#a78bfa' stroke-width='3' fill='none'/>\n  <text x='200' y='170' fill='#ffffff' font-size='14' text-anchor='middle'>A matter wave</text>\n</svg>",
             "extra": "boxed",
-            "borderColor": "FF10B981",
-            "horizontalAlign": "center",
-            "glass": true
           },
           {
             "type": "columns",
             "columns": [
               [
-                {
-                  "type": "heading",
-                  "content": "Diagram"
-                },
+                {"type": "heading", "content": "Wave Model"},
                 {
                   "type": "imageUrl",
                   "content":
                       "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=600",
-                  "caption": "Right triangle, sides labeled"
+                  "caption": "Interference pattern",
                 },
                 {
                   "type": "bulletList",
-                  "content": "Two legs\nOne hypotenuse\nOne right angle"
+                  "content":
+                      "Exhibits interference\nExhibits diffraction\nDescribed by a wavelength",
                 },
                 {
                   "type": "text",
-                  "content": "Tip: label the right angle first.",
-                  "textColor": "FF34D399",
+                  "content": "Confirmed by the double-slit experiment.",
+                  "textColor": "FFA78BFA",
                   "fontSize": 14.0,
-                  "italic": true
-                }
+                  "italic": true,
+                },
               ],
               [
-                {
-                  "type": "heading",
-                  "content": "Formula"
-                },
+                {"type": "heading", "content": "Particle Model"},
                 {
                   "type": "card",
-                  "caption": "Key Formula",
-                  "content": "a^2 + b^2 = c^2",
+                  "caption": "Momentum",
+                  "content": "p = mv",
                   "extra": "boxed",
-                  "borderColor": "FFF472B6"
+                  "borderColor": "FF38BDF8",
                 },
                 {
                   "type": "table",
-                  "headers": ["Term", "Meaning"],
+                  "headers": ["Property", "Value"],
                   "rows": [
-                    ["a, b", "the two legs"],
-                    ["c", "the hypotenuse"]
-                  ]
-                }
-              ]
-            ]
+                    ["Mass", "Defined"],
+                    ["Position", "Localized"],
+                  ],
+                },
+              ],
+            ],
           },
           {
             "type": "container",
-            "backgroundColor": "331E293B",
+            "backgroundColor": "331E1B4B",
             "borderColor": "FFA78BFA",
             "borderWidth": 1.5,
             "borderRadius": 18.0,
             "padding": 16.0,
-            "minHeight": 160.0,
-            "horizontalAlign": "center",
-            "verticalAlign": "center",
+            "width": 0.85,
+            "selfAlign": "center",
+            "selfAlignVertical": "top",
             "children": [
-              {
-                "type": "subheading",
-                "content": "Quick Recap"
-              },
-              {
-                "type": "text",
-                "content": "Everything above in one glance: a^2 + b^2 = c^2, always true for right triangles.",
-                "italic": true
-              }
-            ]
-          }
-        ],
-        "quiz": {
-          "question": "Which side of a right triangle is the hypotenuse?",
-          "options": [
-            "The side opposite the right angle",
-            "The shortest side",
-            "The adjacent vertical side",
-            "None of the above"
-          ],
-          "correctIndex": 0,
-          "explanation": "The hypotenuse is the longest side of a right-angled triangle, directly opposite the 90-degree angle."
-        }
-      });
-
-  static String get sampleMultiSlideJson => _prettyEncoder.convert([
-        {
-          "title": "Module 1: Coordinate Geometry",
-          "theme": "midnightNeon",
-          "blocks": [
-            {
-              "type": "banner",
-              "content": "Module 1: Coordinate Geometry",
-              "backgroundColor": "FF0EA5E9",
-              "textColor": "FFFFFFFF",
-              "borderColor": "FF075985",
-              "borderWidth": 2.0,
-              "padding": 18.0,
-              "marginVertical": 12.0,
-              "fontSize": 22.0,
-              "horizontalAlign": "left",
-              "verticalAlign": "center",
-              "minHeight": 80.0,
-              "glass": true,
-              "glassStyle": "subtle"
-            },
-            {
-              "type": "heading",
-              "content": "Introduction to 2D Cartesian Plane"
-            },
-            {
-              "type": "subheading",
-              "content": "Distance Between Two Points",
-              "textColor": "FF38BDF8"
-            },
-            {
-              "type": "paragraph",
-              "content": "Every point in the plane is represented by an ordered pair of real numbers (x, y)."
-            },
-            {
-              "type": "text",
-              "content": "Distance is always non-negative -- it's the magnitude of displacement.",
-              "textColor": "FF38BDF8",
-              "fontSize": 16.0,
-              "horizontalAlign": "left",
-              "italic": true,
-              "fontFamily": "Outfit"
-            },
-            {
-              "type": "math",
-              "content": "d = \\sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}",
-              "backgroundColor": "331E293B",
-              "borderColor": "FF0EA5E9",
-              "borderWidth": 1.5,
-              "borderRadius": 20.0,
-              "padding": 18.0,
-              "width": 0.6,
-              "selfAlign": "center"
-            },
-            {
-              "type": "svg",
-              "content":
-                  "<svg viewBox='0 0 400 200' xmlns='http://www.w3.org/2000/svg'>\n  <rect width='400' height='200' fill='#0b2240' rx='12'/>\n  <circle cx='120' cy='140' r='6' fill='#38bdf8'/>\n  <circle cx='280' cy='60' r='6' fill='#38bdf8'/>\n  <line x1='120' y1='140' x2='280' y2='60' stroke='#818cf8' stroke-width='2'/>\n  <text x='200' y='185' fill='#ffffff' font-size='14' text-anchor='middle'>Distance between two points</text>\n</svg>",
-              "extra": "boxed"
-            },
-            {
-              "type": "columns",
-              "columns": [
-                [
-                  {
-                    "type": "heading",
-                    "content": "Quadrants"
-                  },
-                  {
-                    "type": "bulletList",
-                    "content": "Quadrant I: (+, +)\nQuadrant II: (-, +)\nQuadrant III: (-, -)\nQuadrant IV: (+, -)"
-                  }
-                ],
-                [
-                  {
-                    "type": "heading",
-                    "content": "Example Points"
-                  },
-                  {
-                    "type": "table",
-                    "headers": ["Point", "Quadrant"],
-                    "rows": [
-                      ["(3, 2)", "I"],
-                      ["(-4, 1)", "II"]
-                    ]
-                  },
-                  {
-                    "type": "text",
-                    "content": "Note the sign pattern above.",
-                    "textColor": "FFA78BFA",
-                    "fontSize": 14.0,
-                    "underline": true
-                  }
-                ]
-              ]
-            },
-            {
-              "type": "container",
-              "backgroundColor": "331E1B4B",
-              "borderColor": "FF818CF8",
-              "borderWidth": 1.5,
-              "borderRadius": 18.0,
-              "padding": 16.0,
-              "minHeight": 160.0,
-              "horizontalAlign": "center",
-              "verticalAlign": "center",
-              "children": [
-                {
-                  "type": "subheading",
-                  "content": "Quick Recap"
-                },
-                {
-                  "type": "bulletList",
-                  "content": "Distance is always positive\nQuadrants number counter-clockwise from top-right"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "title": "Module 2: Slope and Intercept",
-          "theme": "emeraldSlate",
-          "backgroundType": "solidColor",
-          "backgroundColor": "FF0F172A",
-          "blocks": [
-            {
-              "type": "code",
-              "content": "# Calculating slope in Python\ndef slope(p1, p2):\n    return (p2[1] - p1[1]) / (p2[0] - p1[0])",
-              "extra": "python"
-            },
-            {
-              "type": "bulletList",
-              "content": "Positive slope rises left to right\nNegative slope falls left to right\nZero slope is a horizontal line",
-              "extra": "numbered",
-              "textColor": "FF34D399",
-              "borderColor": "FF10B981"
-            },
-            {
-              "type": "callout",
-              "content": "If denominator is zero, the line is strictly vertical with undefined slope.",
-              "extra": "warning"
-            },
-            {
-              "type": "imageUrl",
-              "content":
-                  "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800",
-              "caption": "Lines of varying slope"
-            },
-            {
-              "type": "table",
-              "headers": ["Slope", "Line Behavior"],
-              "rows": [
-                ["m > 0", "Rises left to right"],
-                ["m < 0", "Falls left to right"],
-                ["m = 0", "Horizontal"]
-              ]
-            },
-            {
-              "type": "video",
-              "content": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-              "caption": "Watch: slope-intercept form explained"
-            },
-            {
-              "type": "card",
-              "caption": "Practice Set",
-              "content": "y = 2x + 3\ny = -x + 7\n2y = 4x - 6",
-              "extra": "boxed",
-              "borderColor": "FF10B981",
-              "horizontalAlign": "right",
-              "glass": true
-            }
-          ],
-          "quiz": {
-            "question": "In y = mx + b, what does b represent?",
-            "options": [
-              "The y-intercept",
-              "The slope",
-              "The x-intercept",
-              "The domain"
-            ],
-            "correctIndex": 0,
-            "explanation": "b is the y-intercept -- the value of y when x = 0."
-          }
-        }
-      ]);
-
-  static String get sampleFullDeckJson => _prettyEncoder.convert({
-        "title": "Quantum Mechanics & Wave Functions",
-        "description": "Comprehensive introduction to Schrödinger's equation and state vectors.",
-        "courseName": "Advanced Physics",
-        "slides": [
-          {
-            "title": "Wave-Particle Duality",
-            "theme": "sunsetViolet",
-            "blocks": [
-              {
-                "type": "banner",
-                "content": "Chapter 4: Wave-Particle Duality",
-                "backgroundColor": "FFA78BFA",
-                "textColor": "FF000000",
-                "borderColor": "FF4C1D95",
-                "borderWidth": 2.0,
-                "padding": 18.0,
-                "marginVertical": 12.0,
-                "fontSize": 22.0,
-                "horizontalAlign": "center",
-                "verticalAlign": "center",
-                "minHeight": 100.0,
-                "glass": true,
-                "glassStyle": "subtle"
-              },
-              {
-                "type": "heading",
-                "content": "The de Broglie Hypothesis"
-              },
-              {
-                "type": "subheading",
-                "content": "Matter Waves",
-                "textColor": "FFA78BFA"
-              },
-              {
-                "type": "paragraph",
-                "content": "Matter exhibits wave-like properties with a wavelength inversely proportional to momentum."
-              },
-              {
-                "type": "text",
-                "content": "Historical note (superseded by later experiments).",
-                "textColor": "FFF87171",
-                "fontSize": 15.0,
-                "horizontalAlign": "right",
-                "italic": true,
-                "strikethrough": true,
-                "fontFamily": "Merriweather"
-              },
-              {
-                "type": "math",
-                "content": "\\lambda = \\frac{h}{p}",
-                "backgroundColor": "331E293B",
-                "borderColor": "FFA78BFA",
-                "borderWidth": 1.5,
-                "borderRadius": 20.0,
-                "padding": 18.0,
-                "width": 0.6,
-                "selfAlign": "center"
-              },
-              {
-                "type": "svg",
-                "content":
-                    "<svg viewBox='0 0 400 200' xmlns='http://www.w3.org/2000/svg'>\n  <rect width='400' height='200' fill='#1e1b4b' rx='12'/>\n  <path d='M20 100 Q 70 40, 120 100 T 220 100 T 320 100 T 420 100' stroke='#a78bfa' stroke-width='3' fill='none'/>\n  <text x='200' y='170' fill='#ffffff' font-size='14' text-anchor='middle'>A matter wave</text>\n</svg>",
-                "extra": "boxed"
-              },
+              {"type": "subheading", "content": "Both Models, Side by Side"},
               {
                 "type": "columns",
                 "columns": [
                   [
-                    {
-                      "type": "heading",
-                      "content": "Wave Model"
-                    },
-                    {
-                      "type": "imageUrl",
-                      "content":
-                          "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=600",
-                      "caption": "Interference pattern"
-                    },
-                    {
-                      "type": "bulletList",
-                      "content": "Exhibits interference\nExhibits diffraction\nDescribed by a wavelength"
-                    },
-                    {
-                      "type": "text",
-                      "content": "Confirmed by the double-slit experiment.",
-                      "textColor": "FFA78BFA",
-                      "fontSize": 14.0,
-                      "italic": true
-                    }
+                    {"type": "text", "content": "Wave: spread out, interferes"},
                   ],
                   [
                     {
-                      "type": "heading",
-                      "content": "Particle Model"
+                      "type": "text",
+                      "content": "Particle: localized, has momentum",
                     },
-                    {
-                      "type": "card",
-                      "caption": "Momentum",
-                      "content": "p = mv",
-                      "extra": "boxed",
-                      "borderColor": "FF38BDF8"
-                    },
-                    {
-                      "type": "table",
-                      "headers": ["Property", "Value"],
-                      "rows": [
-                        ["Mass", "Defined"],
-                        ["Position", "Localized"]
-                      ]
-                    }
-                  ]
-                ]
+                  ],
+                ],
               },
-              {
-                "type": "container",
-                "backgroundColor": "331E1B4B",
-                "borderColor": "FFA78BFA",
-                "borderWidth": 1.5,
-                "borderRadius": 18.0,
-                "padding": 16.0,
-                "width": 0.85,
-                "selfAlign": "center",
-                "children": [
-                  {
-                    "type": "subheading",
-                    "content": "Both Models, Side by Side"
-                  },
-                  {
-                    "type": "columns",
-                    "columns": [
-                      [
-                        {
-                          "type": "text",
-                          "content": "Wave: spread out, interferes"
-                        }
-                      ],
-                      [
-                        {
-                          "type": "text",
-                          "content": "Particle: localized, has momentum"
-                        }
-                      ]
-                    ]
-                  }
-                ]
-              }
-            ]
+            ],
+          },
+        ],
+      },
+      {
+        "title": "Time-Dependent Schrödinger Equation",
+        "theme": "darkGlass",
+        "backgroundType": "image",
+        "backgroundImageUrl":
+            "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=1200",
+        "blocks": [
+          {
+            "type": "code",
+            "content":
+                "# Normalizing a wavefunction (schematic)\ndef normalize(psi, dx):\n    norm = sum(abs(p) ** 2 for p in psi) * dx\n    return [p / norm ** 0.5 for p in psi]",
+            "extra": "python",
           },
           {
-            "title": "Time-Dependent Schrödinger Equation",
-            "theme": "darkGlass",
-            "backgroundType": "image",
-            "backgroundImageUrl":
-                "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=1200",
-            "blocks": [
-              {
-                "type": "code",
-                "content":
-                    "# Normalizing a wavefunction (schematic)\ndef normalize(psi, dx):\n    norm = sum(abs(p) ** 2 for p in psi) * dx\n    return [p / norm ** 0.5 for p in psi]",
-                "extra": "python"
-              },
-              {
-                "type": "bulletList",
-                "content": "Governs how a quantum state evolves in time\nLinear and deterministic\nConserves total probability",
-                "extra": "numbered",
-                "textColor": "FFA78BFA",
-                "borderColor": "FF818CF8"
-              },
-              {
-                "type": "callout",
-                "content": "\\hbar (h-bar) is Planck's constant divided by 2π.",
-                "extra": "info"
-              },
-              {
-                "type": "imageUrl",
-                "content":
-                    "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800",
-                "caption": "A wavefunction's probability density"
-              },
-              {
-                "type": "table",
-                "headers": ["Symbol", "Meaning"],
-                "rows": [
-                  ["\\Psi", "Wavefunction"],
-                  ["\\hat{H}", "Hamiltonian operator"]
-                ]
-              },
-              {
-                "type": "video",
-                "content": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-                "caption": "Watch: deriving the Schrödinger equation"
-              },
-              {
-                "type": "card",
-                "caption": "Core Formulation",
-                "content": "i\\hbar \\frac{\\partial}{\\partial t} \\Psi = \\hat{H}\\Psi",
-                "extra": "boxed",
-                "borderColor": "FFA78BFA",
-                "horizontalAlign": "center",
-                "glass": true
-              }
+            "type": "bulletList",
+            "content":
+                "Governs how a quantum state evolves in time\nLinear and deterministic\nConserves total probability",
+            "extra": "numbered",
+            "textColor": "FFA78BFA",
+            "borderColor": "FF818CF8",
+          },
+          {
+            "type": "callout",
+            "content": "\\hbar (h-bar) is Planck's constant divided by 2π.",
+            "extra": "info",
+          },
+          {
+            "type": "imageUrl",
+            "content":
+                "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=800",
+            "caption": "A wavefunction's probability density",
+          },
+          {
+            "type": "table",
+            "headers": ["Symbol", "Meaning"],
+            "rows": [
+              ["\\Psi", "Wavefunction"],
+              ["\\hat{H}", "Hamiltonian operator"],
             ],
-            "quiz": {
-              "question": "What does \\hbar represent in quantum equations?",
-              "options": [
-                "Reduced Planck constant (h / 2π)",
-                "Boltzmann constant",
-                "Speed of light in vacuum",
-                "Permittivity of free space"
-              ],
-              "correctIndex": 0,
-              "explanation": "\\hbar (h-bar) equals Planck's constant h divided by 2π."
-            }
-          }
-        ]
-      });
+          },
+          {
+            "type": "video",
+            "content": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "caption": "Watch: deriving the Schrödinger equation",
+          },
+          {
+            "type": "card",
+            "caption": "Core Formulation",
+            "content":
+                "i\\hbar \\frac{\\partial}{\\partial t} \\Psi = \\hat{H}\\Psi",
+            "extra": "boxed",
+            "borderColor": "FFA78BFA",
+            "horizontalAlign": "center",
+            "glass": true,
+          },
+        ],
+        "quiz": {
+          "question": "What does \\hbar represent in quantum equations?",
+          "options": [
+            "Reduced Planck constant (h / 2π)",
+            "Boltzmann constant",
+            "Speed of light in vacuum",
+            "Permittivity of free space",
+          ],
+          "correctIndex": 0,
+          "explanation":
+              "\\hbar (h-bar) equals Planck's constant h divided by 2π.",
+        },
+      },
+    ],
+  });
 }

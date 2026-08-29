@@ -48,6 +48,7 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
   String _horizontalAlign = 'left';
   String _verticalAlign = 'top';
   String _selfAlign = 'center';
+  String _selfAlignVertical = 'off';
 
   @override
   void initState() {
@@ -63,6 +64,7 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
     _horizontalAlign = widget.block.horizontalAlign ?? 'left';
     _verticalAlign = widget.block.verticalAlign ?? 'top';
     _selfAlign = widget.block.selfAlign ?? 'center';
+    _selfAlignVertical = widget.block.selfAlignVertical ?? 'off';
     _margin = widget.block.marginVertical ?? 6;
   }
 
@@ -82,8 +84,9 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
 
   void _save() {
     final content = jsonEncode({
-      'columns':
-          _columns.map((col) => col.map((b) => b.toMap()).toList()).toList(),
+      'columns': _columns
+          .map((col) => col.map((b) => b.toMap()).toList())
+          .toList(),
     });
     Navigator.pop(
       context,
@@ -104,6 +107,10 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
         horizontalAlign: _horizontalAlign,
         verticalAlign: _verticalAlign,
         selfAlign: _selfAlign,
+        selfAlignVertical: _selfAlignVertical == 'off'
+            ? null
+            : _selfAlignVertical,
+        clearSelfAlignVertical: _selfAlignVertical == 'off',
       ),
     );
   }
@@ -128,11 +135,9 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
           child: SingleChildScrollView(
             child: ContainerStyleSection(
               backgroundColor: _bg,
-              onBackgroundColorChanged: (val) =>
-                  setSheetState(() => _bg = val),
+              onBackgroundColorChanged: (val) => setSheetState(() => _bg = val),
               borderColor: _border,
-              onBorderColorChanged: (val) =>
-                  setSheetState(() => _border = val),
+              onBorderColorChanged: (val) => setSheetState(() => _border = val),
               borderWidth: _borderWidth,
               onBorderWidthChanged: (val) =>
                   setSheetState(() => _borderWidth = val),
@@ -157,6 +162,9 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
               selfAlign: _selfAlign,
               onSelfAlignChanged: (val) =>
                   setSheetState(() => _selfAlign = val),
+              selfAlignVertical: _selfAlignVertical,
+              onSelfAlignVerticalChanged: (val) =>
+                  setSheetState(() => _selfAlignVertical = val),
             ),
           ),
         ),
@@ -253,7 +261,8 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.style_rounded),
-            tooltip: 'Container Style (background/outline/padding for the '
+            tooltip:
+                'Container Style (background/outline/padding for the '
                 'whole columns block)',
             onPressed: _openStyleSheet,
           ),
@@ -304,15 +313,21 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
                 Text(
                   'Column ${colIdx + 1}',
                   style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 13),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
                 const Spacer(),
                 IconButton(
-                  icon: const Icon(Icons.delete_outline_rounded,
-                      size: 18, color: Colors.redAccent),
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 18,
+                    color: Colors.redAccent,
+                  ),
                   tooltip: 'Remove Column',
-                  onPressed:
-                      _columns.length > 1 ? () => _removeColumn(colIdx) : null,
+                  onPressed: _columns.length > 1
+                      ? () => _removeColumn(colIdx)
+                      : null,
                 ),
               ],
             ),
@@ -326,15 +341,16 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
                   // see this class's own doc comment for why.
                   .where((t) => t != SlideBlockType.columns)
                   .map((type) {
-                return Padding(
-                  padding: const EdgeInsets.only(right: 4.0),
-                  child: IconButton(
-                    icon: Icon(iconForSlideBlockType(type), size: 18),
-                    tooltip: 'Add ${displayNameForSlideBlockType(type)}',
-                    onPressed: () => _addBlockToColumn(colIdx, type),
-                  ),
-                );
-              }).toList(),
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 4.0),
+                      child: IconButton(
+                        icon: Icon(iconForSlideBlockType(type), size: 18),
+                        tooltip: 'Add ${displayNameForSlideBlockType(type)}',
+                        onPressed: () => _addBlockToColumn(colIdx, type),
+                      ),
+                    );
+                  })
+                  .toList(),
             ),
           ),
           const Divider(height: 1),
@@ -364,8 +380,7 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
                       return Card(
                         key: ValueKey(b.id),
                         margin: const EdgeInsets.only(bottom: 8),
-                        color:
-                            isDark ? const Color(0xFF0F172A) : Colors.white,
+                        color: isDark ? const Color(0xFF0F172A) : Colors.white,
                         child: Padding(
                           padding: const EdgeInsets.all(8.0),
                           child: Column(
@@ -386,13 +401,17 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
                                   ),
                                   Expanded(
                                     child: InkWell(
-                                      onTap: () =>
-                                          _changeBlockTypeInColumn(colIdx, blockIdx),
+                                      onTap: () => _changeBlockTypeInColumn(
+                                        colIdx,
+                                        blockIdx,
+                                      ),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Text(
-                                            displayNameForSlideBlockType(b.type),
+                                            displayNameForSlideBlockType(
+                                              b.type,
+                                            ),
                                             style: const TextStyle(
                                               fontSize: 10,
                                               fontWeight: FontWeight.bold,
@@ -410,14 +429,19 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
                                     ),
                                   ),
                                   IconButton(
-                                    icon: const Icon(Icons.edit_rounded,
-                                        size: 14),
+                                    icon: const Icon(
+                                      Icons.edit_rounded,
+                                      size: 14,
+                                    ),
                                     onPressed: () =>
                                         _editBlockInColumn(colIdx, blockIdx),
                                   ),
                                   IconButton(
-                                    icon: const Icon(Icons.delete_rounded,
-                                        size: 14, color: Colors.red),
+                                    icon: const Icon(
+                                      Icons.delete_rounded,
+                                      size: 14,
+                                      color: Colors.red,
+                                    ),
                                     onPressed: () =>
                                         _deleteBlockInColumn(colIdx, blockIdx),
                                   ),

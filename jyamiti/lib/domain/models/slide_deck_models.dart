@@ -23,7 +23,8 @@ class SlideBlock {
   final String id;
   final SlideBlockType type;
   final String content;
-  final String? extra; // Language for code, callout type, list items comma separated
+  final String?
+  extra; // Language for code, callout type, list items comma separated
   final String? caption;
 
   // Advanced per-block styling -- all optional, all null by default so
@@ -121,6 +122,23 @@ class SlideBlock {
   final double? width;
   final String? selfAlign;
 
+  // selfAlignVertical ('top'|'center'|'bottom'): positions the block
+  // within an area at least as tall as the visible slide -- what
+  // actually makes "place this block at the top/center/bottom of the
+  // slide" possible for a block that's alone (or the main content) on
+  // its slide, the same idea as the old (removed) SlideItem.
+  // contentVerticalAlign but scoped to one block instead of a whole
+  // slide's worth of content. Null means normal in-flow rendering, the
+  // existing default. Deliberately NOT implemented as true flex-expand
+  // (the block literally growing to consume leftover space alongside
+  // siblings) -- that's fundamentally incompatible with a slide that
+  // can scroll when content overflows, since Flutter's Expanded
+  // requires a bounded max-height its ScrollView ancestor can't offer.
+  // Only takes effect in StudentSlideViewerScreen's read-only
+  // rendering (see _buildSlideContent), not while actively
+  // add/reorder/edit/delete-editing a slide's blocks.
+  final String? selfAlignVertical;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -148,6 +166,7 @@ class SlideBlock {
     this.borderRadius,
     this.width,
     this.selfAlign,
+    this.selfAlignVertical,
   });
 
   SlideBlock copyWith({
@@ -193,6 +212,8 @@ class SlideBlock {
     bool clearWidth = false,
     String? selfAlign,
     bool clearSelfAlign = false,
+    String? selfAlignVertical,
+    bool clearSelfAlignVertical = false,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -204,8 +225,7 @@ class SlideBlock {
           ? null
           : (backgroundColor ?? this.backgroundColor),
       textColor: clearTextColor ? null : (textColor ?? this.textColor),
-      borderColor:
-          clearBorderColor ? null : (borderColor ?? this.borderColor),
+      borderColor: clearBorderColor ? null : (borderColor ?? this.borderColor),
       borderWidth: borderWidth ?? this.borderWidth,
       padding: clearPadding ? null : (padding ?? this.padding),
       marginVertical: clearMarginVertical
@@ -215,8 +235,9 @@ class SlideBlock {
       horizontalAlign: clearHorizontalAlign
           ? null
           : (horizontalAlign ?? this.horizontalAlign),
-      verticalAlign:
-          clearVerticalAlign ? null : (verticalAlign ?? this.verticalAlign),
+      verticalAlign: clearVerticalAlign
+          ? null
+          : (verticalAlign ?? this.verticalAlign),
       minHeight: clearMinHeight ? null : (minHeight ?? this.minHeight),
       bold: bold ?? this.bold,
       italic: italic ?? this.italic,
@@ -226,10 +247,14 @@ class SlideBlock {
       glass: glass ?? this.glass,
       glassStyle: clearGlassStyle ? null : (glassStyle ?? this.glassStyle),
       fontFamily: clearFontFamily ? null : (fontFamily ?? this.fontFamily),
-      borderRadius:
-          clearBorderRadius ? null : (borderRadius ?? this.borderRadius),
+      borderRadius: clearBorderRadius
+          ? null
+          : (borderRadius ?? this.borderRadius),
       width: clearWidth ? null : (width ?? this.width),
       selfAlign: clearSelfAlign ? null : (selfAlign ?? this.selfAlign),
+      selfAlignVertical: clearSelfAlignVertical
+          ? null
+          : (selfAlignVertical ?? this.selfAlignVertical),
     );
   }
 
@@ -261,6 +286,7 @@ class SlideBlock {
       'borderRadius': borderRadius,
       'width': width,
       'selfAlign': selfAlign,
+      'selfAlignVertical': selfAlignVertical,
     };
   }
 
@@ -296,6 +322,7 @@ class SlideBlock {
       borderRadius: (map['borderRadius'] as num?)?.toDouble(),
       width: (map['width'] as num?)?.toDouble(),
       selfAlign: map['selfAlign']?.toString(),
+      selfAlignVertical: map['selfAlignVertical']?.toString(),
     );
   }
 
@@ -352,7 +379,8 @@ class SlideItem {
   final int slideIndex;
   final String title;
   final List<SlideBlock> blocks;
-  final String theme; // 'darkGlass', 'midnightNeon', 'emeraldSlate', 'sunsetViolet', 'cleanLight'
+  final String
+  theme; // 'darkGlass', 'midnightNeon', 'emeraldSlate', 'sunsetViolet', 'cleanLight'
   final SlideQuiz? quiz;
   final bool enableWhiteboard;
 
@@ -590,12 +618,8 @@ class SlideProgress {
       ),
       'completedSlides': completedSlides.toList(),
       'bookmarkedSlides': bookmarkedSlides.toList(),
-      'quizAnswers': quizAnswers.map(
-        (k, v) => MapEntry(k.toString(), v),
-      ),
-      'slideDrawings': slideDrawings.map(
-        (k, v) => MapEntry(k.toString(), v),
-      ),
+      'quizAnswers': quizAnswers.map((k, v) => MapEntry(k.toString(), v)),
+      'slideDrawings': slideDrawings.map((k, v) => MapEntry(k.toString(), v)),
       'lastViewedSlideIndex': lastViewedSlideIndex,
       'lastUpdated': lastUpdated.toIso8601String(),
     };
@@ -627,10 +651,14 @@ class SlideProgress {
       deckId: map['deckId'] ?? '',
       timeSpentPerSlide: parsedTime,
       completedSlides: Set<int>.from(
-        (map['completedSlides'] as List<dynamic>? ?? []).map((x) => (x as num).toInt()),
+        (map['completedSlides'] as List<dynamic>? ?? []).map(
+          (x) => (x as num).toInt(),
+        ),
       ),
       bookmarkedSlides: Set<int>.from(
-        (map['bookmarkedSlides'] as List<dynamic>? ?? []).map((x) => (x as num).toInt()),
+        (map['bookmarkedSlides'] as List<dynamic>? ?? []).map(
+          (x) => (x as num).toInt(),
+        ),
       ),
       quizAnswers: parsedQuizzes,
       slideDrawings: parsedDrawings,
