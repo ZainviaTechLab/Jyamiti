@@ -293,6 +293,7 @@ class SlideJsonHelper {
     final strikethrough = map['strikethrough'] == true;
     final fitContent = map['fitContent'] == true;
     final glass = map['glass'] == true;
+    final glassStyle = map['glassStyle']?.toString();
     final fontFamily = map['fontFamily']?.toString();
     final borderRadius = (map['borderRadius'] as num?)?.toDouble();
 
@@ -318,6 +319,7 @@ class SlideJsonHelper {
       strikethrough: strikethrough,
       fitContent: fitContent,
       glass: glass,
+      glassStyle: glassStyle,
       fontFamily: fontFamily,
       borderRadius: borderRadius,
     );
@@ -521,7 +523,8 @@ class SlideJsonHelper {
             "horizontalAlign": "center",
             "verticalAlign": "center",
             "minHeight": 90.0,
-            "glass": true
+            "glass": true,
+            "glassStyle": "subtle"
           },
           {
             "type": "heading",
@@ -712,7 +715,8 @@ class SlideJsonHelper {
               "horizontalAlign": "left",
               "verticalAlign": "center",
               "minHeight": 80.0,
-              "glass": true
+              "glass": true,
+              "glassStyle": "subtle"
             },
             {
               "type": "heading",
@@ -893,7 +897,8 @@ class SlideJsonHelper {
                 "horizontalAlign": "center",
                 "verticalAlign": "center",
                 "minHeight": 100.0,
-                "glass": true
+                "glass": true,
+                "glassStyle": "subtle"
               },
               {
                 "type": "heading",

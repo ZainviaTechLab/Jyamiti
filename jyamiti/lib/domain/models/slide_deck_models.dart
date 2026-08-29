@@ -77,6 +77,13 @@ class SlideBlock {
   // for any other block type.
   final bool glass;
 
+  // Which of the two glass looks to use when `glass` is true --
+  // 'subtle' (blur + tint only) or 'frosted' (also a drop shadow and a
+  // brighter edge). Null defaults to 'frosted' rather than 'subtle',
+  // since that's what every already-saved `glass: true` block rendered
+  // as before this field existed -- keeps old decks looking the same.
+  final String? glassStyle;
+
   // `text` block only: a Google Fonts family name (e.g. "Outfit",
   // "Space Grotesk", "Fira Code") -- see SlideBlockRenderer._buildTextBlock,
   // which resolves it via GoogleFonts.getFont. Null means "use the
@@ -119,6 +126,7 @@ class SlideBlock {
     this.strikethrough = false,
     this.fitContent = false,
     this.glass = false,
+    this.glassStyle,
     this.fontFamily,
     this.borderRadius,
   });
@@ -156,6 +164,8 @@ class SlideBlock {
     bool? strikethrough,
     bool? fitContent,
     bool? glass,
+    String? glassStyle,
+    bool clearGlassStyle = false,
     String? fontFamily,
     bool clearFontFamily = false,
     double? borderRadius,
@@ -191,6 +201,7 @@ class SlideBlock {
       strikethrough: strikethrough ?? this.strikethrough,
       fitContent: fitContent ?? this.fitContent,
       glass: glass ?? this.glass,
+      glassStyle: clearGlassStyle ? null : (glassStyle ?? this.glassStyle),
       fontFamily: clearFontFamily ? null : (fontFamily ?? this.fontFamily),
       borderRadius:
           clearBorderRadius ? null : (borderRadius ?? this.borderRadius),
@@ -220,6 +231,7 @@ class SlideBlock {
       'strikethrough': strikethrough,
       'fitContent': fitContent,
       'glass': glass,
+      'glassStyle': glassStyle,
       'fontFamily': fontFamily,
       'borderRadius': borderRadius,
     };
@@ -252,6 +264,7 @@ class SlideBlock {
       strikethrough: map['strikethrough'] == true,
       fitContent: map['fitContent'] == true,
       glass: map['glass'] == true,
+      glassStyle: map['glassStyle']?.toString(),
       fontFamily: map['fontFamily']?.toString(),
       borderRadius: (map['borderRadius'] as num?)?.toDouble(),
     );

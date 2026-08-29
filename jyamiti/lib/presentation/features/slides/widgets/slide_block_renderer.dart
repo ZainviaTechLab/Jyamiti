@@ -35,41 +35,65 @@ class SlideBlockRenderer extends StatelessWidget {
         (isDark ? darkDefault : lightDefault);
   }
 
-  /// The translucent fill for a `glass` frosted panel (banner/card/text,
-  /// see each's doc comment) -- deliberately ignores whatever alpha
-  /// [base] already carries and forces a fixed opacity instead, since a
-  /// fully-opaque "glass" color would defeat the whole effect. Falls
-  /// back to a neutral white/black tint (picked by [isDark]) when no
-  /// background color was set at all, so turning Glass on by itself
-  /// still produces a visible frosted panel. Blurring alone barely
-  /// reads as "glass" over a smooth slide background/gradient -- there's
-  /// no texture there for the blur to visibly act on -- so this alpha
-  /// is deliberately higher than a typical translucent overlay, to give
-  /// the panel a real presence even before _wrapGlass's shadow/sheen.
-  Color _glassTint(Color? base) {
+  /// Whether a block's glass should use the 'subtle' look -- everything
+  /// else (including unset, for already-saved decks) is 'frosted'. See
+  /// SlideBlock.glassStyle's own doc comment for why unset means
+  /// frosted rather than subtle.
+  bool _isSubtleGlass(SlideBlock b) =>
+      (b.glassStyle ?? 'frosted').toLowerCase().trim() == 'subtle';
+
+  /// The translucent fill for a `glass` panel (banner/card/text, see
+  /// each's doc comment) -- deliberately ignores whatever alpha [base]
+  /// already carries and forces a fixed opacity instead, since a fully-
+  /// opaque "glass" color would defeat the whole effect. Falls back to
+  /// a neutral white/black tint (picked by [isDark]) when no background
+  /// color was set at all, so turning Glass on by itself still produces
+  /// a visible panel. [subtle] uses a lighter touch than [frosted] --
+  /// both intentionally still higher than a typical translucent overlay,
+  /// since blurring alone barely reads as "glass" over a smooth slide
+  /// background/gradient (no texture there for the blur to visibly act
+  /// on) and the tint needs to carry real presence on its own.
+  Color _glassTint(Color? base, {required bool subtle}) {
     final Color source = base ?? (isDark ? Colors.white : Colors.black);
-    return source.withValues(alpha: isDark ? 0.22 : 0.16);
+    final double alpha = subtle
+        ? (isDark ? 0.14 : 0.10)
+        : (isDark ? 0.22 : 0.16);
+    return source.withValues(alpha: alpha);
   }
 
-  /// The frosted panel's own edge highlight -- a bright, fairly opaque
-  /// rim rather than a faint one, since that crisp edge (a "glass lip
-  /// catching light") is one of the main things that reads as glass
-  /// rather than just a translucent box, especially when the blur
-  /// behind it has little to actually blur.
-  Color get _glassBorderColor => Colors.white.withValues(alpha: 0.55);
+  /// The panel's own edge highlight. [frosted] uses a bright, fairly
+  /// opaque rim (a "glass lip catching light") since that's one of the
+  /// main things that reads as glass rather than just a translucent
+  /// box; [subtle] keeps a much fainter one.
+  Color _glassBorderColor({required bool subtle}) =>
+      Colors.white.withValues(alpha: subtle ? 0.28 : 0.55);
 
-  /// Wraps [child] with everything that makes a translucent box actually
-  /// read as frosted glass rather than just "a see-through box": a
-  /// backdrop blur of whatever renders behind it, a soft drop shadow for
-  /// depth (applied outside the clip, so it isn't cut off by it), and a
-  /// diagonal sheen highlight -- that last one matters most when the
-  /// slide behind the panel is a smooth gradient/solid color, since
-  /// blurring smoothness looks nearly identical to not blurring it at
-  /// all; the sheen is what still reads as "glass" in that case. [child]
-  /// must already be exactly the shape being frosted (its own decoration
-  /// should use [borderRadius]) since BackdropFilter blurs everything
-  /// within the ClipRRect's bounds.
-  Widget _wrapGlass(Widget child, {required BorderRadius borderRadius}) {
+  /// Wraps [child] in a backdrop blur, completing the frosted-glass
+  /// look together with [_glassTint]'s translucent fill. [subtle] is
+  /// just that -- blur plus tint, nothing else. [frosted] (the
+  /// default) adds a soft drop shadow for depth, applied outside the
+  /// clip so it isn't cut off by it. Deliberately no gradient anywhere
+  /// in either variant. [child] must already be exactly the shape
+  /// being frosted (its own decoration should use [borderRadius])
+  /// since BackdropFilter blurs everything within the ClipRRect's
+  /// bounds.
+  Widget _wrapGlass(
+    Widget child, {
+    required BorderRadius borderRadius,
+    required bool subtle,
+  }) {
+    final Widget blurred = ClipRRect(
+      borderRadius: borderRadius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: subtle ? 16 : 22,
+          sigmaY: subtle ? 16 : 22,
+        ),
+        child: child,
+      ),
+    );
+    if (subtle) return blurred;
+
     return Container(
       decoration: BoxDecoration(
         borderRadius: borderRadius,
@@ -81,40 +105,7 @@ class SlideBlockRenderer extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: borderRadius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          // foregroundDecoration paints the sheen directly on top of
-          // [child] without affecting layout at all -- a Stack was
-          // tried here first, but Stack gives its non-positioned
-          // children (child) loose constraints and pins them to
-          // top-left, whereas a Positioned.fill sibling still fills
-          // the Stack's own (possibly wider, e.g. a card's boxed 85%-
-          // width FractionallySizedBox forcing this whole wrapper's
-          // width) resolved size -- the result was a correctly-sized
-          // bordered box hugging one corner with the blur/shadow/sheen
-          // still spanning the full forced width around it, a visible
-          // "ghost" smear past the box's own edge. foregroundDecoration
-          // has no such quirk: this Container just defers its size to
-          // child exactly as if it wasn't here.
-          child: Container(
-            foregroundDecoration: BoxDecoration(
-              borderRadius: borderRadius,
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                stops: const [0.0, 0.5],
-                colors: [
-                  Colors.white.withValues(alpha: isDark ? 0.16 : 0.24),
-                  Colors.white.withValues(alpha: 0.0),
-                ],
-              ),
-            ),
-            child: child,
-          ),
-        ),
-      ),
+      child: blurred,
     );
   }
 
@@ -938,6 +929,7 @@ class SlideBlockRenderer extends StatelessWidget {
       textColorStr: block.textColor,
       extra: block.extra,
       glass: block.glass,
+      subtleGlass: _isSubtleGlass(block),
       horizontalAlign: block.horizontalAlign,
     );
   }
@@ -952,6 +944,7 @@ class SlideBlockRenderer extends StatelessWidget {
     String? textColorStr,
     String? extra,
     bool glass = false,
+    bool subtleGlass = false,
     String? horizontalAlign,
   }) {
     final TextAlign contentAlign = switch (horizontalAlign) {
@@ -975,12 +968,12 @@ class SlideBlockRenderer extends StatelessWidget {
     // border under glass doesn't also wash out the title to near
     // invisibility.
     final Color borderColor = glass
-        ? (explicitBorder ?? _glassBorderColor)
+        ? (explicitBorder ?? _glassBorderColor(subtle: subtleGlass))
         : (explicitBorder ?? defaultAccent);
     final Color titleAccent =
         explicitBorder ?? (glass ? Colors.white : defaultAccent);
     final Color bgColor = glass
-        ? _glassTint(parseHexColor(bgColorStr))
+        ? _glassTint(parseHexColor(bgColorStr), subtle: subtleGlass)
         : (parseHexColor(bgColorStr) ??
             (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9)));
     final Color textColor = parseHexColor(textColorStr) ??
@@ -1046,7 +1039,13 @@ class SlideBlockRenderer extends StatelessWidget {
         ],
       ),
     );
-    if (glass) cardWidget = _wrapGlass(cardWidget, borderRadius: cardRadius);
+    if (glass) {
+      cardWidget = _wrapGlass(
+        cardWidget,
+        borderRadius: cardRadius,
+        subtle: subtleGlass,
+      );
+    }
 
     return Container(
       width: double.infinity,
@@ -1397,13 +1396,14 @@ class SlideBlockRenderer extends StatelessWidget {
   /// freshly-added banner actually gets): amber background, black text,
   /// 16px padding, 12px vertical margin, 20px font, centered both ways.
   Widget _buildBannerBlock(BuildContext context) {
+    final bool subtleGlass = _isSubtleGlass(block);
     final Color? explicitBg = parseHexColor(block.backgroundColor);
     final Color bg = block.glass
-        ? _glassTint(explicitBg)
+        ? _glassTint(explicitBg, subtle: subtleGlass)
         : (explicitBg ?? const Color(0xFFF59E0B));
     final Color? explicitBorder = parseHexColor(block.borderColor);
     final Color? border = block.glass
-        ? (explicitBorder ?? _glassBorderColor)
+        ? (explicitBorder ?? _glassBorderColor(subtle: subtleGlass))
         : explicitBorder;
     // A flat black default (banner's non-glass default) reads poorly on
     // a blurred, arbitrary slide background -- glass without an
@@ -1462,7 +1462,9 @@ class SlideBlockRenderer extends StatelessWidget {
         ),
       ),
     );
-    if (block.glass) box = _wrapGlass(box, borderRadius: radius);
+    if (block.glass) {
+      box = _wrapGlass(box, borderRadius: radius, subtle: subtleGlass);
+    }
 
     return Container(
       margin: EdgeInsets.symmetric(vertical: marginV),
@@ -1480,14 +1482,16 @@ class SlideBlockRenderer extends StatelessWidget {
   /// widget's `build()` for why text is excluded from the generic
   /// wrapper despite reading those same fields itself.
   Widget _buildTextBlock(BuildContext context) {
+    final bool subtleGlass = _isSubtleGlass(block);
     final Color? explicitBg = parseHexColor(block.backgroundColor);
     final Color? explicitBorder = parseHexColor(block.borderColor);
     // Glass implies a box even if the author never touched Background/
     // Outline -- it's effectively a background choice of its own, so
     // turning it on alone should still produce a visible frosted panel.
-    final Color? bg = block.glass ? _glassTint(explicitBg) : explicitBg;
+    final Color? bg =
+        block.glass ? _glassTint(explicitBg, subtle: subtleGlass) : explicitBg;
     final Color? border = block.glass
-        ? (explicitBorder ?? _glassBorderColor)
+        ? (explicitBorder ?? _glassBorderColor(subtle: subtleGlass))
         : explicitBorder;
     final Color textColor =
         _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155));
@@ -1559,7 +1563,9 @@ class SlideBlockRenderer extends StatelessWidget {
         ),
         child: text,
       );
-      if (block.glass) box = _wrapGlass(box, borderRadius: radius);
+      if (block.glass) {
+        box = _wrapGlass(box, borderRadius: radius, subtle: subtleGlass);
+      }
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0),
         child: Align(alignment: boxAlignment, child: box),
@@ -1589,7 +1595,9 @@ class SlideBlockRenderer extends StatelessWidget {
           : null,
       child: text,
     );
-    if (block.glass) box = _wrapGlass(box, borderRadius: radius);
+    if (block.glass) {
+      box = _wrapGlass(box, borderRadius: radius, subtle: subtleGlass);
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
       child: box,

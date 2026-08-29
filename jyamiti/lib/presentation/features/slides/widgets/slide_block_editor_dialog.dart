@@ -25,6 +25,36 @@ import 'slide_color_utils.dart';
 /// block.textColor even while this dialog had no UI for it, so this is
 /// purely exposing an existing, already-working field, not new
 /// rendering behavior.
+/// The 3-way Glass choice ('off'/'subtle'/'frosted') a block's current
+/// glass/glassStyle fields represent -- derived once here so all three
+/// Glass Effect sections (Banner Layout/Card Style/Text Style) read it
+/// the same way. See SlideBlock.glassStyle's own doc comment for why
+/// unset defaults to 'frosted' rather than 'subtle'.
+String _glassChoiceFor(SlideBlock block) {
+  if (!block.glass) return 'off';
+  return (block.glassStyle ?? 'frosted').toLowerCase().trim() == 'subtle'
+      ? 'subtle'
+      : 'frosted';
+}
+
+/// The Glass Effect control shared by all three sections that offer it
+/// -- a plain on/off wouldn't distinguish 'subtle' from 'frosted', so
+/// this is a 3-way segmented choice instead of a checkbox.
+Widget _glassChoiceButton({
+  required String selected,
+  required ValueChanged<String> onChanged,
+}) {
+  return SegmentedButton<String>(
+    segments: const [
+      ButtonSegment(value: 'off', label: Text('Off')),
+      ButtonSegment(value: 'subtle', label: Text('Subtle')),
+      ButtonSegment(value: 'frosted', label: Text('Frosted')),
+    ],
+    selected: {selected},
+    onSelectionChanged: (sel) => onChanged(sel.first),
+  );
+}
+
 Future<SlideBlock?> showSlideBlockEditorDialog(
   BuildContext context,
   SlideBlock block,
@@ -47,7 +77,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? bannerText = block.textColor;
   String? bannerBorder = block.borderColor;
   double bannerBorderWidth = block.borderWidth;
-  bool bannerGlass = block.glass;
+  String bannerGlassChoice = _glassChoiceFor(block);
 
   // Card's own style fields -- see SlideBlockRenderer._buildCardBlock,
   // which reads these same 4 fields directly (and, notably, defaults
@@ -58,7 +88,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? cardText = block.textColor;
   String? cardBorder = block.borderColor;
   double cardBorderWidth = block.borderWidth > 0 ? block.borderWidth : 2.0;
-  bool cardGlass = block.glass;
+  String cardGlassChoice = _glassChoiceFor(block);
   String cardHorizontalAlign = block.horizontalAlign ?? 'left';
 
   // Text's own style fields -- see SlideBlockRenderer._buildTextBlock,
@@ -77,7 +107,7 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   bool textUnderline = block.underline;
   bool textStrikethrough = block.strikethrough;
   bool textFitContent = block.fitContent;
-  bool textGlass = block.glass;
+  String textGlassChoice = _glassChoiceFor(block);
   // Google Fonts family names GoogleFonts.getFont resolves at render
   // time (see SlideBlockRenderer._buildTextBlock) -- kept to a small
   // curated set rather than exposing the entire Google Fonts catalog:
@@ -279,17 +309,12 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   onChanged: (val) => cardBorder = val,
                 ),
                 const SizedBox(height: 10),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  dense: true,
-                  title: const Text(
-                    'Glass Effect (frosted, iOS-style)',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  value: cardGlass,
+                const Text('Glass Effect', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                _glassChoiceButton(
+                  selected: cardGlassChoice,
                   onChanged: (val) =>
-                      setDialogState(() => cardGlass = val ?? false),
+                      setDialogState(() => cardGlassChoice = val),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -406,17 +431,12 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   onChanged: (val) => bannerBorder = val,
                 ),
                 const SizedBox(height: 10),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  dense: true,
-                  title: const Text(
-                    'Glass Effect (frosted, iOS-style)',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  value: bannerGlass,
+                const Text('Glass Effect', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                _glassChoiceButton(
+                  selected: bannerGlassChoice,
                   onChanged: (val) =>
-                      setDialogState(() => bannerGlass = val ?? false),
+                      setDialogState(() => bannerGlassChoice = val),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -585,17 +605,13 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   onChanged: (val) =>
                       setDialogState(() => textFitContent = val ?? false),
                 ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  dense: true,
-                  title: const Text(
-                    'Glass Effect (frosted, iOS-style)',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  value: textGlass,
+                const SizedBox(height: 4),
+                const Text('Glass Effect', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                _glassChoiceButton(
+                  selected: textGlassChoice,
                   onChanged: (val) =>
-                      setDialogState(() => textGlass = val ?? false),
+                      setDialogState(() => textGlassChoice = val),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -778,6 +794,18 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
               final newContent = block.type == SlideBlockType.table
                   ? jsonEncode({'headers': tableHeaders, 'rows': tableRows})
                   : contentCtrl.text;
+              // 'off'/'subtle'/'frosted' -- whichever of the three
+              // sections actually applies to this block type, or null
+              // for every other type (matching every other style field
+              // here). Feeds both glass and glassStyle below.
+              final String? effectiveGlassChoice =
+                  block.type == SlideBlockType.banner
+                      ? bannerGlassChoice
+                      : block.type == SlideBlockType.card
+                          ? cardGlassChoice
+                          : block.type == SlideBlockType.text
+                              ? textGlassChoice
+                              : null;
               final updated = block.copyWith(
                 content: newContent,
                 extra: extraCtrl.text.isNotEmpty ? extraCtrl.text : null,
@@ -876,13 +904,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     : null,
                 fitContent:
                     block.type == SlideBlockType.text ? textFitContent : null,
-                glass: block.type == SlideBlockType.banner
-                    ? bannerGlass
-                    : block.type == SlideBlockType.card
-                        ? cardGlass
-                        : block.type == SlideBlockType.text
-                            ? textGlass
-                            : null,
+                glass: effectiveGlassChoice == null
+                    ? null
+                    : effectiveGlassChoice != 'off',
+                glassStyle: effectiveGlassChoice == null ||
+                        effectiveGlassChoice == 'off'
+                    ? null
+                    : effectiveGlassChoice,
+                clearGlassStyle: effectiveGlassChoice == 'off',
                 fontFamily: block.type == SlideBlockType.text &&
                         textFontFamily != 'Default'
                     ? textFontFamily

@@ -397,6 +397,27 @@ void main() {
       expect(defaultResult.slides.first.blocks.first.glass, isFalse);
     });
 
+    test('parses glassStyle, defaulting to unset (frosted) when not given',
+        () {
+      const styledJson = '''
+      {
+        "title": "Glass Styles",
+        "blocks": [
+          {"type": "banner", "content": "Subtle", "glass": true, "glassStyle": "subtle"},
+          {"type": "card", "content": "Frosted (explicit)", "glass": true, "glassStyle": "frosted"},
+          {"type": "text", "content": "Frosted (default)", "glass": true}
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(styledJson);
+      expect(result.isSuccess, isTrue);
+      final blocks = result.slides.first.blocks;
+      expect(blocks[0].glassStyle, 'subtle');
+      expect(blocks[1].glassStyle, 'frosted');
+      expect(blocks[2].glassStyle, isNull);
+    });
+
     test('parses horizontalAlign on card blocks', () {
       const cardAlignJson = '''
       {
