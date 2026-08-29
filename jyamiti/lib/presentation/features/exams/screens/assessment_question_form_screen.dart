@@ -125,10 +125,11 @@ class _AssessmentQuestionFormScreenState
   ValueChanged<String>? _globalActiveOnChanged;
 
   void _handleGlobalFocusChange() {
-    final BuildContext? focusContext = FocusManager.instance.primaryFocus?.context;
+    final BuildContext? focusContext =
+        FocusManager.instance.primaryFocus?.context;
     if (focusContext == null) return;
-    final EditableTextState? editableState =
-        focusContext.findAncestorStateOfType<EditableTextState>();
+    final EditableTextState? editableState = focusContext
+        .findAncestorStateOfType<EditableTextState>();
     if (editableState != null && editableState.mounted) {
       _globalActiveCtrl = editableState.widget.controller;
       _globalActiveOnChanged = editableState.widget.onChanged;
@@ -153,9 +154,13 @@ class _AssessmentQuestionFormScreenState
     _suffixCtrl = TextEditingController(text: q?['shortAnswerSuffix'] ?? '');
     _hintCtrl = TextEditingController(text: q?['shortAnswerHint'] ?? '');
     _explanationCtrl = TextEditingController(text: q?['explanation'] ?? '');
-    if (q != null && q['explanationSteps'] != null && q['explanationSteps'] is List) {
+    if (q != null &&
+        q['explanationSteps'] != null &&
+        q['explanationSteps'] is List) {
       _explanationSteps = List<Map<String, dynamic>>.from(
-        (q['explanationSteps'] as List).map((e) => Map<String, dynamic>.from(e)),
+        (q['explanationSteps'] as List).map(
+          (e) => Map<String, dynamic>.from(e),
+        ),
       );
     }
     _isClasswork = q?['isClasswork'] == true || q?['forTutorOnly'] == true;
@@ -426,7 +431,11 @@ class _AssessmentQuestionFormScreenState
         children: [
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 4),
-            child: Icon(Icons.functions_rounded, size: 16, color: Color(0xFF6366F1)),
+            child: Icon(
+              Icons.functions_rounded,
+              size: 16,
+              color: Color(0xFF6366F1),
+            ),
           ),
           Flexible(
             child: SingleChildScrollView(
@@ -439,13 +448,20 @@ class _AssessmentQuestionFormScreenState
                       onTap: () => _insertGlobalSymbol(symbol),
                       borderRadius: BorderRadius.circular(6),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                          color: isDark
+                              ? const Color(0xFF0F172A)
+                              : Colors.white,
                           borderRadius: BorderRadius.circular(6),
                           border: Border.all(
-                            color: isDark ? const Color(0xFF475569) : const Color(0xFFE2E8F0),
+                            color: isDark
+                                ? const Color(0xFF475569)
+                                : const Color(0xFFE2E8F0),
                           ),
                         ),
                         child: Text(
@@ -473,7 +489,11 @@ class _AssessmentQuestionFormScreenState
                 color: const Color(0xFF6366F1),
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: const Icon(Icons.grid_view_rounded, size: 13, color: Colors.white),
+              child: const Icon(
+                Icons.grid_view_rounded,
+                size: 13,
+                color: Colors.white,
+              ),
             ),
           ),
         ],
@@ -753,7 +773,10 @@ class _AssessmentQuestionFormScreenState
         return;
       }
       final List<String> inputs = [];
-      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+      final regExp = RegExp(
+        r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]',
+        caseSensitive: false,
+      );
       final Iterable<Match> matches = regExp.allMatches(textVal);
 
       for (var m in matches) {
@@ -843,6 +866,17 @@ class _AssessmentQuestionFormScreenState
       correctAnswers = inputs;
     } else if (_type == 'TRUE_FALSE') {
       correctAnswers = [_trueFalseAnswer ? '0' : '1'];
+    } else if (_type == 'MATCHING') {
+      if (_options.isEmpty || _rightOptions.isEmpty) {
+        _showSnackBar('Please add at least one matching pair.');
+        return;
+      }
+      // Left option i always pairs with the right option originally at
+      // index i (the right column is shuffled for display only, in
+      // _buildMatchingPairsInput/on the student side) -- same identity-
+      // sequence idea as ORDERING above, not a "mark correct" checkbox
+      // selection, so this never touches _correctAnswerSelection.
+      correctAnswers = List.generate(_options.length, (i) => i.toString());
     } else {
       // Validate that at least one option is correct
       bool hasCorrect = _correctAnswerSelection.any((val) => val);
@@ -988,8 +1022,9 @@ class _AssessmentQuestionFormScreenState
           }
         }
         questionsToSave[0]['isClasswork'] = setAsClasswork;
-        questionsToSave[0]['category'] =
-            setAsClasswork ? 'classwork' : 'practice';
+        questionsToSave[0]['category'] = setAsClasswork
+            ? 'classwork'
+            : 'practice';
       }
 
       final String snackMessage = widget.existingQuestion != null
@@ -1107,6 +1142,11 @@ class _AssessmentQuestionFormScreenState
       correctAnswers = inputs;
     } else if (_type == 'TRUE_FALSE') {
       correctAnswers = [_trueFalseAnswer ? '0' : '1'];
+    } else if (_type == 'MATCHING') {
+      // Same identity-sequence idea as ORDERING above -- see the matching
+      // branch in _saveQuestion for why this never touches
+      // _correctAnswerSelection.
+      correctAnswers = List.generate(_options.length, (i) => i.toString());
     } else {
       for (int i = 0; i < _correctAnswerSelection.length; i++) {
         if (_correctAnswerSelection[i]) {
@@ -1238,20 +1278,26 @@ class _AssessmentQuestionFormScreenState
     // Deep clone (not a shallow List.from) so editing this Ditto's steps
     // later can never mutate the main question's own _explanationSteps maps,
     // and vice versa.
-    ditto['explanationSteps'] = (jsonDecode(jsonEncode(_explanationSteps)) as List)
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
+    ditto['explanationSteps'] =
+        (jsonDecode(jsonEncode(_explanationSteps)) as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
 
-    final List optionsList = ditto['options'] is List ? ditto['options'] as List : [];
-    final List rightOptionsList =
-        ditto['rightOptions'] is List ? ditto['rightOptions'] as List : [];
+    final List optionsList = ditto['options'] is List
+        ? ditto['options'] as List
+        : [];
+    final List rightOptionsList = ditto['rightOptions'] is List
+        ? ditto['rightOptions'] as List
+        : [];
 
     setState(() {
       _dittoQuestions.add(ditto);
       _dittoDescriptiveTextCtrls.add(
         TextEditingController(text: ditto['descriptiveText']?.toString() ?? ''),
       );
-      _dittoTextCtrls.add(TextEditingController(text: ditto['text']?.toString() ?? ''));
+      _dittoTextCtrls.add(
+        TextEditingController(text: ditto['text']?.toString() ?? ''),
+      );
       _dittoExplanationCtrls.add(
         TextEditingController(text: ditto['explanation']?.toString() ?? ''),
       );
@@ -1260,11 +1306,15 @@ class _AssessmentQuestionFormScreenState
               (ditto['correctAnswers'] as List).isNotEmpty)
           ? ditto['correctAnswers'][0].toString()
           : '';
-      _dittoShortAnswerCtrls.add(TextEditingController(text: initialShortAnswer));
+      _dittoShortAnswerCtrls.add(
+        TextEditingController(text: initialShortAnswer),
+      );
       _dittoOptionCtrls.add(
         List.generate(
           optionsList.length,
-          (i) => TextEditingController(text: (optionsList[i]['text'] ?? '').toString()),
+          (i) => TextEditingController(
+            text: (optionsList[i]['text'] ?? '').toString(),
+          ),
         ),
       );
       _dittoRightPairCtrls.add(
@@ -1278,10 +1328,14 @@ class _AssessmentQuestionFormScreenState
         ),
       );
       _dittoPrefixCtrls.add(
-        TextEditingController(text: ditto['shortAnswerPrefix']?.toString() ?? ''),
+        TextEditingController(
+          text: ditto['shortAnswerPrefix']?.toString() ?? '',
+        ),
       );
       _dittoSuffixCtrls.add(
-        TextEditingController(text: ditto['shortAnswerSuffix']?.toString() ?? ''),
+        TextEditingController(
+          text: ditto['shortAnswerSuffix']?.toString() ?? '',
+        ),
       );
       _dittoHintCtrls.add(
         TextEditingController(text: ditto['shortAnswerHint']?.toString() ?? ''),
@@ -1290,10 +1344,12 @@ class _AssessmentQuestionFormScreenState
         TextEditingController(text: ditto['marks']?.toString() ?? '1'),
       );
 
-      final List<dynamic> correctAnswersList =
-          ditto['correctAnswers'] is List ? ditto['correctAnswers'] as List : [];
+      final List<dynamic> correctAnswersList = ditto['correctAnswers'] is List
+          ? ditto['correctAnswers'] as List
+          : [];
       _dittoTrueFalseAnswers.add(
-        correctAnswersList.isEmpty || correctAnswersList.first.toString() == '0',
+        correctAnswersList.isEmpty ||
+            correctAnswersList.first.toString() == '0',
       );
 
       _dittoEquationStepCtrls.add(
@@ -1338,7 +1394,10 @@ class _AssessmentQuestionFormScreenState
           } catch (_) {}
           final List<Map<String, dynamic>> rowCells = decoded
               .map<Map<String, dynamic>>(
-                (c) => {'value': c['value'] ?? '', 'isInput': c['isInput'] == true},
+                (c) => {
+                  'value': c['value'] ?? '',
+                  'isInput': c['isInput'] == true,
+                },
               )
               .toList();
           while (rowCells.length < rightOptionsList.length) {
@@ -1523,14 +1582,20 @@ class _AssessmentQuestionFormScreenState
                           onPressed: () {
                             setState(() {
                               _dittoQuestions.removeAt(idx);
-                              _dittoDescriptiveTextCtrls.removeAt(idx).dispose();
+                              _dittoDescriptiveTextCtrls
+                                  .removeAt(idx)
+                                  .dispose();
                               _dittoTextCtrls.removeAt(idx).dispose();
                               _dittoExplanationCtrls.removeAt(idx).dispose();
                               _dittoShortAnswerCtrls.removeAt(idx).dispose();
-                              for (var ctrl in _dittoOptionCtrls.removeAt(idx)) {
+                              for (var ctrl in _dittoOptionCtrls.removeAt(
+                                idx,
+                              )) {
                                 ctrl.dispose();
                               }
-                              for (var ctrl in _dittoRightPairCtrls.removeAt(idx)) {
+                              for (var ctrl in _dittoRightPairCtrls.removeAt(
+                                idx,
+                              )) {
                                 ctrl.dispose();
                               }
                               _dittoPrefixCtrls.removeAt(idx).dispose();
@@ -1538,10 +1603,13 @@ class _AssessmentQuestionFormScreenState
                               _dittoHintCtrls.removeAt(idx).dispose();
                               _dittoMarksCtrls.removeAt(idx).dispose();
                               _dittoTrueFalseAnswers.removeAt(idx);
-                              for (var ctrl in _dittoEquationStepCtrls.removeAt(idx)) {
+                              for (var ctrl in _dittoEquationStepCtrls.removeAt(
+                                idx,
+                              )) {
                                 ctrl.dispose();
                               }
-                              for (var ctrl in _dittoStatementStepCtrls.removeAt(idx)) {
+                              for (var ctrl
+                                  in _dittoStatementStepCtrls.removeAt(idx)) {
                                 ctrl.dispose();
                               }
                               _dittoMatrixCorrectAnswers.removeAt(idx);
@@ -1599,7 +1667,10 @@ class _AssessmentQuestionFormScreenState
                           border: const OutlineInputBorder(),
                           isDense: true,
                         ),
-                        style: TextStyle(color: context.textColor, fontSize: 13),
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 13,
+                        ),
                         maxLines: 3,
                         onChanged: (val) {
                           q['text'] = val;
@@ -1824,7 +1895,8 @@ class _AssessmentQuestionFormScreenState
                         controller: _dittoExplanationCtrls[idx],
                         decoration: InputDecoration(
                           labelText: 'General Solution Explanation (Optional)',
-                          hintText: 'Enter step-by-step solution explanation for Ditto #${idx + 1}',
+                          hintText:
+                              'Enter step-by-step solution explanation for Ditto #${idx + 1}',
                           labelStyle: TextStyle(
                             fontSize: 11,
                             color: context.textColor70,
@@ -1832,7 +1904,10 @@ class _AssessmentQuestionFormScreenState
                           border: const OutlineInputBorder(),
                           isDense: true,
                         ),
-                        style: TextStyle(color: context.textColor, fontSize: 13),
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 13,
+                        ),
                         maxLines: 3,
                         onChanged: (val) {
                           q['explanation'] = val;
@@ -1863,12 +1938,20 @@ class _AssessmentQuestionFormScreenState
       ),
       child: Row(
         children: [
-          const Icon(Icons.info_outline_rounded, color: Color(0xFF10B981), size: 16),
+          const Icon(
+            Icons.info_outline_rounded,
+            color: Color(0xFF10B981),
+            size: 16,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               message,
-              style: TextStyle(color: context.textColor, fontSize: 11, height: 1.3),
+              style: TextStyle(
+                color: context.textColor,
+                fontSize: 11,
+                height: 1.3,
+              ),
             ),
           ),
         ],
@@ -1890,7 +1973,10 @@ class _AssessmentQuestionFormScreenState
       }
       q['correctAnswers'] = inputs;
     } else if (q['type'] == 'FILL_IN_BLANKS') {
-      final regExp = RegExp(r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]', caseSensitive: false);
+      final regExp = RegExp(
+        r'\[(?:BLANK|INPUT)(?::([^\]]*))?\]',
+        caseSensitive: false,
+      );
       final List<String> inputs = [];
       for (final m in regExp.allMatches(textVal)) {
         inputs.add((m.group(1) ?? '').trim());
@@ -1972,7 +2058,9 @@ class _AssessmentQuestionFormScreenState
             controller: _dittoShortAnswerCtrls[idx],
             maxLines: isDescriptive ? 4 : 1,
             decoration: InputDecoration(
-              labelText: isDescriptive ? 'Admin Preset Model Answer' : 'Correct Answer',
+              labelText: isDescriptive
+                  ? 'Admin Preset Model Answer'
+                  : 'Correct Answer',
               labelStyle: const TextStyle(fontSize: 11),
               border: const OutlineInputBorder(),
               isDense: true,
@@ -2070,7 +2158,9 @@ class _AssessmentQuestionFormScreenState
                   : (context.isDark ? const Color(0xFF1E293B) : Colors.white),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: isSelected ? const Color(0xFF10B981) : context.glassBorder,
+                color: isSelected
+                    ? const Color(0xFF10B981)
+                    : context.glassBorder,
                 width: isSelected ? 2 : 1,
               ),
             ),
@@ -2080,14 +2170,18 @@ class _AssessmentQuestionFormScreenState
                   isSelected
                       ? Icons.check_circle_rounded
                       : Icons.radio_button_unchecked_rounded,
-                  color: isSelected ? const Color(0xFF10B981) : context.textColor54,
+                  color: isSelected
+                      ? const Color(0xFF10B981)
+                      : context.textColor54,
                   size: 20,
                 ),
                 const SizedBox(height: 6),
                 Text(
                   label,
                   style: TextStyle(
-                    color: isSelected ? const Color(0xFF10B981) : context.textColor,
+                    color: isSelected
+                        ? const Color(0xFF10B981)
+                        : context.textColor,
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
                   ),
@@ -2345,8 +2439,9 @@ class _AssessmentQuestionFormScreenState
   Widget _buildDittoMatrixMCQEditor(int idx) {
     final q = _dittoQuestions[idx];
     final List optionsList = q['options'] is List ? q['options'] as List : [];
-    final List rightOptionsList =
-        q['rightOptions'] is List ? q['rightOptions'] as List : [];
+    final List rightOptionsList = q['rightOptions'] is List
+        ? q['rightOptions'] as List
+        : [];
     final List<String> correctAnswers = _dittoMatrixCorrectAnswers[idx];
 
     return Column(
@@ -2365,7 +2460,10 @@ class _AssessmentQuestionFormScreenState
             ),
             TextButton.icon(
               icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
-              label: const Text('Add Row', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              label: const Text(
+                'Add Row',
+                style: TextStyle(color: Color(0xFF818CF8), fontSize: 12),
+              ),
               onPressed: () {
                 setState(() {
                   optionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
@@ -2395,7 +2493,11 @@ class _AssessmentQuestionFormScreenState
                 ),
                 if (optionsList.length > 1)
                   IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                    icon: const Icon(
+                      Icons.delete,
+                      color: Colors.redAccent,
+                      size: 16,
+                    ),
                     onPressed: () {
                       setState(() {
                         optionsList.removeAt(rowIdx);
@@ -2424,10 +2526,17 @@ class _AssessmentQuestionFormScreenState
             ),
             TextButton.icon(
               icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
-              label: const Text('Add Column', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              label: const Text(
+                'Add Column',
+                style: TextStyle(color: Color(0xFF818CF8), fontSize: 12),
+              ),
               onPressed: () {
                 setState(() {
-                  rightOptionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                  rightOptionsList.add({
+                    'text': '',
+                    'imageUrl': '',
+                    'isSvg': false,
+                  });
                 });
               },
             ),
@@ -2453,7 +2562,11 @@ class _AssessmentQuestionFormScreenState
                 ),
                 if (rightOptionsList.length > 1)
                   IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                    icon: const Icon(
+                      Icons.delete,
+                      color: Colors.redAccent,
+                      size: 16,
+                    ),
                     onPressed: () {
                       setState(() {
                         rightOptionsList.removeAt(colIdx);
@@ -2487,7 +2600,9 @@ class _AssessmentQuestionFormScreenState
             children: [
               TableRow(
                 children: [
-                  const TableCell(child: Padding(padding: EdgeInsets.all(6), child: Text(''))),
+                  const TableCell(
+                    child: Padding(padding: EdgeInsets.all(6), child: Text('')),
+                  ),
                   ...List.generate(rightOptionsList.length, (colIdx) {
                     final colText = rightOptionsList[colIdx]['text'] ?? '';
                     return TableCell(
@@ -2513,7 +2628,8 @@ class _AssessmentQuestionFormScreenState
                 if (rowIdx >= correctAnswers.length) {
                   correctAnswers.add('0');
                 }
-                final int currentSel = int.tryParse(correctAnswers[rowIdx]) ?? 0;
+                final int currentSel =
+                    int.tryParse(correctAnswers[rowIdx]) ?? 0;
                 final rowText = optionsList[rowIdx]['text'] ?? '';
                 return TableRow(
                   children: [
@@ -2523,7 +2639,10 @@ class _AssessmentQuestionFormScreenState
                         padding: const EdgeInsets.all(6.0),
                         child: Text(
                           rowText.isNotEmpty ? rowText : 'Row ${rowIdx + 1}',
-                          style: TextStyle(color: context.textColor, fontSize: 11),
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontSize: 11,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -2539,7 +2658,9 @@ class _AssessmentQuestionFormScreenState
                               if (val != null) {
                                 setState(() {
                                   correctAnswers[rowIdx] = val.toString();
-                                  q['correctAnswers'] = List<String>.from(correctAnswers);
+                                  q['correctAnswers'] = List<String>.from(
+                                    correctAnswers,
+                                  );
                                 });
                               }
                             },
@@ -2564,8 +2685,9 @@ class _AssessmentQuestionFormScreenState
   Widget _buildDittoMatrixInputEditor(int idx) {
     final q = _dittoQuestions[idx];
     final List optionsList = q['options'] is List ? q['options'] as List : [];
-    final List rightOptionsList =
-        q['rightOptions'] is List ? q['rightOptions'] as List : [];
+    final List rightOptionsList = q['rightOptions'] is List
+        ? q['rightOptions'] as List
+        : [];
     final List<List<Map<String, dynamic>>> cells = _dittoMatrixInputCells[idx];
 
     return Column(
@@ -2584,10 +2706,17 @@ class _AssessmentQuestionFormScreenState
             ),
             TextButton.icon(
               icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
-              label: const Text('Add Column', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              label: const Text(
+                'Add Column',
+                style: TextStyle(color: Color(0xFF818CF8), fontSize: 12),
+              ),
               onPressed: () {
                 setState(() {
-                  rightOptionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
+                  rightOptionsList.add({
+                    'text': '',
+                    'imageUrl': '',
+                    'isSvg': false,
+                  });
                   for (final row in cells) {
                     row.add({'value': '', 'isInput': false});
                   }
@@ -2617,7 +2746,11 @@ class _AssessmentQuestionFormScreenState
                 ),
                 if (rightOptionsList.length > 1)
                   IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                    icon: const Icon(
+                      Icons.delete,
+                      color: Colors.redAccent,
+                      size: 16,
+                    ),
                     onPressed: () {
                       setState(() {
                         rightOptionsList.removeAt(colIdx);
@@ -2646,7 +2779,10 @@ class _AssessmentQuestionFormScreenState
             ),
             TextButton.icon(
               icon: const Icon(Icons.add, size: 14, color: Color(0xFF818CF8)),
-              label: const Text('Add Row', style: TextStyle(color: Color(0xFF818CF8), fontSize: 12)),
+              label: const Text(
+                'Add Row',
+                style: TextStyle(color: Color(0xFF818CF8), fontSize: 12),
+              ),
               onPressed: () {
                 setState(() {
                   optionsList.add({'text': '', 'imageUrl': '', 'isSvg': false});
@@ -2672,7 +2808,9 @@ class _AssessmentQuestionFormScreenState
             children: [
               TableRow(
                 children: [
-                  const TableCell(child: Padding(padding: EdgeInsets.all(6), child: Text(''))),
+                  const TableCell(
+                    child: Padding(padding: EdgeInsets.all(6), child: Text('')),
+                  ),
                   ...List.generate(rightOptionsList.length, (colIdx) {
                     final colText = rightOptionsList[colIdx]['text'] ?? '';
                     return TableCell(
@@ -2692,13 +2830,18 @@ class _AssessmentQuestionFormScreenState
                       ),
                     );
                   }),
-                  const TableCell(child: Padding(padding: EdgeInsets.all(6), child: Text(''))),
+                  const TableCell(
+                    child: Padding(padding: EdgeInsets.all(6), child: Text('')),
+                  ),
                 ],
               ),
               ...List.generate(optionsList.length, (rowIdx) {
                 while (cells.length <= rowIdx) {
                   cells.add(
-                    List.generate(rightOptionsList.length, (c) => {'value': '', 'isInput': false}),
+                    List.generate(
+                      rightOptionsList.length,
+                      (c) => {'value': '', 'isInput': false},
+                    ),
                   );
                 }
                 while (cells[rowIdx].length < rightOptionsList.length) {
@@ -2710,7 +2853,13 @@ class _AssessmentQuestionFormScreenState
                       verticalAlignment: TableCellVerticalAlignment.middle,
                       child: Padding(
                         padding: const EdgeInsets.all(6.0),
-                        child: Text('Row ${rowIdx + 1}', style: TextStyle(color: context.textColor60, fontSize: 11)),
+                        child: Text(
+                          'Row ${rowIdx + 1}',
+                          style: TextStyle(
+                            color: context.textColor60,
+                            fontSize: 11,
+                          ),
+                        ),
                       ),
                     ),
                     ...List.generate(rightOptionsList.length, (colIdx) {
@@ -2724,9 +2873,14 @@ class _AssessmentQuestionFormScreenState
                             children: [
                               TextFormField(
                                 initialValue: cell['value'],
-                                style: TextStyle(color: context.textColor, fontSize: 12),
+                                style: TextStyle(
+                                  color: context.textColor,
+                                  fontSize: 12,
+                                ),
                                 decoration: InputDecoration(
-                                  hintText: isInput ? 'Correct value' : 'Label value',
+                                  hintText: isInput
+                                      ? 'Correct value'
+                                      : 'Label value',
                                   isDense: true,
                                   contentPadding: const EdgeInsets.all(6),
                                 ),
@@ -2738,7 +2892,13 @@ class _AssessmentQuestionFormScreenState
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Text('Input?', style: TextStyle(color: context.textColor54, fontSize: 9)),
+                                  Text(
+                                    'Input?',
+                                    style: TextStyle(
+                                      color: context.textColor54,
+                                      fontSize: 9,
+                                    ),
+                                  ),
                                   Checkbox(
                                     value: isInput,
                                     activeColor: const Color(0xFF6366F1),
@@ -2760,7 +2920,11 @@ class _AssessmentQuestionFormScreenState
                       verticalAlignment: TableCellVerticalAlignment.middle,
                       child: Center(
                         child: IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                          icon: const Icon(
+                            Icons.delete,
+                            color: Colors.redAccent,
+                            size: 16,
+                          ),
                           onPressed: () {
                             setState(() {
                               optionsList.removeAt(rowIdx);
@@ -2821,8 +2985,15 @@ class _AssessmentQuestionFormScreenState
                   });
                 });
               },
-              icon: const Icon(Icons.add_rounded, size: 14, color: Color(0xFF3B82F6)),
-              label: const Text('Add Step', style: TextStyle(color: Color(0xFF3B82F6), fontSize: 12)),
+              icon: const Icon(
+                Icons.add_rounded,
+                size: 14,
+                color: Color(0xFF3B82F6),
+              ),
+              label: const Text(
+                'Add Step',
+                style: TextStyle(color: Color(0xFF3B82F6), fontSize: 12),
+              ),
             ),
           ],
         ),
@@ -2834,7 +3005,11 @@ class _AssessmentQuestionFormScreenState
           if (step['blocks'] == null) {
             final List<Map<String, dynamic>> initialBlocks = [];
             if ((step['text'] ?? '').toString().isNotEmpty) {
-              initialBlocks.add({'type': 'TEXT', 'content': step['text'], 'isSvg': false});
+              initialBlocks.add({
+                'type': 'TEXT',
+                'content': step['text'],
+                'isSvg': false,
+              });
             }
             if ((step['imageUrl'] ?? '').toString().isNotEmpty) {
               initialBlocks.add({
@@ -2844,7 +3019,11 @@ class _AssessmentQuestionFormScreenState
               });
             }
             if (initialBlocks.isEmpty) {
-              initialBlocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+              initialBlocks.add({
+                'type': 'TEXT',
+                'content': '',
+                'isSvg': false,
+              });
             }
             step['blocks'] = initialBlocks;
           }
@@ -2855,7 +3034,9 @@ class _AssessmentQuestionFormScreenState
             color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
-              side: BorderSide(color: const Color(0xFF3B82F6).withOpacity(0.35)),
+              side: BorderSide(
+                color: const Color(0xFF3B82F6).withOpacity(0.35),
+              ),
             ),
             child: Padding(
               padding: const EdgeInsets.all(12.0),
@@ -2865,7 +3046,10 @@ class _AssessmentQuestionFormScreenState
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFF3B82F6).withOpacity(0.15),
                           borderRadius: BorderRadius.circular(12),
@@ -2883,33 +3067,71 @@ class _AssessmentQuestionFormScreenState
                       OutlinedButton.icon(
                         onPressed: () {
                           setState(() {
-                            blocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+                            blocks.add({
+                              'type': 'TEXT',
+                              'content': '',
+                              'isSvg': false,
+                            });
                           });
                         },
                         style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
                           side: const BorderSide(color: Color(0xFF3B82F6)),
                         ),
-                        icon: const Icon(Icons.add_circle_outline, size: 14, color: Color(0xFF3B82F6)),
-                        label: const Text('+ Text', style: TextStyle(fontSize: 11, color: Color(0xFF3B82F6))),
+                        icon: const Icon(
+                          Icons.add_circle_outline,
+                          size: 14,
+                          color: Color(0xFF3B82F6),
+                        ),
+                        label: const Text(
+                          '+ Text',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF3B82F6),
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 6),
                       OutlinedButton.icon(
                         onPressed: () {
                           setState(() {
-                            blocks.add({'type': 'IMAGE', 'content': '', 'isSvg': false});
+                            blocks.add({
+                              'type': 'IMAGE',
+                              'content': '',
+                              'isSvg': false,
+                            });
                           });
                         },
                         style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
                           side: const BorderSide(color: Color(0xFF10B981)),
                         ),
-                        icon: const Icon(Icons.add_photo_alternate_outlined, size: 14, color: Color(0xFF10B981)),
-                        label: const Text('+ Image', style: TextStyle(fontSize: 11, color: Color(0xFF10B981))),
+                        icon: const Icon(
+                          Icons.add_photo_alternate_outlined,
+                          size: 14,
+                          color: Color(0xFF10B981),
+                        ),
+                        label: const Text(
+                          '+ Image',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF10B981),
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 4),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
+                        icon: const Icon(
+                          Icons.delete_outline,
+                          color: Colors.redAccent,
+                          size: 18,
+                        ),
                         onPressed: () {
                           setState(() {
                             steps.removeAt(sIdx);
@@ -2930,24 +3152,37 @@ class _AssessmentQuestionFormScreenState
                         margin: const EdgeInsets.only(bottom: 8),
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                          color: isDark
+                              ? const Color(0xFF1E293B)
+                              : Colors.white,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+                          border: Border.all(
+                            color: const Color(0xFF10B981).withOpacity(0.4),
+                          ),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.image_rounded, color: Color(0xFF10B981), size: 20),
+                            const Icon(
+                              Icons.image_rounded,
+                              color: Color(0xFF10B981),
+                              size: 20,
+                            ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: imgContent.isNotEmpty
                                   ? Row(
                                       children: [
                                         ClipRRect(
-                                          borderRadius: BorderRadius.circular(6),
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
                                           child: SizedBox(
                                             height: 50,
                                             width: 70,
-                                            child: _renderQuestionImagePreview(imgContent, isSvg: isSvg),
+                                            child: _renderQuestionImagePreview(
+                                              imgContent,
+                                              isSvg: isSvg,
+                                            ),
                                           ),
                                         ),
                                         const SizedBox(width: 10),
@@ -2956,24 +3191,35 @@ class _AssessmentQuestionFormScreenState
                                             imgContent,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(fontSize: 11, color: context.textColor70),
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: context.textColor70,
+                                            ),
                                           ),
                                         ),
                                       ],
                                     )
                                   : const Text(
                                       'No diagram uploaded yet',
-                                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey,
+                                      ),
                                     ),
                             ),
                             ElevatedButton.icon(
                               onPressed: () async {
                                 try {
-                                  final result = await FilePicker.pickFiles(type: FileType.image);
-                                  if (result != null && result.files.single.bytes != null) {
+                                  final result = await FilePicker.pickFiles(
+                                    type: FileType.image,
+                                  );
+                                  if (result != null &&
+                                      result.files.single.bytes != null) {
                                     final bytes = result.files.single.bytes!;
                                     final filename = result.files.single.name;
-                                    final isSvgFile = filename.toLowerCase().endsWith('.svg');
+                                    final isSvgFile = filename
+                                        .toLowerCase()
+                                        .endsWith('.svg');
 
                                     final res = await ApiService.uploadFile(
                                       '/assessment-questions/upload',
@@ -2983,7 +3229,8 @@ class _AssessmentQuestionFormScreenState
                                     );
 
                                     if (res.statusCode == 200) {
-                                      final resBody = await res.stream.bytesToString();
+                                      final resBody = await res.stream
+                                          .bytesToString();
                                       final data = jsonDecode(resBody);
                                       setState(() {
                                         block['content'] = data['fileUrl'];
@@ -2998,13 +3245,26 @@ class _AssessmentQuestionFormScreenState
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF10B981),
                                 foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
                               ),
-                              icon: const Icon(Icons.upload_file_rounded, size: 14),
-                              label: Text(imgContent.isEmpty ? 'Upload Image' : 'Change', style: const TextStyle(fontSize: 11)),
+                              icon: const Icon(
+                                Icons.upload_file_rounded,
+                                size: 14,
+                              ),
+                              label: Text(
+                                imgContent.isEmpty ? 'Upload Image' : 'Change',
+                                style: const TextStyle(fontSize: 11),
+                              ),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                size: 16,
+                                color: Colors.redAccent,
+                              ),
                               onPressed: () {
                                 setState(() {
                                   blocks.removeAt(bIdx);
@@ -3017,7 +3277,9 @@ class _AssessmentQuestionFormScreenState
                     }
 
                     // TEXT Block
-                    final blockTextCtrl = TextEditingController(text: block['content'] ?? '');
+                    final blockTextCtrl = TextEditingController(
+                      text: block['content'] ?? '',
+                    );
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       child: Row(
@@ -3034,11 +3296,17 @@ class _AssessmentQuestionFormScreenState
                                 decoration: InputDecoration(
                                   labelText: 'Text Block #${bIdx + 1}',
                                   hintText: 'e.g., 53 is between 50 and 60...',
-                                  labelStyle: TextStyle(fontSize: 11, color: context.textColor70),
+                                  labelStyle: TextStyle(
+                                    fontSize: 11,
+                                    color: context.textColor70,
+                                  ),
                                   border: const OutlineInputBorder(),
                                   isDense: true,
                                 ),
-                                style: TextStyle(color: context.textColor, fontSize: 13),
+                                style: TextStyle(
+                                  color: context.textColor,
+                                  fontSize: 13,
+                                ),
                                 maxLines: 2,
                                 onChanged: (val) {
                                   block['content'] = val;
@@ -3049,7 +3317,11 @@ class _AssessmentQuestionFormScreenState
                           if (blocks.length > 1) ...[
                             const SizedBox(width: 4),
                             IconButton(
-                              icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                size: 16,
+                                color: Colors.redAccent,
+                              ),
                               onPressed: () {
                                 setState(() {
                                   blocks.removeAt(bIdx);
@@ -3310,10 +3582,7 @@ class _AssessmentQuestionFormScreenState
             ),
             subtitle: Text(
               'Visible exclusively in Tutor Mode for classroom teaching & demonstrations.',
-              style: TextStyle(
-                color: context.textColor60,
-                fontSize: 11,
-              ),
+              style: TextStyle(color: context.textColor60, fontSize: 11),
             ),
             value: _isClasswork,
             activeColor: const Color(0xFF10B981),
@@ -3372,54 +3641,33 @@ class _AssessmentQuestionFormScreenState
         isDense: true,
       ),
       items: const [
-        DropdownMenuItem(
-          value: 'MCQ_SINGLE',
-          child: Text('Single Choice MCQ'),
-        ),
+        DropdownMenuItem(value: 'MCQ_SINGLE', child: Text('Single Choice MCQ')),
         DropdownMenuItem(
           value: 'MCQ_MULTI',
           child: Text('Multiple Choice MCQ'),
         ),
-        DropdownMenuItem(
-          value: 'TRUE_FALSE',
-          child: Text('True / False'),
-        ),
-        DropdownMenuItem(
-          value: 'SHORT_ANSWER',
-          child: Text('Short Answer'),
-        ),
+        DropdownMenuItem(value: 'TRUE_FALSE', child: Text('True / False')),
+        DropdownMenuItem(value: 'SHORT_ANSWER', child: Text('Short Answer')),
         DropdownMenuItem(
           value: 'ORDERING',
           child: Text('Ordering / Sequencing'),
         ),
-        DropdownMenuItem(
-          value: 'MATCHING',
-          child: Text('Match the Following'),
-        ),
+        DropdownMenuItem(value: 'MATCHING', child: Text('Match the Following')),
         DropdownMenuItem(
           value: 'GEOMETRIC',
           child: Text('Geometric Construction'),
         ),
-        DropdownMenuItem(
-          value: 'MATRIX_MCQ',
-          child: Text('Grid / Matrix MCQ'),
-        ),
+        DropdownMenuItem(value: 'MATRIX_MCQ', child: Text('Grid / Matrix MCQ')),
         DropdownMenuItem(
           value: 'MATRIX_INPUT',
           child: Text('Matrix / Table Input'),
         ),
-        DropdownMenuItem(
-          value: 'EQUATION',
-          child: Text('Multi-Step Equation'),
-        ),
+        DropdownMenuItem(value: 'EQUATION', child: Text('Multi-Step Equation')),
         DropdownMenuItem(
           value: 'STATEMENT_DROPDOWN',
           child: Text('Statement Dropdown'),
         ),
-        DropdownMenuItem(
-          value: 'INLINE_SELECT',
-          child: Text('Inline Select'),
-        ),
+        DropdownMenuItem(value: 'INLINE_SELECT', child: Text('Inline Select')),
         DropdownMenuItem(
           value: 'FILL_IN_BLANKS',
           child: Text('Fill in the Blanks ([BLANK:answer])'),
@@ -3436,11 +3684,7 @@ class _AssessmentQuestionFormScreenState
             if (_type == 'MATCHING' && _rightOptions.isEmpty) {
               _rightOptions = List.generate(
                 _options.length,
-                (index) => {
-                  'text': '',
-                  'imageUrl': '',
-                  'isSvg': false,
-                },
+                (index) => {'text': '', 'imageUrl': '', 'isSvg': false},
               );
             }
             if (_type == 'MATRIX_MCQ') {
@@ -3451,11 +3695,7 @@ class _AssessmentQuestionFormScreenState
               }
               if (_rightOptions.isEmpty) {
                 _rightOptions = [
-                  {
-                    'text': 'Column 1',
-                    'imageUrl': '',
-                    'isSvg': false,
-                  },
+                  {'text': 'Column 1', 'imageUrl': '', 'isSvg': false},
                 ];
               }
               _matrixCorrectAnswers = List.generate(
@@ -3471,11 +3711,7 @@ class _AssessmentQuestionFormScreenState
               }
               if (_rightOptions.isEmpty) {
                 _rightOptions = [
-                  {
-                    'text': 'Header 1',
-                    'imageUrl': '',
-                    'isSvg': false,
-                  },
+                  {'text': 'Header 1', 'imageUrl': '', 'isSvg': false},
                 ];
               }
               _matrixInputCells = List.generate(
@@ -3494,9 +3730,8 @@ class _AssessmentQuestionFormScreenState
               }
               _equationStepControllers = List.generate(
                 _options.length,
-                (idx) => TextEditingController(
-                  text: _options[idx]['text'] ?? '',
-                ),
+                (idx) =>
+                    TextEditingController(text: _options[idx]['text'] ?? ''),
               );
             }
             if (_type == 'STATEMENT_DROPDOWN') {
@@ -3507,9 +3742,8 @@ class _AssessmentQuestionFormScreenState
               }
               _statementStepControllers = List.generate(
                 _options.length,
-                (idx) => TextEditingController(
-                  text: _options[idx]['text'] ?? '',
-                ),
+                (idx) =>
+                    TextEditingController(text: _options[idx]['text'] ?? ''),
               );
             }
           });
@@ -3596,7 +3830,9 @@ class _AssessmentQuestionFormScreenState
                 fillColor: isDark
                     ? const Color(0xFF0F172A)
                     : const Color(0xFFF8FAFC),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               maxLines: 2,
             ),
@@ -3615,7 +3851,9 @@ class _AssessmentQuestionFormScreenState
                 fillColor: isDark
                     ? const Color(0xFF0F172A)
                     : const Color(0xFFF8FAFC),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               maxLines: 4,
               validator: (v) => (v == null || v.trim().isEmpty)
@@ -3630,11 +3868,17 @@ class _AssessmentQuestionFormScreenState
               decoration: BoxDecoration(
                 color: const Color(0xFF10B981).withOpacity(0.12),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+                border: Border.all(
+                  color: const Color(0xFF10B981).withOpacity(0.4),
+                ),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.info_outline_rounded, color: Color(0xFF10B981), size: 20),
+                  const Icon(
+                    Icons.info_outline_rounded,
+                    color: Color(0xFF10B981),
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -3657,11 +3901,17 @@ class _AssessmentQuestionFormScreenState
               decoration: BoxDecoration(
                 color: const Color(0xFF10B981).withOpacity(0.12),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+                border: Border.all(
+                  color: const Color(0xFF10B981).withOpacity(0.4),
+                ),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.info_outline_rounded, color: Color(0xFF10B981), size: 20),
+                  const Icon(
+                    Icons.info_outline_rounded,
+                    color: Color(0xFF10B981),
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -3684,11 +3934,17 @@ class _AssessmentQuestionFormScreenState
               decoration: BoxDecoration(
                 color: const Color(0xFF6366F1).withOpacity(0.12),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.4)),
+                border: Border.all(
+                  color: const Color(0xFF6366F1).withOpacity(0.4),
+                ),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.auto_awesome, color: Color(0xFF6366F1), size: 20),
+                  const Icon(
+                    Icons.auto_awesome,
+                    color: Color(0xFF6366F1),
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -3762,13 +4018,16 @@ class _AssessmentQuestionFormScreenState
               style: TextStyle(color: context.textColor),
               decoration: InputDecoration(
                 labelText: 'General Solution Explanation (Optional)',
-                hintText: 'e.g., To round 53 to the nearest ten, look at the ones digit...',
+                hintText:
+                    'e.g., To round 53 to the nearest ten, look at the ones digit...',
                 labelStyle: TextStyle(color: context.textColor70),
                 filled: true,
                 fillColor: isDark
                     ? const Color(0xFF0F172A)
                     : const Color(0xFFF8FAFC),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               maxLines: 3,
             ),
@@ -3802,13 +4061,19 @@ class _AssessmentQuestionFormScreenState
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF3B82F6),
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
                 icon: const Icon(Icons.add_rounded, size: 16),
-                label: const Text('Add Step', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                label: const Text(
+                  'Add Step',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                ),
               ),
             ],
           ),
@@ -3821,13 +4086,25 @@ class _AssessmentQuestionFormScreenState
             if (step['blocks'] == null) {
               final List<Map<String, dynamic>> initialBlocks = [];
               if ((step['text'] ?? '').toString().isNotEmpty) {
-                initialBlocks.add({'type': 'TEXT', 'content': step['text'], 'isSvg': false});
+                initialBlocks.add({
+                  'type': 'TEXT',
+                  'content': step['text'],
+                  'isSvg': false,
+                });
               }
               if ((step['imageUrl'] ?? '').toString().isNotEmpty) {
-                initialBlocks.add({'type': 'IMAGE', 'content': step['imageUrl'], 'isSvg': step['isSvg'] == true});
+                initialBlocks.add({
+                  'type': 'IMAGE',
+                  'content': step['imageUrl'],
+                  'isSvg': step['isSvg'] == true,
+                });
               }
               if (initialBlocks.isEmpty) {
-                initialBlocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+                initialBlocks.add({
+                  'type': 'TEXT',
+                  'content': '',
+                  'isSvg': false,
+                });
               }
               step['blocks'] = initialBlocks;
             }
@@ -3851,7 +4128,10 @@ class _AssessmentQuestionFormScreenState
                     Row(
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: const Color(0xFF3B82F6).withOpacity(0.15),
                             borderRadius: BorderRadius.circular(12),
@@ -3869,33 +4149,71 @@ class _AssessmentQuestionFormScreenState
                         OutlinedButton.icon(
                           onPressed: () {
                             setState(() {
-                              blocks.add({'type': 'TEXT', 'content': '', 'isSvg': false});
+                              blocks.add({
+                                'type': 'TEXT',
+                                'content': '',
+                                'isSvg': false,
+                              });
                             });
                           },
                           style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             side: const BorderSide(color: Color(0xFF3B82F6)),
                           ),
-                          icon: const Icon(Icons.add_circle_outline, size: 14, color: Color(0xFF3B82F6)),
-                          label: const Text('+ Text Block', style: TextStyle(fontSize: 11, color: Color(0xFF3B82F6))),
+                          icon: const Icon(
+                            Icons.add_circle_outline,
+                            size: 14,
+                            color: Color(0xFF3B82F6),
+                          ),
+                          label: const Text(
+                            '+ Text Block',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF3B82F6),
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 8),
                         OutlinedButton.icon(
                           onPressed: () {
                             setState(() {
-                              blocks.add({'type': 'IMAGE', 'content': '', 'isSvg': false});
+                              blocks.add({
+                                'type': 'IMAGE',
+                                'content': '',
+                                'isSvg': false,
+                              });
                             });
                           },
                           style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             side: const BorderSide(color: Color(0xFF10B981)),
                           ),
-                          icon: const Icon(Icons.add_photo_alternate_outlined, size: 14, color: Color(0xFF10B981)),
-                          label: const Text('+ Image Block', style: TextStyle(fontSize: 11, color: Color(0xFF10B981))),
+                          icon: const Icon(
+                            Icons.add_photo_alternate_outlined,
+                            size: 14,
+                            color: Color(0xFF10B981),
+                          ),
+                          label: const Text(
+                            '+ Image Block',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF10B981),
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 8),
                         IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.redAccent,
+                            size: 20,
+                          ),
                           onPressed: () {
                             setState(() {
                               _explanationSteps.removeAt(sIdx);
@@ -3919,24 +4237,38 @@ class _AssessmentQuestionFormScreenState
                           margin: const EdgeInsets.only(bottom: 10),
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                            color: isDark
+                                ? const Color(0xFF1E293B)
+                                : Colors.white,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+                            border: Border.all(
+                              color: const Color(0xFF10B981).withOpacity(0.4),
+                            ),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.image_rounded, color: Color(0xFF10B981), size: 20),
+                              const Icon(
+                                Icons.image_rounded,
+                                color: Color(0xFF10B981),
+                                size: 20,
+                              ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: imgContent.isNotEmpty
                                     ? Row(
                                         children: [
                                           ClipRRect(
-                                            borderRadius: BorderRadius.circular(6),
+                                            borderRadius: BorderRadius.circular(
+                                              6,
+                                            ),
                                             child: SizedBox(
                                               height: 50,
                                               width: 70,
-                                              child: _renderQuestionImagePreview(imgContent, isSvg: isSvg),
+                                              child:
+                                                  _renderQuestionImagePreview(
+                                                    imgContent,
+                                                    isSvg: isSvg,
+                                                  ),
                                             ),
                                           ),
                                           const SizedBox(width: 10),
@@ -3945,24 +4277,35 @@ class _AssessmentQuestionFormScreenState
                                               imgContent,
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(fontSize: 11, color: context.textColor70),
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: context.textColor70,
+                                              ),
                                             ),
                                           ),
                                         ],
                                       )
                                     : const Text(
                                         'No diagram uploaded yet',
-                                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey,
+                                        ),
                                       ),
                               ),
                               ElevatedButton.icon(
                                 onPressed: () async {
                                   try {
-                                    final result = await FilePicker.pickFiles(type: FileType.image);
-                                    if (result != null && result.files.single.bytes != null) {
+                                    final result = await FilePicker.pickFiles(
+                                      type: FileType.image,
+                                    );
+                                    if (result != null &&
+                                        result.files.single.bytes != null) {
                                       final bytes = result.files.single.bytes!;
                                       final filename = result.files.single.name;
-                                      final isSvgFile = filename.toLowerCase().endsWith('.svg');
+                                      final isSvgFile = filename
+                                          .toLowerCase()
+                                          .endsWith('.svg');
 
                                       final res = await ApiService.uploadFile(
                                         '/assessment-questions/upload',
@@ -3972,7 +4315,8 @@ class _AssessmentQuestionFormScreenState
                                       );
 
                                       if (res.statusCode == 200) {
-                                        final resBody = await res.stream.bytesToString();
+                                        final resBody = await res.stream
+                                            .bytesToString();
                                         final data = jsonDecode(resBody);
                                         setState(() {
                                           block['content'] = data['fileUrl'];
@@ -3987,13 +4331,28 @@ class _AssessmentQuestionFormScreenState
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: const Color(0xFF10B981),
                                   foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
                                 ),
-                                icon: const Icon(Icons.upload_file_rounded, size: 14),
-                                label: Text(imgContent.isEmpty ? 'Upload Image' : 'Change', style: const TextStyle(fontSize: 11)),
+                                icon: const Icon(
+                                  Icons.upload_file_rounded,
+                                  size: 14,
+                                ),
+                                label: Text(
+                                  imgContent.isEmpty
+                                      ? 'Upload Image'
+                                      : 'Change',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                                icon: const Icon(
+                                  Icons.close_rounded,
+                                  size: 16,
+                                  color: Colors.redAccent,
+                                ),
                                 onPressed: () {
                                   setState(() {
                                     blocks.removeAt(bIdx);
@@ -4006,7 +4365,9 @@ class _AssessmentQuestionFormScreenState
                       }
 
                       // TEXT Block
-                      final blockTextCtrl = TextEditingController(text: block['content'] ?? '');
+                      final blockTextCtrl = TextEditingController(
+                        text: block['content'] ?? '',
+                      );
                       return Container(
                         margin: const EdgeInsets.only(bottom: 10),
                         child: Row(
@@ -4022,12 +4383,19 @@ class _AssessmentQuestionFormScreenState
                                   controller: blockTextCtrl,
                                   decoration: InputDecoration(
                                     labelText: 'Text Block #${bIdx + 1}',
-                                    hintText: 'e.g., 53 is between 50 and 60...',
-                                    labelStyle: TextStyle(fontSize: 11, color: context.textColor70),
+                                    hintText:
+                                        'e.g., 53 is between 50 and 60...',
+                                    labelStyle: TextStyle(
+                                      fontSize: 11,
+                                      color: context.textColor70,
+                                    ),
                                     border: const OutlineInputBorder(),
                                     isDense: true,
                                   ),
-                                  style: TextStyle(color: context.textColor, fontSize: 13),
+                                  style: TextStyle(
+                                    color: context.textColor,
+                                    fontSize: 13,
+                                  ),
                                   maxLines: 2,
                                   onChanged: (val) {
                                     block['content'] = val;
@@ -4038,7 +4406,11 @@ class _AssessmentQuestionFormScreenState
                             if (blocks.length > 1) ...[
                               const SizedBox(width: 4),
                               IconButton(
-                                icon: const Icon(Icons.close_rounded, size: 16, color: Colors.redAccent),
+                                icon: const Icon(
+                                  Icons.close_rounded,
+                                  size: 16,
+                                  color: Colors.redAccent,
+                                ),
                                 onPressed: () {
                                   setState(() {
                                     blocks.removeAt(bIdx);
@@ -4645,7 +5017,8 @@ class _AssessmentQuestionFormScreenState
                               initialValue: q['explanation'] ?? '',
                               decoration: InputDecoration(
                                 labelText: 'AI Solution Explanation',
-                                hintText: 'AI generated solution explanation for Variation #${idx + 1}',
+                                hintText:
+                                    'AI generated solution explanation for Variation #${idx + 1}',
                                 labelStyle: TextStyle(
                                   fontSize: 11,
                                   color: context.textColor70,
@@ -4653,7 +5026,10 @@ class _AssessmentQuestionFormScreenState
                                 border: const OutlineInputBorder(),
                                 isDense: true,
                               ),
-                              style: TextStyle(color: context.textColor, fontSize: 13),
+                              style: TextStyle(
+                                color: context.textColor,
+                                fontSize: 13,
+                              ),
                               maxLines: 3,
                               onChanged: (val) {
                                 q['explanation'] = val;
@@ -4827,7 +5203,9 @@ class _AssessmentQuestionFormScreenState
               labelText: 'Correct Answer text',
               labelStyle: TextStyle(color: context.textColor70),
               filled: true,
-              fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              fillColor: context.isDark
+                  ? const Color(0xFF1E293B)
+                  : Colors.white,
               border: OutlineInputBorder(),
             ),
             validator: (v) => (v == null || v.trim().isEmpty)
@@ -4917,7 +5295,9 @@ class _AssessmentQuestionFormScreenState
               labelText: 'Hint (e.g. Think of a prime number)',
               labelStyle: TextStyle(color: context.textColor70),
               filled: true,
-              fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              fillColor: context.isDark
+                  ? const Color(0xFF1E293B)
+                  : Colors.white,
               border: OutlineInputBorder(),
             ),
           ),
@@ -4957,7 +5337,9 @@ class _AssessmentQuestionFormScreenState
               labelText: 'Model Answer',
               labelStyle: TextStyle(color: context.textColor70),
               filled: true,
-              fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+              fillColor: context.isDark
+                  ? const Color(0xFF1E293B)
+                  : Colors.white,
               border: OutlineInputBorder(),
               alignLabelWithHint: true,
             ),
@@ -4998,13 +5380,17 @@ class _AssessmentQuestionFormScreenState
                   isSelected
                       ? Icons.check_circle_rounded
                       : Icons.radio_button_unchecked_rounded,
-                  color: isSelected ? const Color(0xFF10B981) : context.textColor54,
+                  color: isSelected
+                      ? const Color(0xFF10B981)
+                      : context.textColor54,
                 ),
                 const SizedBox(height: 8),
                 Text(
                   label,
                   style: TextStyle(
-                    color: isSelected ? const Color(0xFF10B981) : context.textColor,
+                    color: isSelected
+                        ? const Color(0xFF10B981)
+                        : context.textColor,
                     fontWeight: FontWeight.bold,
                     fontSize: 15,
                   ),
@@ -5506,7 +5892,10 @@ class _AssessmentQuestionFormScreenState
                       onChanged: () => _options[idx]['text'] = ctrl.text,
                       child: TextFormField(
                         controller: ctrl,
-                        style: TextStyle(color: context.textColor, fontSize: 14),
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 14,
+                        ),
                         decoration: InputDecoration(
                           hintText: 'e.g. = [INPUT:35] + 14',
                           hintStyle: TextStyle(
@@ -5700,9 +6089,13 @@ class _AssessmentQuestionFormScreenState
                       onChanged: () => _options[idx]['text'] = ctrl.text,
                       child: TextFormField(
                         controller: ctrl,
-                        style: TextStyle(color: context.textColor, fontSize: 14),
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 14,
+                        ),
                         decoration: InputDecoration(
-                          hintText: 'e.g. -4.4 is [SELECT:above,below:below] 1.2',
+                          hintText:
+                              'e.g. -4.4 is [SELECT:above,below:below] 1.2',
                           hintStyle: TextStyle(
                             color: context.textColor54.withOpacity(0.4),
                           ),
