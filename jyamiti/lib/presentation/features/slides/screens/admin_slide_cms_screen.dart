@@ -90,19 +90,17 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
   }
 
   void _reindexSlides() {
-    // .copyWith rather than reconstructing SlideItem field-by-field --
-    // the latter used to silently drop every field added after this
-    // method was first written (background type/color/gradient/image,
-    // contentVerticalAlign) every time a slide got reindexed, i.e. on
-    // every delete/reorder/import. copyWith carries whatever isn't
-    // explicitly overridden here forward automatically, so a future
-    // field addition can't reintroduce the same bug.
     for (int i = 0; i < _slides.length; i++) {
-      _slides[i] = _slides[i].copyWith(
+      _slides[i] = SlideItem(
         id: _slides[i].id.isNotEmpty
             ? _slides[i].id
             : 'slide_${DateTime.now().millisecondsSinceEpoch}_$i',
         slideIndex: i,
+        title: _slides[i].title,
+        blocks: _slides[i].blocks,
+        theme: _slides[i].theme,
+        quiz: _slides[i].quiz,
+        enableWhiteboard: _slides[i].enableWhiteboard,
       );
     }
   }
@@ -357,7 +355,15 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
           ),
         );
 
-      _slides[_activeSlideIndex] = currentSlide.copyWith(blocks: updatedBlocks);
+      _slides[_activeSlideIndex] = SlideItem(
+        id: currentSlide.id,
+        slideIndex: currentSlide.slideIndex,
+        title: currentSlide.title,
+        blocks: updatedBlocks,
+        theme: currentSlide.theme,
+        quiz: currentSlide.quiz,
+        enableWhiteboard: currentSlide.enableWhiteboard,
+      );
     });
   }
 
@@ -605,7 +611,15 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                   onPressed: () {
                     setState(() {
                       final s = _slides[_activeSlideIndex];
-                      _slides[_activeSlideIndex] = s.copyWith(clearQuiz: true);
+                      _slides[_activeSlideIndex] = SlideItem(
+                        id: s.id,
+                        slideIndex: s.slideIndex,
+                        title: s.title,
+                        blocks: s.blocks,
+                        theme: s.theme,
+                        quiz: null,
+                        enableWhiteboard: s.enableWhiteboard,
+                      );
                     });
                     Navigator.pop(ctx);
                   },
@@ -622,13 +636,19 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                 onPressed: () {
                   setState(() {
                     final s = _slides[_activeSlideIndex];
-                    _slides[_activeSlideIndex] = s.copyWith(
+                    _slides[_activeSlideIndex] = SlideItem(
+                      id: s.id,
+                      slideIndex: s.slideIndex,
+                      title: s.title,
+                      blocks: s.blocks,
+                      theme: s.theme,
                       quiz: SlideQuiz(
                         question: qCtrl.text,
                         options: [opt0.text, opt1.text, opt2.text, opt3.text],
                         correctIndex: correctIdx,
                         explanation: expCtrl.text,
                       ),
+                      enableWhiteboard: s.enableWhiteboard,
                     );
                   });
                   Navigator.pop(ctx);
@@ -1042,8 +1062,15 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                             text: activeSlide.title,
                           ),
                           onChanged: (val) {
-                            _slides[_activeSlideIndex] =
-                                activeSlide.copyWith(title: val);
+                            _slides[_activeSlideIndex] = SlideItem(
+                              id: activeSlide.id,
+                              slideIndex: activeSlide.slideIndex,
+                              title: val,
+                              blocks: activeSlide.blocks,
+                              theme: activeSlide.theme,
+                              quiz: activeSlide.quiz,
+                              enableWhiteboard: activeSlide.enableWhiteboard,
+                            );
                           },
                           decoration: const InputDecoration(
                             hintText: 'Slide Title',
