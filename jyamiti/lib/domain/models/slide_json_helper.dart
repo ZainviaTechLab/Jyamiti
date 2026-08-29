@@ -532,7 +532,8 @@ class SlideJsonHelper {
           },
           {
             "type": "subheading",
-            "content": "Right Triangles & The Hypotenuse"
+            "content": "Right Triangles & The Hypotenuse",
+            "textColor": "FFFBBF24"
           },
           {
             "type": "paragraph",
@@ -724,7 +725,8 @@ class SlideJsonHelper {
             },
             {
               "type": "subheading",
-              "content": "Distance Between Two Points"
+              "content": "Distance Between Two Points",
+              "textColor": "FF38BDF8"
             },
             {
               "type": "paragraph",
@@ -908,7 +910,8 @@ class SlideJsonHelper {
               },
               {
                 "type": "subheading",
-                "content": "Matter Waves"
+                "content": "Matter Waves",
+                "textColor": "FFA78BFA"
               },
               {
                 "type": "paragraph",

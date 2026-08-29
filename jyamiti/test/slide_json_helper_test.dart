@@ -466,6 +466,26 @@ void main() {
       expect(defaultResult.slides.first.blocks.first.fontFamily, isNull);
     });
 
+    test('parses textColor on heading and subheading blocks', () {
+      const headingJson = '''
+      {
+        "title": "Colored Headings",
+        "blocks": [
+          {"type": "heading", "content": "H", "textColor": "FFFBBF24"},
+          {"type": "subheading", "content": "S", "textColor": "FF38BDF8"}
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(headingJson);
+      expect(result.isSuccess, isTrue);
+      final blocks = result.slides.first.blocks;
+      expect(blocks[0].type, SlideBlockType.heading);
+      expect(blocks[0].textColor, 'FFFBBF24');
+      expect(blocks[1].type, SlideBlockType.subheading);
+      expect(blocks[1].textColor, 'FF38BDF8');
+    });
+
     test('parses numbered list style, textColor, and marker borderColor on bulletList blocks', () {
       const listJson = '''
       {

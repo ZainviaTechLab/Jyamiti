@@ -20,11 +20,13 @@ import 'slide_color_utils.dart';
 /// three fundamentally are (a colored bar; a bordered box; freeform
 /// styled text), not optional styling on top of some other content the
 /// way it would be for a heading or a paragraph. bulletList gets a
-/// narrower List Style section with just a Text Color field -- the
-/// renderer (SlideBlockRenderer._buildBulletList) already read
-/// block.textColor even while this dialog had no UI for it, so this is
-/// purely exposing an existing, already-working field, not new
-/// rendering behavior.
+/// narrower List Style section with just a Text Color field, and
+/// heading/subheading get a bare Text Color field right under their
+/// content -- in both cases the renderer
+/// (SlideBlockRenderer._buildBulletList/_buildHeading/_buildSubheading)
+/// already read block.textColor even while this dialog had no UI for
+/// it, so these are purely exposing existing, already-working fields,
+/// not new rendering behavior.
 /// The 3-way Glass choice ('off'/'subtle'/'frosted') a block's current
 /// glass/glassStyle fields represent -- derived once here so all three
 /// Glass Effect sections (Banner Layout/Card Style/Text Style) read it
@@ -136,6 +138,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? bulletTextColor = block.textColor;
   String? bulletMarkerColor = block.borderColor;
 
+  // heading/subheading's own text color -- SlideBlockRenderer._buildHeading/
+  // _buildSubheading already read block.textColor (heading: overrides its
+  // default gradient treatment entirely rather than tinting it, since a
+  // tinted gradient just looks muddy), same "field already worked, this
+  // is just the missing UI for it" situation as bulletList's Text Color
+  // above.
+  String? headingTextColor = block.textColor;
+
   // The generic "Container" box -- background/borderColor/borderWidth/
   // borderRadius/padding/marginVertical, available to every block type
   // that doesn't already own its full box rendering (banner/card/text
@@ -224,6 +234,15 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     border: const OutlineInputBorder(),
                   ),
                 ),
+              if (block.type == SlideBlockType.heading ||
+                  block.type == SlideBlockType.subheading) ...[
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Text Color',
+                  initialHex: headingTextColor,
+                  onChanged: (val) => headingTextColor = val,
+                ),
+              ],
               if (block.type == SlideBlockType.imageUrl ||
                   block.type == SlideBlockType.card) ...[
                 const SizedBox(height: 12),
@@ -835,13 +854,20 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                             ? textFg
                             : block.type == SlideBlockType.bulletList
                                 ? bulletTextColor
-                                : null,
+                                : (block.type == SlideBlockType.heading ||
+                                        block.type ==
+                                            SlideBlockType.subheading)
+                                    ? headingTextColor
+                                    : null,
                 clearTextColor: (block.type == SlideBlockType.banner &&
                         bannerText == null) ||
                     (block.type == SlideBlockType.card && cardText == null) ||
                     (block.type == SlideBlockType.text && textFg == null) ||
                     (block.type == SlideBlockType.bulletList &&
-                        bulletTextColor == null),
+                        bulletTextColor == null) ||
+                    ((block.type == SlideBlockType.heading ||
+                            block.type == SlideBlockType.subheading) &&
+                        headingTextColor == null),
                 borderColor: block.type == SlideBlockType.banner
                     ? bannerBorder
                     : block.type == SlideBlockType.card
