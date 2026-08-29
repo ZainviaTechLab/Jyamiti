@@ -255,6 +255,24 @@ class SlideJsonHelper {
         parsedColumns.add(colBlocks);
       }
       resolvedContent = jsonEncode({'columns': parsedColumns});
+    } else if (type == SlideBlockType.container &&
+        content.isEmpty &&
+        map['children'] is List) {
+      // Same idea as columns above, one level shallower: `children` is
+      // a flat list of raw block maps (a single area, not columns-of-
+      // lists) -- each nested block is parsed through this SAME
+      // function (recursively, so a container can hold another
+      // container or a columns block) then re-serialized into the JSON
+      // shape SlideBlockRenderer._buildContainerBlock expects.
+      final rawChildren = map['children'] as List;
+      final parsedChildren = <Map<String, dynamic>>[];
+      for (int b = 0; b < rawChildren.length; b++) {
+        final bItem = rawChildren[b];
+        if (bItem is Map<String, dynamic>) {
+          parsedChildren.add(_parseSingleBlock(bItem, slideIndex, b).toMap());
+        }
+      }
+      resolvedContent = jsonEncode({'children': parsedChildren});
     }
 
     final extra = map['extra']?.toString() ?? map['language']?.toString();
@@ -360,10 +378,8 @@ class SlideJsonHelper {
         return SlideBlockType.video;
       case 'card':
       case 'cards':
-      case 'box':
       case 'cardbox':
       case 'framedbox':
-      case 'container':
       case 'panel':
         return SlideBlockType.card;
       case 'columns':
@@ -381,6 +397,11 @@ class SlideJsonHelper {
       case 'freetext':
       case 'richtext':
         return SlideBlockType.text;
+      case 'container':
+      case 'box':
+      case 'frame':
+      case 'group':
+        return SlideBlockType.container;
       case 'paragraph':
       case 'body':
       default:
@@ -639,6 +660,25 @@ class SlideJsonHelper {
                 }
               ]
             ]
+          },
+          {
+            "type": "container",
+            "backgroundColor": "331E293B",
+            "borderColor": "FFA78BFA",
+            "borderWidth": 1.5,
+            "borderRadius": 18.0,
+            "padding": 16.0,
+            "children": [
+              {
+                "type": "subheading",
+                "content": "Quick Recap"
+              },
+              {
+                "type": "text",
+                "content": "Everything above in one glance: a^2 + b^2 = c^2, always true for right triangles.",
+                "italic": true
+              }
+            ]
           }
         ],
         "quiz": {
@@ -744,6 +784,24 @@ class SlideJsonHelper {
                     "underline": true
                   }
                 ]
+              ]
+            },
+            {
+              "type": "container",
+              "backgroundColor": "331E1B4B",
+              "borderColor": "FF818CF8",
+              "borderWidth": 1.5,
+              "borderRadius": 18.0,
+              "padding": 16.0,
+              "children": [
+                {
+                  "type": "subheading",
+                  "content": "Quick Recap"
+                },
+                {
+                  "type": "bulletList",
+                  "content": "Distance is always positive\nQuadrants number counter-clockwise from top-right"
+                }
               ]
             }
           ]
@@ -921,6 +979,37 @@ class SlideJsonHelper {
                       ]
                     }
                   ]
+                ]
+              },
+              {
+                "type": "container",
+                "backgroundColor": "331E1B4B",
+                "borderColor": "FFA78BFA",
+                "borderWidth": 1.5,
+                "borderRadius": 18.0,
+                "padding": 16.0,
+                "children": [
+                  {
+                    "type": "subheading",
+                    "content": "Both Models, Side by Side"
+                  },
+                  {
+                    "type": "columns",
+                    "columns": [
+                      [
+                        {
+                          "type": "text",
+                          "content": "Wave: spread out, interferes"
+                        }
+                      ],
+                      [
+                        {
+                          "type": "text",
+                          "content": "Particle: localized, has momentum"
+                        }
+                      ]
+                    ]
+                  }
                 ]
               }
             ]

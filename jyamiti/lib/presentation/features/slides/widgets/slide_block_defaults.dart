@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
+import 'slide_color_utils.dart';
 
 /// A tap target on a block's type label ("PARAGRAPH", "TEXT", "CARD", ...)
 /// that lets you change what kind of block it is in place -- e.g.
@@ -91,6 +92,7 @@ String displayNameForSlideBlockType(SlideBlockType type) {
     case SlideBlockType.columns:
     case SlideBlockType.banner:
     case SlideBlockType.text:
+    case SlideBlockType.container:
       return type.name.toUpperCase();
   }
 }
@@ -131,6 +133,8 @@ IconData iconForSlideBlockType(SlideBlockType type) {
       return Icons.view_agenda_rounded;
     case SlideBlockType.text:
       return Icons.format_color_text_rounded;
+    case SlideBlockType.container:
+      return Icons.crop_free_rounded;
   }
 }
 
@@ -241,5 +245,141 @@ SlideBlock applyBannerDefaults(SlideBlock block) {
             'are all adjustable in Text Style below.',
         extra: null,
       );
+    case SlideBlockType.container:
+      // See SlideBlockRenderer._buildContainerBlock's doc comment -- a
+      // container block's content is JSON-encoded {children: [blockMap,
+      // ...]}, a single flat list (unlike columns' list-of-lists).
+      // Starts empty.
+      return (
+        content: jsonEncode({'children': []}),
+        extra: null,
+      );
+  }
+}
+
+/// The Container styling controls (background/outline/outline width/
+/// corner radius/padding/margin) as a standalone, fully-controlled
+/// widget with no state of its own -- every value is passed in and
+/// reported back via onChanged callbacks. Used by both
+/// ColumnsBlockEditorScreen and ContainerBlockEditorScreen, which each
+/// own and save the whole block being edited (not a single nested one),
+/// so this lives outside the normal per-block edit dialog
+/// (showSlideBlockEditorDialog's own "Container (optional)" section --
+/// see that file's doc comment -- covers every OTHER eligible type,
+/// which do go through that dialog).
+class ContainerStyleSection extends StatelessWidget {
+  final String? backgroundColor;
+  final ValueChanged<String?> onBackgroundColorChanged;
+  final String? borderColor;
+  final ValueChanged<String?> onBorderColorChanged;
+  final double borderWidth;
+  final ValueChanged<double> onBorderWidthChanged;
+  final double borderRadius;
+  final ValueChanged<double> onBorderRadiusChanged;
+  final double padding;
+  final ValueChanged<double> onPaddingChanged;
+  final double margin;
+  final ValueChanged<double> onMarginChanged;
+
+  const ContainerStyleSection({
+    super.key,
+    required this.backgroundColor,
+    required this.onBackgroundColorChanged,
+    required this.borderColor,
+    required this.onBorderColorChanged,
+    required this.borderWidth,
+    required this.onBorderWidthChanged,
+    required this.borderRadius,
+    required this.onBorderRadiusChanged,
+    required this.padding,
+    required this.onPaddingChanged,
+    required this.margin,
+    required this.onMarginChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Container Style',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        ),
+        const SizedBox(height: 10),
+        SlideColorPickerField(
+          label: 'Background',
+          initialHex: backgroundColor,
+          onChanged: onBackgroundColorChanged,
+        ),
+        const SizedBox(height: 14),
+        SlideColorPickerField(
+          label: 'Outline',
+          initialHex: borderColor,
+          onChanged: onBorderColorChanged,
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            const Text('Outline Width', style: TextStyle(fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: borderWidth.clamp(0, 6),
+                min: 0,
+                max: 6,
+                divisions: 12,
+                label: borderWidth.toStringAsFixed(1),
+                onChanged: onBorderWidthChanged,
+              ),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            const Text('Corner Radius', style: TextStyle(fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: borderRadius.clamp(0, 40),
+                min: 0,
+                max: 40,
+                divisions: 20,
+                label: borderRadius.toStringAsFixed(0),
+                onChanged: onBorderRadiusChanged,
+              ),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            const Text('Padding', style: TextStyle(fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: padding.clamp(0, 48),
+                min: 0,
+                max: 48,
+                divisions: 24,
+                label: padding.toStringAsFixed(0),
+                onChanged: onPaddingChanged,
+              ),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            const Text('Margin', style: TextStyle(fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: margin.clamp(0, 48),
+                min: 0,
+                max: 48,
+                divisions: 24,
+                label: margin.toStringAsFixed(0),
+                onChanged: onMarginChanged,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }

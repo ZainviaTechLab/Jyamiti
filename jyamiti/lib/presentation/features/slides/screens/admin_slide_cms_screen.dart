@@ -6,6 +6,7 @@ import '../../../../domain/models/slide_json_helper.dart';
 import '../../../../providers/theme_provider.dart';
 import '../../../../services/slide_cache_service.dart';
 import '../widgets/columns_block_editor_screen.dart';
+import '../widgets/container_block_editor_screen.dart';
 import '../widgets/slide_block_defaults.dart';
 import '../widgets/slide_block_editor_dialog.dart';
 import '../widgets/slide_block_renderer.dart';
@@ -369,6 +370,13 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
         context,
         MaterialPageRoute(
           builder: (_) => ColumnsBlockEditorScreen(block: block),
+        ),
+      );
+    } else if (block.type == SlideBlockType.container) {
+      updated = await Navigator.push<SlideBlock>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ContainerBlockEditorScreen(block: block),
         ),
       );
     } else {

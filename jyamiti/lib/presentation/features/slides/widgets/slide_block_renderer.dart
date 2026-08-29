@@ -211,6 +211,8 @@ class SlideBlockRenderer extends StatelessWidget {
         return _buildCardBlock(context);
       case SlideBlockType.columns:
         return _buildColumnsBlock(context);
+      case SlideBlockType.container:
+        return _buildContainerBlock(context);
       case SlideBlockType.banner:
         // Never actually reached -- build() special-cases banner before
         // this switch runs. Listed anyway so this switch stays
@@ -1238,6 +1240,60 @@ class SlideBlockRenderer extends StatelessWidget {
           ),
         );
       }).toList(),
+    );
+  }
+
+  /// `block.content` is JSON-encoded {"children": [blockMap, blockMap,
+  /// ...]} -- a single flat list (unlike columns' list-of-lists), each
+  /// parsed back into a real SlideBlock and rendered with a nested
+  /// SlideBlockRenderer, same recursive idea as _buildColumnsBlock --
+  /// including a container holding a columns block, or another
+  /// container. A container's own box decoration (background/border/
+  /// radius/padding/margin) is deliberately NOT drawn here -- it falls
+  /// through to build()'s generic wrapper like any other non-excluded
+  /// type, since that wrapper IS the "Container" concept (see its doc
+  /// comment); this method only renders what's INSIDE the box. See
+  /// ContainerBlockEditorScreen for how this content actually gets
+  /// built/edited.
+  Widget _buildContainerBlock(BuildContext context) {
+    List<SlideBlock> children = [];
+    try {
+      final data = json.decode(block.content) as Map<String, dynamic>;
+      final rawChildren = data['children'] as List? ?? [];
+      children = rawChildren
+          .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      // Malformed/empty container data -- render nothing rather than crash.
+    }
+
+    if (children.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 6.0),
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          ),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          'Empty container block',
+          style: TextStyle(
+            color: _textColorOr(
+                const Color(0xFF94A3B8), const Color(0xFF64748B)),
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: children
+          .map((b) => SlideBlockRenderer(block: b, isDark: isDark))
+          .toList(),
     );
   }
 

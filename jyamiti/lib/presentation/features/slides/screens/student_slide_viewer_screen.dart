@@ -6,6 +6,7 @@ import '../../../../providers/theme_provider.dart';
 import '../../../../services/slide_cache_service.dart';
 import '../../../widgets/writing_pad_widget.dart';
 import '../widgets/columns_block_editor_screen.dart';
+import '../widgets/container_block_editor_screen.dart';
 import '../widgets/slide_block_defaults.dart';
 import '../widgets/slide_block_editor_dialog.dart';
 import '../widgets/slide_block_renderer.dart';
@@ -125,6 +126,13 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
         context,
         MaterialPageRoute(
           builder: (_) => ColumnsBlockEditorScreen(block: block),
+        ),
+      );
+    } else if (block.type == SlideBlockType.container) {
+      updated = await Navigator.push<SlideBlock>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ContainerBlockEditorScreen(block: block),
         ),
       );
     } else {

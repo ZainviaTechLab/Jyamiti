@@ -5,11 +5,11 @@ import 'package:jyamiti/domain/models/slide_json_helper.dart';
 import 'package:jyamiti/presentation/features/slides/widgets/svg_style_inliner.dart';
 
 /// Recursively collects every SlideBlockType used across [slides],
-/// descending into `columns` blocks' nested content too (see
-/// SlideBlockRenderer._buildColumnsBlock's doc comment for that JSON
-/// shape) -- used below to verify each of the 3 sample templates is
-/// actually a complete reference covering every block type, not just
-/// spot-checking a few positions.
+/// descending into `columns` and `container` blocks' nested content too
+/// (see SlideBlockRenderer._buildColumnsBlock/_buildContainerBlock's
+/// doc comments for those JSON shapes) -- used below to verify each of
+/// the 3 sample templates is actually a complete reference covering
+/// every block type, not just spot-checking a few positions.
 Set<SlideBlockType> _collectBlockTypes(List<SlideItem> slides) {
   final types = <SlideBlockType>{};
   void visit(List<SlideBlock> blocks) {
@@ -25,6 +25,15 @@ Set<SlideBlockType> _collectBlockTypes(List<SlideItem> slides) {
                   .toList(),
             );
           }
+        } catch (_) {}
+      } else if (b.type == SlideBlockType.container) {
+        try {
+          final decoded = json.decode(b.content) as Map<String, dynamic>;
+          visit(
+            (decoded['children'] as List)
+                .map((m) => SlideBlock.fromMap(m as Map<String, dynamic>))
+                .toList(),
+          );
         } catch (_) {}
       }
     }
@@ -461,7 +470,8 @@ void main() {
       expect(block.textColor, 'FFFBBF24');
     });
 
-    test('parses the generic Container box on a type that has no own styling',
+    test(
+        'parses the generic Container styling on a type that has no own styling',
         () {
       const containerJson = '''
       {
@@ -491,6 +501,132 @@ void main() {
       expect(block.borderRadius, 20.0);
       expect(block.padding, 18.0);
       expect(block.marginVertical, 10.0);
+    });
+
+    test('parses a container block holding a flat list of mixed children',
+        () {
+      const containerBlockJson = '''
+      {
+        "title": "Grouped Content",
+        "blocks": [
+          {
+            "type": "container",
+            "backgroundColor": "331E293B",
+            "borderColor": "FF6366F1",
+            "borderRadius": 18.0,
+            "padding": 16.0,
+            "children": [
+              {"type": "heading", "content": "Summary"},
+              {"type": "paragraph", "content": "Grouped inside one box."},
+              {"type": "card", "content": "3-4-5"}
+            ]
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(containerBlockJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.container);
+      expect(block.backgroundColor, '331E293B');
+      expect(block.borderRadius, 18.0);
+
+      final decoded = json.decode(block.content) as Map<String, dynamic>;
+      final children = (decoded['children'] as List)
+          .map((m) => SlideBlock.fromMap(m as Map<String, dynamic>))
+          .toList();
+      expect(children.map((b) => b.type), [
+        SlideBlockType.heading,
+        SlideBlockType.paragraph,
+        SlideBlockType.card,
+      ]);
+    });
+
+    test('parses a container nested inside a columns block, and vice versa',
+        () {
+      const nestedJson = '''
+      {
+        "title": "Nesting Check",
+        "blocks": [
+          {
+            "type": "columns",
+            "columns": [
+              [
+                {
+                  "type": "container",
+                  "backgroundColor": "FF0F172A",
+                  "children": [
+                    {"type": "heading", "content": "Nested in a column"}
+                  ]
+                }
+              ],
+              [
+                {"type": "paragraph", "content": "Plain column"}
+              ]
+            ]
+          },
+          {
+            "type": "container",
+            "children": [
+              {
+                "type": "columns",
+                "columns": [
+                  [{"type": "text", "content": "A"}],
+                  [{"type": "text", "content": "B"}]
+                ]
+              }
+            ]
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(nestedJson);
+      expect(result.isSuccess, isTrue);
+      final blocks = result.slides.first.blocks;
+
+      final columnsBlock = blocks[0];
+      expect(columnsBlock.type, SlideBlockType.columns);
+      final colDecoded =
+          json.decode(columnsBlock.content) as Map<String, dynamic>;
+      final firstColumn = (colDecoded['columns'] as List).first as List;
+      expect(
+        SlideBlock.fromMap(firstColumn.first as Map<String, dynamic>).type,
+        SlideBlockType.container,
+      );
+
+      final containerBlock = blocks[1];
+      expect(containerBlock.type, SlideBlockType.container);
+      final containerDecoded =
+          json.decode(containerBlock.content) as Map<String, dynamic>;
+      final containerChildren = containerDecoded['children'] as List;
+      expect(
+        SlideBlock.fromMap(containerChildren.first as Map<String, dynamic>)
+            .type,
+        SlideBlockType.columns,
+      );
+    });
+
+    test('"box" and "container" JSON aliases resolve to the container block, not card',
+        () {
+      const aliasJson = '''
+      {
+        "title": "Alias Check",
+        "blocks": [
+          {"type": "box", "content": "b"},
+          {"type": "container", "content": "c"},
+          {"type": "cardbox", "content": "cb"}
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(aliasJson);
+      expect(result.isSuccess, isTrue);
+      final blocks = result.slides.first.blocks;
+      expect(blocks[0].type, SlideBlockType.container);
+      expect(blocks[1].type, SlideBlockType.container);
+      expect(blocks[2].type, SlideBlockType.card);
     });
 
     test('"text" JSON type resolves to the text block, not paragraph', () {

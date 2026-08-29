@@ -16,6 +16,7 @@ enum SlideBlockType {
   columns,
   banner,
   text,
+  container,
 }
 
 class SlideBlock {

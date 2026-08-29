@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../providers/theme_provider.dart';
+import 'container_block_editor_screen.dart';
 import 'slide_block_defaults.dart';
 import 'slide_block_editor_dialog.dart';
 import 'slide_block_renderer.dart';
@@ -14,11 +15,14 @@ import 'slide_block_renderer.dart';
 /// dialog (see AdminSlideCmsScreen._editBlock's special case for
 /// SlideBlockType.columns).
 ///
-/// Deliberately caps at one level of nesting -- a column can't itself
-/// contain another columns block (excluded from the per-column "Add
-/// Block" bar below) to keep the editing UI and the recursive renderer
-/// both tractable; two levels of nested columns isn't a layout most
-/// slides actually need.
+/// Deliberately caps columns-within-columns at one level -- a column
+/// can't itself contain another columns block (excluded from the
+/// per-column "Add Block" bar below) to keep the editing UI and the
+/// recursive renderer both tractable; two levels of nested side-by-
+/// side columns isn't a layout most slides actually need. A `container`
+/// block IS allowed inside a column (and can itself hold a columns
+/// block) -- that's a single flat area, not another side-by-side
+/// layout, so it doesn't have the same complexity concern.
 class ColumnsBlockEditorScreen extends StatefulWidget {
   final SlideBlock block;
 
@@ -33,11 +37,23 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
   static const int _maxColumns = 4;
 
   late List<List<SlideBlock>> _columns;
+  String? _bg;
+  String? _border;
+  double _borderWidth = 0;
+  double _borderRadius = 14;
+  double _padding = 14;
+  double _margin = 6;
 
   @override
   void initState() {
     super.initState();
     _columns = _parseColumns(widget.block.content);
+    _bg = widget.block.backgroundColor;
+    _border = widget.block.borderColor;
+    _borderWidth = widget.block.borderWidth;
+    _borderRadius = widget.block.borderRadius ?? 14;
+    _padding = widget.block.padding ?? 14;
+    _margin = widget.block.marginVertical ?? 6;
   }
 
   List<List<SlideBlock>> _parseColumns(String content) {
@@ -59,7 +75,62 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
       'columns':
           _columns.map((col) => col.map((b) => b.toMap()).toList()).toList(),
     });
-    Navigator.pop(context, widget.block.copyWith(content: content));
+    Navigator.pop(
+      context,
+      widget.block.copyWith(
+        content: content,
+        backgroundColor: _bg,
+        clearBackgroundColor: _bg == null,
+        borderColor: _border,
+        clearBorderColor: _border == null,
+        borderWidth: _borderWidth,
+        borderRadius: _borderRadius,
+        padding: _padding,
+        marginVertical: _margin,
+      ),
+    );
+  }
+
+  /// The whole columns block's own box styling (background/outline/
+  /// radius/padding/margin) -- opened on demand from the AppBar rather
+  /// than permanently occupying space above the column panes, which are
+  /// already tight on screen room. See ContainerStyleSection's own doc
+  /// comment for why this lives outside the normal block-edit dialog.
+  void _openStyleSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: ContainerStyleSection(
+              backgroundColor: _bg,
+              onBackgroundColorChanged: (val) =>
+                  setSheetState(() => _bg = val),
+              borderColor: _border,
+              onBorderColorChanged: (val) =>
+                  setSheetState(() => _border = val),
+              borderWidth: _borderWidth,
+              onBorderWidthChanged: (val) =>
+                  setSheetState(() => _borderWidth = val),
+              borderRadius: _borderRadius,
+              onBorderRadiusChanged: (val) =>
+                  setSheetState(() => _borderRadius = val),
+              padding: _padding,
+              onPaddingChanged: (val) => setSheetState(() => _padding = val),
+              margin: _margin,
+              onMarginChanged: (val) => setSheetState(() => _margin = val),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _addColumn() {
@@ -88,13 +159,34 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
     });
   }
 
+  /// A `container` child gets its own dedicated editor screen (see this
+  /// class's own doc comment for why); `columns` is handled too even
+  /// though the per-column Add Block bar excludes it, in case one ended
+  /// up here via raw JSON. Everything else uses the shared dialog.
   Future<void> _editBlockInColumn(int colIdx, int blockIdx) async {
-    final updated = await showSlideBlockEditorDialog(
-      context,
-      _columns[colIdx][blockIdx],
-    );
+    final block = _columns[colIdx][blockIdx];
+
+    final SlideBlock? updated;
+    if (block.type == SlideBlockType.columns) {
+      updated = await Navigator.push<SlideBlock>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ColumnsBlockEditorScreen(block: block),
+        ),
+      );
+    } else if (block.type == SlideBlockType.container) {
+      updated = await Navigator.push<SlideBlock>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ContainerBlockEditorScreen(block: block),
+        ),
+      );
+    } else {
+      if (!mounted) return;
+      updated = await showSlideBlockEditorDialog(context, block);
+    }
     if (updated != null && mounted) {
-      setState(() => _columns[colIdx][blockIdx] = updated);
+      setState(() => _columns[colIdx][blockIdx] = updated!);
     }
   }
 
@@ -128,6 +220,12 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
       appBar: AppBar(
         title: Text('Edit Columns (${_columns.length})'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.style_rounded),
+            tooltip: 'Container Style (background/outline/padding for the '
+                'whole columns block)',
+            onPressed: _openStyleSheet,
+          ),
           IconButton(
             icon: const Icon(Icons.add_box_rounded),
             tooltip: 'Add Column',
