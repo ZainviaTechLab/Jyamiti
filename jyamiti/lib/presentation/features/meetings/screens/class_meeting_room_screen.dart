@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -47,8 +48,7 @@ class ClassMeetingRoomScreen extends StatefulWidget {
   });
 
   @override
-  State<ClassMeetingRoomScreen> createState() =>
-      _ClassMeetingRoomScreenState();
+  State<ClassMeetingRoomScreen> createState() => _ClassMeetingRoomScreenState();
 }
 
 class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
@@ -96,6 +96,13 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   final Set<int> _remoteUids = {};
   String? _nativeMediaError;
 
+  // Mirrors the web iframe's #status-banner text (see the
+  // updateStatus() calls throughout _registerAgoraWebIframe's embedded
+  // JS) -- native had no equivalent at all before, so the video area
+  // looked bare/unfinished next to web's running status line.
+  String _nativeStatusText =
+      '⏳ Initializing Live Class & Requesting Camera/Microphone...';
+
   // Waiting-room / "don't auto-join camera+mic to the channel" flow --
   // the room opens straight into a LOCAL-ONLY preview (camera/mic
   // captured for self-view, never published/joined to the actual Agora
@@ -130,9 +137,11 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   @override
   void initState() {
     super.initState();
-    final channel = widget.meeting['channelName'] ??
+    final channel =
+        widget.meeting['channelName'] ??
         'class_${DateTime.now().millisecondsSinceEpoch}';
-    _viewId = 'class_meet_frame_${channel}_${DateTime.now().millisecondsSinceEpoch}';
+    _viewId =
+        'class_meet_frame_${channel}_${DateTime.now().millisecondsSinceEpoch}';
 
     // Unlike ParentMeeting, a ClassMeeting is only ever created already
     // `status: 'live'` (see `POST /class-meetings/start`) and has no
@@ -170,7 +179,9 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   /// which `_startPresentingDeck` sets directly before this could ever be
   /// called for it).
   Future<void> _ensureFollowingDeckLoaded(String? deckId) async {
-    if (deckId == null || _followingDeck?.id == deckId || _isLoadingFollowingDeck) {
+    if (deckId == null ||
+        _followingDeck?.id == deckId ||
+        _isLoadingFollowingDeck) {
       return;
     }
     _isLoadingFollowingDeck = true;
@@ -266,8 +277,10 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   void _presentSlideAt(int index) {
     final deck = _followingDeck;
     final String? meetingId = widget.meeting['_id']?.toString();
-    final String? myUserId =
-        Provider.of<AuthProvider>(context, listen: false).userId;
+    final String? myUserId = Provider.of<AuthProvider>(
+      context,
+      listen: false,
+    ).userId;
     if (deck == null || meetingId == null || myUserId == null) return;
 
     _presentationSocket.presentSlide(
@@ -282,8 +295,10 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
 
   void _stopSharingSlides() {
     final String? meetingId = widget.meeting['_id']?.toString();
-    final String? myUserId =
-        Provider.of<AuthProvider>(context, listen: false).userId;
+    final String? myUserId = Provider.of<AuthProvider>(
+      context,
+      listen: false,
+    ).userId;
     if (meetingId == null || myUserId == null) return;
 
     _presentationSocket.stopPresenting(meetingId: meetingId, hostId: myUserId);
@@ -333,7 +348,10 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   /// (fired by the "Join Now" button) does the actual `joinChannel`.
   Future<void> _initNativeAgoraEnginePreviewOnly() async {
     try {
-      final statuses = await [Permission.camera, Permission.microphone].request();
+      final statuses = await [
+        Permission.camera,
+        Permission.microphone,
+      ].request();
       final bool granted = statuses.values.every(
         (s) => s == PermissionStatus.granted || s == PermissionStatus.limited,
       );
@@ -360,12 +378,18 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
               setState(() {
                 _hasJoinedChannel = true;
                 _isJoining = false;
+                _nativeStatusText = '🟢 Class Live — Waiting for students...';
               });
               _onChannelJoined();
             }
           },
           onUserJoined: (connection, remoteUid, elapsed) {
-            if (mounted) setState(() => _remoteUids.add(remoteUid));
+            if (mounted) {
+              setState(() {
+                _remoteUids.add(remoteUid);
+                _nativeStatusText = '👥 ${_remoteUids.length + 1} connected';
+              });
+            }
             _onRemoteUserJoined();
           },
           onUserOffline: (connection, remoteUid, reason) {
@@ -381,11 +405,19 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
       await engine.startPreview();
 
       _rtcEngine = engine;
-      if (mounted) setState(() => _nativeEngineReady = true);
+      if (mounted) {
+        setState(() {
+          _nativeEngineReady = true;
+          _nativeStatusText =
+              "✅ Ready -- tap Join Now when you're ready to start.";
+        });
+      }
     } catch (e) {
       debugPrint('Native Agora init error: $e');
       if (mounted) {
-        setState(() => _nativeMediaError = 'Could not start the video call: $e');
+        setState(
+          () => _nativeMediaError = 'Could not start the video call: $e',
+        );
       }
     }
   }
@@ -395,9 +427,12 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   /// `_initNativeAgoraEnginePreviewOnly`.
   Future<void> _joinNativeChannel() async {
     if (_rtcEngine == null || _isJoining || _hasJoinedChannel) return;
-    setState(() => _isJoining = true);
+    final String channel = widget.meeting['channelName'] ?? 'test_channel';
+    setState(() {
+      _isJoining = true;
+      _nativeStatusText = '🔑 Connecting to Live Class: $channel...';
+    });
     try {
-      final String channel = widget.meeting['channelName'] ?? 'test_channel';
       await _rtcEngine!.joinChannel(
         token: _rtcToken ?? '',
         channelId: channel,
@@ -462,10 +497,16 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
       // explanation).
       builder: (ctx) => PointerInterceptor(
         child: AlertDialog(
-          backgroundColor:
-              context.isDark ? const Color(0xFF1E293B) : Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Text('No One Joined', style: TextStyle(color: context.textColor)),
+          backgroundColor: context.isDark
+              ? const Color(0xFF1E293B)
+              : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Text(
+            'No One Joined',
+            style: TextStyle(color: context.textColor),
+          ),
           content: Text(
             'No students joined within 5 minutes, so this class is ending '
             'automatically.',
@@ -476,7 +517,9 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF6366F1),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               onPressed: () => Navigator.pop(ctx),
               child: const Text('OK'),
@@ -500,11 +543,11 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
         widget.meeting['agoraAppId'] ?? '2bd28ff5ea124b5982b6ef930c49998d';
     final String hostName = widget.meeting['hostName'] ?? 'Tutor';
     final String roleName = widget.isHost ? 'Host ($hostName)' : 'Student';
-    final String tokenJs =
-        _rtcToken != null ? '"$_rtcToken"' : 'null';
+    final String tokenJs = _rtcToken != null ? '"$_rtcToken"' : 'null';
 
     // HTML source code for interactive Agora RTC Web Video Calling Engine
-    final String htmlContent = '''
+    final String htmlContent =
+        '''
 <!DOCTYPE html>
 <html>
 <head>
@@ -971,8 +1014,12 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
       context: context,
       builder: (ctx) => PointerInterceptor(
         child: AlertDialog(
-          backgroundColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          backgroundColor: context.isDark
+              ? const Color(0xFF1E293B)
+              : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Text(
             isHost ? 'End Class?' : 'Leave Class?',
             style: TextStyle(color: context.textColor),
@@ -986,14 +1033,18 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: Text('Cancel', style: TextStyle(color: context.textColor60)),
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: context.textColor60),
+              ),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.redAccent,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               onPressed: () => Navigator.pop(ctx, true),
               child: Text(isHost ? 'End Class' : 'Leave'),
@@ -1023,9 +1074,9 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
     // also broadcasts `class_meeting:ended` to the batch's students, so
     // their dashboards stop showing "Join Class" for this meeting.
     if (widget.isHost && widget.meeting['_id'] != null) {
-      await ClassMeetingService.endClass(widget.meeting['_id'].toString())
-          .then((_) {})
-          .catchError((_) => null);
+      await ClassMeetingService.endClass(
+        widget.meeting['_id'].toString(),
+      ).then((_) {}).catchError((_) => null);
     }
 
     if (kIsWeb) {
@@ -1069,8 +1120,9 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   /// "shared content + video strip" layout (host is presenting slides) --
   /// see the field doc comments on `_presentedContent`/`_followingDeck`.
   Widget _buildMainContentArea() {
-    final Widget videoArea =
-        !kIsWeb ? _buildNativeVideoArea() : HtmlElementView(viewType: _viewId);
+    final Widget videoArea = !kIsWeb
+        ? _buildNativeVideoArea()
+        : HtmlElementView(viewType: _viewId);
 
     if (_presentedContent == null || _followingDeck == null) {
       return videoArea;
@@ -1080,8 +1132,10 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
       builder: (context, constraints) {
         final bool isWide = constraints.maxWidth >= 700;
         final Widget sharedPanel = _buildSharedSlidePanel();
-        final Widget videoStrip =
-            Container(color: const Color(0xFF0F172A), child: videoArea);
+        final Widget videoStrip = Container(
+          color: const Color(0xFF0F172A),
+          child: videoArea,
+        );
 
         if (isWide) {
           return Row(
@@ -1111,7 +1165,8 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   /// `_presentedContent['slideIndex']` from the server.
   Widget _buildSharedSlidePanel() {
     final SlideDeck deck = _followingDeck!;
-    final int rawIndex = (_presentedContent?['slideIndex'] as num?)?.toInt() ?? 0;
+    final int rawIndex =
+        (_presentedContent?['slideIndex'] as num?)?.toInt() ?? 0;
     final int index = deck.slides.isEmpty
         ? 0
         : rawIndex.clamp(0, deck.slides.length - 1);
@@ -1129,8 +1184,11 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.slideshow_rounded,
-                    color: Color(0xFF6366F1), size: 18),
+                const Icon(
+                  Icons.slideshow_rounded,
+                  color: Color(0xFF6366F1),
+                  size: 18,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -1148,27 +1206,36 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                   Text(
                     '${index + 1}/${deck.slides.length}',
                     style: const TextStyle(
-                        color: Color(0xFF94A3B8), fontSize: 12),
+                      color: Color(0xFF94A3B8),
+                      fontSize: 12,
+                    ),
                   ),
                 if (widget.isHost) ...[
                   IconButton(
-                    icon: const Icon(Icons.chevron_left_rounded,
-                        color: Colors.white),
-                    onPressed:
-                        index > 0 ? () => _presentSlideAt(index - 1) : null,
+                    icon: const Icon(
+                      Icons.chevron_left_rounded,
+                      color: Colors.white,
+                    ),
+                    onPressed: index > 0
+                        ? () => _presentSlideAt(index - 1)
+                        : null,
                     tooltip: 'Previous slide',
                   ),
                   IconButton(
-                    icon: const Icon(Icons.chevron_right_rounded,
-                        color: Colors.white),
+                    icon: const Icon(
+                      Icons.chevron_right_rounded,
+                      color: Colors.white,
+                    ),
                     onPressed: index < deck.slides.length - 1
                         ? () => _presentSlideAt(index + 1)
                         : null,
                     tooltip: 'Next slide',
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close_rounded,
-                        color: Colors.redAccent),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.redAccent,
+                    ),
                     onPressed: _stopSharingSlides,
                     tooltip: 'Stop sharing',
                   ),
@@ -1189,7 +1256,9 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: slide.blocks
-                          .map((b) => SlideBlockRenderer(block: b, isDark: true))
+                          .map(
+                            (b) => SlideBlockRenderer(block: b, isDark: true),
+                          )
                           .toList(),
                     ),
                   ),
@@ -1230,38 +1299,103 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
 
     final String hostName = widget.meeting['hostName'] ?? 'Tutor';
     final String roleName = widget.isHost ? 'Host ($hostName)' : 'Student';
+    final int tileCount = 1 + _remoteUids.length;
 
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Wrap(
-        spacing: 16,
-        runSpacing: 16,
-        alignment: WrapAlignment.center,
-        children: [
-          _buildNativeVideoTile(
-            child: AgoraVideoView(
-              controller: VideoViewController(
-                rtcEngine: _rtcEngine!,
-                canvas: const VideoCanvas(uid: 0),
-              ),
+    return Column(
+      children: [
+        _buildNativeStatusBanner(),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Approximates the web video-card's CSS
+                // (`flex: 1 1 340px; max-width: 640px; min-height: 240px;
+                // max-height: 480px` inside a flex-wrap row) -- without
+                // this, tiles stayed a small fixed 340x260 regardless of
+                // window size, looking cramped/unfinished on a large
+                // desktop window next to web's tiles growing to fill the
+                // space.
+                const double minTile = 340;
+                const double maxTile = 640;
+                const double gap = 16;
+                final double availableWidth = constraints.maxWidth;
+                final int columns = ((availableWidth + gap) / (minTile + gap))
+                    .floor()
+                    .clamp(1, tileCount);
+                double tileWidth =
+                    ((availableWidth - (columns - 1) * gap) / columns).clamp(
+                      minTile,
+                      maxTile,
+                    );
+                if (tileWidth > availableWidth) tileWidth = availableWidth;
+                final double tileHeight = (tileWidth * (260 / 340)).clamp(
+                  240.0,
+                  480.0,
+                );
+
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    _buildNativeVideoTile(
+                      width: tileWidth,
+                      height: tileHeight,
+                      child: AgoraVideoView(
+                        controller: VideoViewController(
+                          rtcEngine: _rtcEngine!,
+                          canvas: const VideoCanvas(uid: 0),
+                        ),
+                      ),
+                      label: 'You ($roleName)',
+                      showAvatarInstead: _isVideoOff,
+                    ),
+                    for (final uid in _remoteUids)
+                      _buildNativeVideoTile(
+                        width: tileWidth,
+                        height: tileHeight,
+                        child: AgoraVideoView(
+                          controller: VideoViewController.remote(
+                            rtcEngine: _rtcEngine!,
+                            canvas: VideoCanvas(uid: uid),
+                            connection: RtcConnection(
+                              channelId: widget.meeting['channelName'] ?? '',
+                            ),
+                          ),
+                        ),
+                        label: 'Student ($uid)',
+                      ),
+                  ],
+                );
+              },
             ),
-            label: 'You ($roleName)',
-            showAvatarInstead: _isVideoOff,
           ),
-          for (final uid in _remoteUids)
-            _buildNativeVideoTile(
-              child: AgoraVideoView(
-                controller: VideoViewController.remote(
-                  rtcEngine: _rtcEngine!,
-                  canvas: VideoCanvas(uid: uid),
-                  connection: RtcConnection(
-                    channelId: widget.meeting['channelName'] ?? '',
-                  ),
-                ),
-              ),
-              label: 'Student ($uid)',
-            ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  /// Native counterpart to the web iframe's `#status-banner` -- see
+  /// `_nativeStatusText`'s doc comment for why this exists.
+  Widget _buildNativeStatusBanner() {
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(minHeight: 36),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+        border: const Border(bottom: BorderSide(color: Color(0x4D6366F1))),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        _nativeStatusText,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Color(0xFF818CF8),
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -1269,15 +1403,27 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
   Widget _buildNativeVideoTile({
     required Widget child,
     required String label,
+    double width = 340,
+    double height = 260,
     bool showAvatarInstead = false,
   }) {
     return Container(
-      width: 340,
-      height: 260,
+      width: width,
+      height: height,
       decoration: BoxDecoration(
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        // Matches the web video-card's `box-shadow: 0 10px 30px
+        // rgba(0,0,0,0.5)` -- native previously had a flat border only,
+        // looking noticeably less "lifted" than the web tiles next to it.
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 30,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
@@ -1290,12 +1436,18 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: const [
-                        Icon(
-                          Icons.videocam_off_rounded,
-                          color: Color(0xFF94A3B8),
-                          size: 32,
+                        // Matches the web `.avatar-circle` -- a filled
+                        // circle behind the icon, not a bare icon.
+                        CircleAvatar(
+                          radius: 35,
+                          backgroundColor: Color(0xFF334155),
+                          child: Icon(
+                            Icons.videocam_off_rounded,
+                            color: Colors.white,
+                            size: 28,
+                          ),
                         ),
-                        SizedBox(height: 8),
+                        SizedBox(height: 10),
                         Text(
                           'Camera Muted',
                           style: TextStyle(color: Color(0xFF94A3B8)),
@@ -1308,35 +1460,46 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
           Positioned(
             bottom: 12,
             left: 12,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0F172A).withValues(alpha: 0.85),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF10B981),
-                      shape: BoxShape.circle,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              // Matches the web name-tag's `backdrop-filter: blur(8px)`.
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A).withValues(alpha: 0.85),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.15),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF10B981),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -1344,7 +1507,6 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -1366,13 +1528,13 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
             children: [
               // Top Bar
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 14,
+                ),
                 decoration: const BoxDecoration(
                   color: Color(0xFF1E293B),
-                  border: Border(
-                    bottom: BorderSide(color: Color(0xFF334155)),
-                  ),
+                  border: Border(bottom: BorderSide(color: Color(0xFF334155))),
                 ),
                 child: Row(
                   children: [
@@ -1417,12 +1579,19 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                     if (!_hasJoinedChannel)
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+                          color: const Color(
+                            0xFF6366F1,
+                          ).withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
-                              color: const Color(0xFF6366F1).withValues(alpha: 0.4)),
+                            color: const Color(
+                              0xFF6366F1,
+                            ).withValues(alpha: 0.4),
+                          ),
                         ),
                         child: const Text(
                           'PREVIEW',
@@ -1452,8 +1621,7 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            CircularProgressIndicator(
-                                color: Color(0xFF6366F1)),
+                            CircularProgressIndicator(color: Color(0xFF6366F1)),
                             SizedBox(height: 16),
                             Text(
                               'Connecting to the class...',
@@ -1476,99 +1644,104 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                 child: !_hasJoinedChannel
                     ? _buildPreviewToolbar()
                     : Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 16),
-                  color: const Color(0xFF0F172A),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Mute Mic Button
-                      _buildControlFab(
-                        icon: _isMicMuted
-                            ? Icons.mic_off_rounded
-                            : Icons.mic_rounded,
-                        label: _isMicMuted ? 'Unmute' : 'Mute',
-                        color: _isMicMuted
-                            ? Colors.redAccent
-                            : const Color(0xFF334155),
-                        onTap: () {
-                          setState(() => _isMicMuted = !_isMicMuted);
-                          if (kIsWeb) {
-                            _postIframeMessage({
-                              'action': 'toggleAudio',
-                              'mute': _isMicMuted,
-                            });
-                          } else {
-                            _rtcEngine?.muteLocalAudioStream(_isMicMuted);
-                          }
-                        },
-                      ),
-                      const SizedBox(width: 16),
-
-                      // Camera Toggle Button
-                      _buildControlFab(
-                        icon: _isVideoOff
-                            ? Icons.videocam_off_rounded
-                            : Icons.videocam_rounded,
-                        label: _isVideoOff ? 'Start Video' : 'Stop Video',
-                        color: _isVideoOff
-                            ? Colors.redAccent
-                            : const Color(0xFF334155),
-                        onTap: () {
-                          setState(() => _isVideoOff = !_isVideoOff);
-                          if (kIsWeb) {
-                            _postIframeMessage({
-                              'action': 'toggleVideo',
-                              'off': _isVideoOff,
-                            });
-                          } else {
-                            _rtcEngine?.muteLocalVideoStream(_isVideoOff);
-                          }
-                        },
-                      ),
-                      const SizedBox(width: 16),
-
-                      // Share Slides (Host/Tutor) / Raise Hand (Student)
-                      if (widget.isHost) ...[
-                        _buildControlFab(
-                          icon: Icons.slideshow_rounded,
-                          label: _presentedContent != null
-                              ? 'Stop Sharing'
-                              : 'Share Slides',
-                          color: _presentedContent != null
-                              ? const Color(0xFF10B981)
-                              : const Color(0xFF334155),
-                          onTap: _presentedContent != null
-                              ? _stopSharingSlides
-                              : _openShareSlidesPicker,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 16,
                         ),
-                        const SizedBox(width: 16),
-                      ] else ...[
-                        _buildControlFab(
-                          icon: Icons.back_hand_rounded,
-                          label:
-                              _isHandRaised ? 'Hand Raised' : 'Raise Hand',
-                          color: _isHandRaised
-                              ? const Color(0xFFF59E0B)
-                              : const Color(0xFF334155),
-                          onTap: () {
-                            setState(() => _isHandRaised = !_isHandRaised);
-                          },
-                        ),
-                        const SizedBox(width: 16),
-                      ],
+                        color: const Color(0xFF0F172A),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            // Mute Mic Button
+                            _buildControlFab(
+                              icon: _isMicMuted
+                                  ? Icons.mic_off_rounded
+                                  : Icons.mic_rounded,
+                              label: _isMicMuted ? 'Unmute' : 'Mute',
+                              color: _isMicMuted
+                                  ? Colors.redAccent
+                                  : const Color(0xFF334155),
+                              onTap: () {
+                                setState(() => _isMicMuted = !_isMicMuted);
+                                if (kIsWeb) {
+                                  _postIframeMessage({
+                                    'action': 'toggleAudio',
+                                    'mute': _isMicMuted,
+                                  });
+                                } else {
+                                  _rtcEngine?.muteLocalAudioStream(_isMicMuted);
+                                }
+                              },
+                            ),
+                            const SizedBox(width: 16),
 
-                      // End Class / Leave Class Button
-                      _buildControlFab(
-                        icon: Icons.call_end_rounded,
-                        label: widget.isHost ? 'End Class' : 'Leave',
-                        color: Colors.redAccent,
-                        isMainEnd: true,
-                        onTap: _isLeaving ? () {} : _handleEndOrLeaveCall,
+                            // Camera Toggle Button
+                            _buildControlFab(
+                              icon: _isVideoOff
+                                  ? Icons.videocam_off_rounded
+                                  : Icons.videocam_rounded,
+                              label: _isVideoOff ? 'Start Video' : 'Stop Video',
+                              color: _isVideoOff
+                                  ? Colors.redAccent
+                                  : const Color(0xFF334155),
+                              onTap: () {
+                                setState(() => _isVideoOff = !_isVideoOff);
+                                if (kIsWeb) {
+                                  _postIframeMessage({
+                                    'action': 'toggleVideo',
+                                    'off': _isVideoOff,
+                                  });
+                                } else {
+                                  _rtcEngine?.muteLocalVideoStream(_isVideoOff);
+                                }
+                              },
+                            ),
+                            const SizedBox(width: 16),
+
+                            // Share Slides (Host/Tutor) / Raise Hand (Student)
+                            if (widget.isHost) ...[
+                              _buildControlFab(
+                                icon: Icons.slideshow_rounded,
+                                label: _presentedContent != null
+                                    ? 'Stop Sharing'
+                                    : 'Share Slides',
+                                color: _presentedContent != null
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFF334155),
+                                onTap: _presentedContent != null
+                                    ? _stopSharingSlides
+                                    : _openShareSlidesPicker,
+                              ),
+                              const SizedBox(width: 16),
+                            ] else ...[
+                              _buildControlFab(
+                                icon: Icons.back_hand_rounded,
+                                label: _isHandRaised
+                                    ? 'Hand Raised'
+                                    : 'Raise Hand',
+                                color: _isHandRaised
+                                    ? const Color(0xFFF59E0B)
+                                    : const Color(0xFF334155),
+                                onTap: () {
+                                  setState(
+                                    () => _isHandRaised = !_isHandRaised,
+                                  );
+                                },
+                              ),
+                              const SizedBox(width: 16),
+                            ],
+
+                            // End Class / Leave Class Button
+                            _buildControlFab(
+                              icon: Icons.call_end_rounded,
+                              label: widget.isHost ? 'End Class' : 'Leave',
+                              color: Colors.redAccent,
+                              isMainEnd: true,
+                              onTap: _isLeaving ? () {} : _handleEndOrLeaveCall,
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
-                ),
               ),
             ],
           ),
@@ -1661,7 +1834,9 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                   foregroundColor: Colors.white,
                   disabledBackgroundColor: const Color(0xFF334155),
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 14),
+                    horizontal: 24,
+                    vertical: 14,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -1715,11 +1890,7 @@ class _ClassMeetingRoomScreenState extends State<ClassMeetingRoomScreen> {
                 ),
               ],
             ),
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: isMainEnd ? 26 : 22,
-            ),
+            child: Icon(icon, color: Colors.white, size: isMainEnd ? 26 : 22),
           ),
         ),
         const SizedBox(height: 6),
