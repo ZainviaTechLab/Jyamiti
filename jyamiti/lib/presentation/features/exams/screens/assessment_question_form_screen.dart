@@ -904,6 +904,8 @@ class _AssessmentQuestionFormScreenState
       'shortAnswerSuffix': _suffixCtrl.text.trim(),
       'shortAnswerHint': _hintCtrl.text.trim(),
       'svgLabels': _svgLabels,
+      'explanation': _explanationCtrl.text.trim(),
+      'explanationSteps': _explanationSteps,
       'isClasswork': _isClasswork,
       'category': _isClasswork ? 'classwork' : 'practice',
     };
