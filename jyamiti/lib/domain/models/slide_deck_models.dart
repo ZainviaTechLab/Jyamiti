@@ -86,6 +86,16 @@ class SlideBlock {
   // silently in that case rather than throwing.
   final String? fontFamily;
 
+  // The generic "Container" box -- background/borderColor/borderWidth
+  // (all above) plus padding/marginVertical (both already existed, used
+  // by banner) plus this corner radius, together let any block type
+  // that doesn't already own its full box rendering (i.e. every type
+  // except banner/card/text/bulletList -- see SlideBlockRenderer.build's
+  // doc comment) be wrapped in a decorated box, the same way Flutter's
+  // own Container wraps any child. Null means the generic wrapper's own
+  // default (14) rather than no radius.
+  final double? borderRadius;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -109,6 +119,7 @@ class SlideBlock {
     this.fitContent = false,
     this.glass = false,
     this.fontFamily,
+    this.borderRadius,
   });
 
   SlideBlock copyWith({
@@ -146,6 +157,8 @@ class SlideBlock {
     bool? glass,
     String? fontFamily,
     bool clearFontFamily = false,
+    double? borderRadius,
+    bool clearBorderRadius = false,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -178,6 +191,8 @@ class SlideBlock {
       fitContent: fitContent ?? this.fitContent,
       glass: glass ?? this.glass,
       fontFamily: clearFontFamily ? null : (fontFamily ?? this.fontFamily),
+      borderRadius:
+          clearBorderRadius ? null : (borderRadius ?? this.borderRadius),
     );
   }
 
@@ -205,6 +220,7 @@ class SlideBlock {
       'fitContent': fitContent,
       'glass': glass,
       'fontFamily': fontFamily,
+      'borderRadius': borderRadius,
     };
   }
 
@@ -236,6 +252,7 @@ class SlideBlock {
       fitContent: map['fitContent'] == true,
       glass: map['glass'] == true,
       fontFamily: map['fontFamily']?.toString(),
+      borderRadius: (map['borderRadius'] as num?)?.toDouble(),
     );
   }
 

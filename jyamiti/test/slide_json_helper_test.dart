@@ -461,6 +461,38 @@ void main() {
       expect(block.textColor, 'FFFBBF24');
     });
 
+    test('parses the generic Container box on a type that has no own styling',
+        () {
+      const containerJson = '''
+      {
+        "title": "Boxed Table",
+        "blocks": [
+          {
+            "type": "table",
+            "headers": ["A", "B"],
+            "rows": [["1", "2"]],
+            "backgroundColor": "FF0F172A",
+            "borderColor": "FF6366F1",
+            "borderWidth": 2.0,
+            "borderRadius": 20.0,
+            "padding": 18.0,
+            "marginVertical": 10.0
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(containerJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.table);
+      expect(block.backgroundColor, 'FF0F172A');
+      expect(block.borderColor, 'FF6366F1');
+      expect(block.borderRadius, 20.0);
+      expect(block.padding, 18.0);
+      expect(block.marginVertical, 10.0);
+    });
+
     test('"text" JSON type resolves to the text block, not paragraph', () {
       const aliasJson = '''
       {

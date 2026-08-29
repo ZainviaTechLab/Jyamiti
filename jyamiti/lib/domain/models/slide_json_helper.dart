@@ -276,6 +276,7 @@ class SlideJsonHelper {
     final fitContent = map['fitContent'] == true;
     final glass = map['glass'] == true;
     final fontFamily = map['fontFamily']?.toString();
+    final borderRadius = (map['borderRadius'] as num?)?.toDouble();
 
     return SlideBlock(
       id: blockId,
@@ -300,6 +301,7 @@ class SlideJsonHelper {
       fitContent: fitContent,
       glass: glass,
       fontFamily: fontFamily,
+      borderRadius: borderRadius,
     );
   }
 
@@ -528,7 +530,12 @@ class SlideJsonHelper {
           },
           {
             "type": "math",
-            "content": "a^2 + b^2 = c^2"
+            "content": "a^2 + b^2 = c^2",
+            "backgroundColor": "331E293B",
+            "borderColor": "FF6366F1",
+            "borderWidth": 1.5,
+            "borderRadius": 20.0,
+            "padding": 18.0
           },
           {
             "type": "svg",
@@ -690,7 +697,12 @@ class SlideJsonHelper {
             },
             {
               "type": "math",
-              "content": "d = \\sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}"
+              "content": "d = \\sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}",
+              "backgroundColor": "331E293B",
+              "borderColor": "FF0EA5E9",
+              "borderWidth": 1.5,
+              "borderRadius": 20.0,
+              "padding": 18.0
             },
             {
               "type": "svg",
@@ -849,7 +861,12 @@ class SlideJsonHelper {
               },
               {
                 "type": "math",
-                "content": "\\lambda = \\frac{h}{p}"
+                "content": "\\lambda = \\frac{h}{p}",
+                "backgroundColor": "331E293B",
+                "borderColor": "FFA78BFA",
+                "borderWidth": 1.5,
+                "borderRadius": 20.0,
+                "padding": 18.0
               },
               {
                 "type": "svg",

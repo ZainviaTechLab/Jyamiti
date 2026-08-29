@@ -130,6 +130,16 @@ class SlideBlockRenderer extends StatelessWidget {
     // apply that same color a second time as an outer box/border around
     // content that was never meant to be boxed at all (bulletList) or
     // double it up with what the type already draws itself.
+    //
+    // Every OTHER block type (heading, subheading, paragraph, code,
+    // callout, imageUrl, math, svg, table, video, columns) falls
+    // through to that generic wrapper below -- this is the "Container"
+    // concept: any of those types can be wrapped in a decorated box
+    // (background/border/radius/padding/margin) exactly like Flutter's
+    // own Container wraps any child, entirely independent of what that
+    // block itself renders. It only actually wraps when backgroundColor
+    // or borderColor is set; otherwise this returns the plain content
+    // unboxed, same as always.
     if (block.type == SlideBlockType.banner) return _buildBannerBlock(context);
     if (block.type == SlideBlockType.card) return _buildCardBlock(context);
     if (block.type == SlideBlockType.text) return _buildTextBlock(context);
@@ -142,12 +152,20 @@ class SlideBlockRenderer extends StatelessWidget {
     final Color? border = parseHexColor(block.borderColor);
     if (bg == null && border == null) return content;
 
+    // The generic "Container" -- lets any block type that doesn't
+    // already own its full box rendering (banner/card/text/bulletList,
+    // all excluded above) be wrapped in a decorated box, same idea as
+    // Flutter's own Container: background/border/radius + padding/
+    // margin, all optional and independent of what the block itself
+    // renders. padding/marginVertical are the same fields banner reads
+    // directly for itself; reusing them here is safe since a block is
+    // only ever one type at a time.
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6.0),
-      padding: const EdgeInsets.all(14.0),
+      margin: EdgeInsets.symmetric(vertical: block.marginVertical ?? 6.0),
+      padding: EdgeInsets.all(block.padding ?? 14.0),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(block.borderRadius ?? 14),
         border: border != null
             ? Border.all(
                 color: border,

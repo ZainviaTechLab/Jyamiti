@@ -106,6 +106,27 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   String? bulletTextColor = block.textColor;
   String? bulletMarkerColor = block.borderColor;
 
+  // The generic "Container" box -- background/borderColor/borderWidth/
+  // borderRadius/padding/marginVertical, available to every block type
+  // that doesn't already own its full box rendering (banner/card/text
+  // each have their own dedicated Layout/Style section above; bulletList
+  // already repurposes borderColor for its marker color, so giving it a
+  // second, conflicting meaning here would collide). See
+  // SlideBlockRenderer.build's doc comment for the matching renderer
+  // side of this.
+  final bool containerEligible = ![
+    SlideBlockType.banner,
+    SlideBlockType.card,
+    SlideBlockType.text,
+    SlideBlockType.bulletList,
+  ].contains(block.type);
+  String? containerBg = block.backgroundColor;
+  String? containerBorder = block.borderColor;
+  double containerBorderWidth = block.borderWidth;
+  double containerBorderRadius = block.borderRadius ?? 14;
+  double containerPadding = block.padding ?? 14;
+  double containerMargin = block.marginVertical ?? 6;
+
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
   // Save (see SlideBlockRenderer._buildTableBlock's doc comment for the
@@ -655,6 +676,95 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                   ],
                 ),
               ],
+              if (containerEligible) ...[
+                const SizedBox(height: 16),
+                const Divider(),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Container (optional)',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SlideColorPickerField(
+                  label: 'Background',
+                  initialHex: containerBg,
+                  onChanged: (val) => containerBg = val,
+                ),
+                const SizedBox(height: 14),
+                SlideColorPickerField(
+                  label: 'Outline',
+                  initialHex: containerBorder,
+                  onChanged: (val) => containerBorder = val,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Text('Outline Width', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: containerBorderWidth.clamp(0, 6),
+                        min: 0,
+                        max: 6,
+                        divisions: 12,
+                        label: containerBorderWidth.toStringAsFixed(1),
+                        onChanged: (val) =>
+                            setDialogState(() => containerBorderWidth = val),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Corner Radius', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: containerBorderRadius.clamp(0, 40),
+                        min: 0,
+                        max: 40,
+                        divisions: 20,
+                        label: containerBorderRadius.toStringAsFixed(0),
+                        onChanged: (val) =>
+                            setDialogState(() => containerBorderRadius = val),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Padding', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: containerPadding.clamp(0, 48),
+                        min: 0,
+                        max: 48,
+                        divisions: 24,
+                        label: containerPadding.toStringAsFixed(0),
+                        onChanged: (val) =>
+                            setDialogState(() => containerPadding = val),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Margin', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: containerMargin.clamp(0, 48),
+                        min: 0,
+                        max: 48,
+                        divisions: 24,
+                        label: containerMargin.toStringAsFixed(0),
+                        onChanged: (val) =>
+                            setDialogState(() => containerMargin = val),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -681,11 +791,14 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                         ? cardBg
                         : block.type == SlideBlockType.text
                             ? textBg
-                            : null,
+                            : containerEligible
+                                ? containerBg
+                                : null,
                 clearBackgroundColor:
                     (block.type == SlideBlockType.banner && bannerBg == null) ||
                         (block.type == SlideBlockType.card && cardBg == null) ||
-                        (block.type == SlideBlockType.text && textBg == null),
+                        (block.type == SlideBlockType.text && textBg == null) ||
+                        (containerEligible && containerBg == null),
                 textColor: block.type == SlideBlockType.banner
                     ? bannerText
                     : block.type == SlideBlockType.card
@@ -709,26 +822,36 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                             ? textBorder
                             : block.type == SlideBlockType.bulletList
                                 ? bulletMarkerColor
-                                : null,
+                                : containerEligible
+                                    ? containerBorder
+                                    : null,
                 clearBorderColor: (block.type == SlideBlockType.banner &&
                         bannerBorder == null) ||
                     (block.type == SlideBlockType.card && cardBorder == null) ||
                     (block.type == SlideBlockType.text && textBorder == null) ||
                     (block.type == SlideBlockType.bulletList &&
-                        bulletMarkerColor == null),
+                        bulletMarkerColor == null) ||
+                    (containerEligible && containerBorder == null),
                 borderWidth: block.type == SlideBlockType.banner
                     ? bannerBorderWidth
                     : block.type == SlideBlockType.card
                         ? cardBorderWidth
                         : block.type == SlideBlockType.text
                             ? textBorderWidth
-                            : null,
+                            : containerEligible
+                                ? containerBorderWidth
+                                : null,
                 padding: block.type == SlideBlockType.banner
                     ? layoutPadding
-                    : null,
+                    : containerEligible
+                        ? containerPadding
+                        : null,
                 marginVertical: block.type == SlideBlockType.banner
                     ? layoutMarginVertical
-                    : null,
+                    : containerEligible
+                        ? containerMargin
+                        : null,
+                borderRadius: containerEligible ? containerBorderRadius : null,
                 fontSize: block.type == SlideBlockType.banner
                     ? layoutFontSize
                     : block.type == SlideBlockType.text
