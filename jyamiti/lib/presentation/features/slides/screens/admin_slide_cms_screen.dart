@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -213,7 +214,11 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
         SnackBar(
           content: Row(
             children: [
-              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+              const Icon(
+                Icons.check_circle_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -389,8 +394,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
       final currentSlide = _slides[_activeSlideIndex];
       final updatedBlocks = List<SlideBlock>.from(currentSlide.blocks);
       updatedBlocks[blockIndex] = updated!;
-      _slides[_activeSlideIndex] =
-          currentSlide.copyWith(blocks: updatedBlocks);
+      _slides[_activeSlideIndex] = currentSlide.copyWith(blocks: updatedBlocks);
     });
   }
 
@@ -407,9 +411,103 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
       final currentSlide = _slides[_activeSlideIndex];
       final updatedBlocks = List<SlideBlock>.from(currentSlide.blocks);
       updatedBlocks[blockIndex] = block.copyWith(type: newType);
-      _slides[_activeSlideIndex] =
-          currentSlide.copyWith(blocks: updatedBlocks);
+      _slides[_activeSlideIndex] = currentSlide.copyWith(blocks: updatedBlocks);
     });
+  }
+
+  /// Nests [moving] inside [target] (a `container` or `columns` block) --
+  /// used by [_moveBlockIntoContainer] when a top-level block is dropped
+  /// onto a container/columns card. A container gets it appended to its
+  /// flat children list; a columns block gets it appended to its first
+  /// column, since the card-level drop target can't distinguish which
+  /// column was aimed at (open the dedicated columns editor to move it
+  /// to a different column afterward).
+  SlideBlock _nestBlockInto(SlideBlock target, SlideBlock moving) {
+    if (target.type == SlideBlockType.container) {
+      List<SlideBlock> children = [];
+      try {
+        final data = json.decode(target.content) as Map<String, dynamic>;
+        final raw = data['children'] as List? ?? [];
+        children = raw
+            .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+            .toList();
+      } catch (_) {}
+      children.add(moving);
+      return target.copyWith(
+        content: jsonEncode({
+          'children': children.map((b) => b.toMap()).toList(),
+        }),
+      );
+    }
+
+    List<List<SlideBlock>> columns = [];
+    try {
+      final data = json.decode(target.content) as Map<String, dynamic>;
+      final raw = data['columns'] as List? ?? [];
+      columns = raw.map((col) {
+        return (col as List)
+            .map((b) => SlideBlock.fromMap(b as Map<String, dynamic>))
+            .toList();
+      }).toList();
+    } catch (_) {}
+    if (columns.isEmpty) columns = [<SlideBlock>[]];
+    columns.first.add(moving);
+    return target.copyWith(
+      content: jsonEncode({
+        'columns': columns
+            .map((col) => col.map((b) => b.toMap()).toList())
+            .toList(),
+      }),
+    );
+  }
+
+  /// Drag-and-drop nesting -- moves the top-level block at [sourceIndex]
+  /// out of the slide's flat block list and into the container/columns
+  /// block at [targetIndex] (see the Draggable/DragTarget wiring around
+  /// each block Card below). Mirrors the same nesting
+  /// ContainerBlockEditorScreen / ColumnsBlockEditorScreen let you build
+  /// by hand -- just reachable by dragging an existing block onto a
+  /// container's card instead of adding a fresh one inside its own
+  /// editor screen.
+  void _moveBlockIntoContainer(int sourceIndex, int targetIndex) {
+    if (sourceIndex == targetIndex) return;
+    final currentSlide = _slides[_activeSlideIndex];
+    final blocks = List<SlideBlock>.from(currentSlide.blocks);
+    if (sourceIndex < 0 || sourceIndex >= blocks.length) return;
+    if (targetIndex < 0 || targetIndex >= blocks.length) return;
+
+    final moving = blocks[sourceIndex];
+    final target = blocks[targetIndex];
+    if (target.type != SlideBlockType.container &&
+        target.type != SlideBlockType.columns) {
+      return;
+    }
+    if (moving.id == target.id) return;
+
+    blocks.removeAt(sourceIndex);
+    final adjustedTargetIndex = sourceIndex < targetIndex
+        ? targetIndex - 1
+        : targetIndex;
+    blocks[adjustedTargetIndex] = _nestBlockInto(
+      blocks[adjustedTargetIndex],
+      moving,
+    );
+
+    setState(() {
+      _slides[_activeSlideIndex] = currentSlide.copyWith(blocks: blocks);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${displayNameForSlideBlockType(moving.type)} moved inside the '
+          '${displayNameForSlideBlockType(target.type)}.',
+        ),
+        backgroundColor: const Color(0xFF6366F1),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   void _configureQuiz() {
@@ -555,8 +653,9 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     SlideBackgroundType selectedType = activeSlide.backgroundType;
     String? color1 = activeSlide.backgroundColor;
     String? color2 = activeSlide.backgroundColor2;
-    final imageCtrl =
-        TextEditingController(text: activeSlide.backgroundImageUrl ?? '');
+    final imageCtrl = TextEditingController(
+      text: activeSlide.backgroundImageUrl ?? '',
+    );
 
     showDialog(
       context: context,
@@ -675,8 +774,9 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
             icon: const Icon(Icons.file_download_rounded, size: 16),
             label: const Text('Import JSON', style: TextStyle(fontSize: 13)),
             style: OutlinedButton.styleFrom(
-              foregroundColor:
-                  isDark ? const Color(0xFF818CF8) : const Color(0xFF6366F1),
+              foregroundColor: isDark
+                  ? const Color(0xFF818CF8)
+                  : const Color(0xFF6366F1),
               side: BorderSide(
                 color: isDark
                     ? const Color(0xFF818CF8).withOpacity(0.5)
@@ -764,10 +864,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                 ? const SizedBox(
                     width: 14,
                     height: 14,
-                    child: JyamitiLoader(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
+                    child: JyamitiLoader(strokeWidth: 2, color: Colors.white),
                   )
                 : const Icon(Icons.save_rounded, size: 18),
             label: const Text('Save Deck'),
@@ -1063,91 +1160,207 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
                       setState(() {
                         if (newIndex > oldIndex) newIndex -= 1;
                         final currentSlide = _slides[_activeSlideIndex];
-                        final updatedBlocks =
-                            List<SlideBlock>.from(currentSlide.blocks);
+                        final updatedBlocks = List<SlideBlock>.from(
+                          currentSlide.blocks,
+                        );
                         final moved = updatedBlocks.removeAt(oldIndex);
                         updatedBlocks.insert(newIndex, moved);
-                        _slides[_activeSlideIndex] =
-                            currentSlide.copyWith(blocks: updatedBlocks);
+                        _slides[_activeSlideIndex] = currentSlide.copyWith(
+                          blocks: updatedBlocks,
+                        );
                       });
                     },
                     itemBuilder: (context, blockIdx) {
                       final block = activeSlide.blocks[blockIdx];
-                      return Card(
+                      final canReceiveDrop =
+                          block.type == SlideBlockType.container ||
+                          block.type == SlideBlockType.columns;
+
+                      return DragTarget<int>(
                         key: ValueKey(block.id),
-                        margin: const EdgeInsets.only(bottom: 12),
-                        color: isDark ? const Color(0xFF0F172A) : Colors.white,
-                        child: Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  ReorderableDragStartListener(
-                                    index: blockIdx,
-                                    child: const Padding(
-                                      padding: EdgeInsets.only(right: 8.0),
-                                      child: Icon(
-                                        Icons.drag_indicator_rounded,
-                                        size: 18,
-                                        color: Color(0xFF94A3B8),
-                                      ),
+                        onWillAcceptWithDetails: (details) =>
+                            canReceiveDrop && details.data != blockIdx,
+                        onAcceptWithDetails: (details) =>
+                            _moveBlockIntoContainer(details.data, blockIdx),
+                        builder: (context, candidateData, rejectedData) {
+                          final isHovering = candidateData.isNotEmpty;
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            color: isDark
+                                ? const Color(0xFF0F172A)
+                                : Colors.white,
+                            shape: isHovering
+                                ? RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4),
+                                    side: const BorderSide(
+                                      color: Color(0xFF6366F1),
+                                      width: 2,
                                     ),
-                                  ),
-                                  InkWell(
-                                    borderRadius: BorderRadius.circular(16),
-                                    onTap: () => _changeBlockType(blockIdx),
-                                    child: Chip(
-                                      label: Text(
-                                        displayNameForSlideBlockType(block.type),
-                                        style: const TextStyle(
-                                          fontSize: 9,
-                                          color: Colors.white,
+                                  )
+                                : null,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      ReorderableDragStartListener(
+                                        index: blockIdx,
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(right: 4.0),
+                                          child: Icon(
+                                            Icons.drag_indicator_rounded,
+                                            size: 18,
+                                            color: Color(0xFF94A3B8),
+                                          ),
                                         ),
                                       ),
-                                      avatar: const Icon(
-                                        Icons.swap_horiz_rounded,
-                                        size: 12,
-                                        color: Colors.white,
+                                      Tooltip(
+                                        message:
+                                            'Drag onto a Container or '
+                                            'Columns block to nest it inside',
+                                        child: Draggable<int>(
+                                          data: blockIdx,
+                                          feedback: Material(
+                                            elevation: 4,
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 6,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF6366F1),
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(
+                                                    _getIconForBlock(
+                                                      block.type,
+                                                    ),
+                                                    size: 14,
+                                                    color: Colors.white,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Text(
+                                                    displayNameForSlideBlockType(
+                                                      block.type,
+                                                    ),
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                          childWhenDragging: const Padding(
+                                            padding: EdgeInsets.only(
+                                              right: 8.0,
+                                            ),
+                                            child: Icon(
+                                              Icons.open_with_rounded,
+                                              size: 16,
+                                              color: Color(0xFFCBD5E1),
+                                            ),
+                                          ),
+                                          child: const Padding(
+                                            padding: EdgeInsets.only(
+                                              right: 8.0,
+                                            ),
+                                            child: Icon(
+                                              Icons.open_with_rounded,
+                                              size: 16,
+                                              color: Color(0xFF94A3B8),
+                                            ),
+                                          ),
+                                        ),
                                       ),
-                                      backgroundColor: const Color(0xFF6366F1),
-                                    ),
+                                      InkWell(
+                                        borderRadius: BorderRadius.circular(16),
+                                        onTap: () => _changeBlockType(blockIdx),
+                                        child: Chip(
+                                          label: Text(
+                                            displayNameForSlideBlockType(
+                                              block.type,
+                                            ),
+                                            style: const TextStyle(
+                                              fontSize: 9,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                          avatar: const Icon(
+                                            Icons.swap_horiz_rounded,
+                                            size: 12,
+                                            color: Colors.white,
+                                          ),
+                                          backgroundColor: const Color(
+                                            0xFF6366F1,
+                                          ),
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.edit_rounded,
+                                          size: 16,
+                                        ),
+                                        onPressed: () => _editBlock(blockIdx),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.delete_rounded,
+                                          size: 16,
+                                          color: Colors.red,
+                                        ),
+                                        onPressed: () {
+                                          setState(() {
+                                            final currentSlide =
+                                                _slides[_activeSlideIndex];
+                                            final updatedBlocks =
+                                                List<SlideBlock>.from(
+                                                  currentSlide.blocks,
+                                                )..removeAt(blockIdx);
+                                            _slides[_activeSlideIndex] =
+                                                currentSlide.copyWith(
+                                                  blocks: updatedBlocks,
+                                                );
+                                          });
+                                        },
+                                      ),
+                                    ],
                                   ),
-                                  const Spacer(),
-                                  IconButton(
-                                    icon: const Icon(
-                                      Icons.edit_rounded,
-                                      size: 16,
-                                    ),
-                                    onPressed: () => _editBlock(blockIdx),
+                                  SlideBlockRenderer(
+                                    block: block,
+                                    isDark: isDark,
                                   ),
-                                  IconButton(
-                                    icon: const Icon(
-                                      Icons.delete_rounded,
-                                      size: 16,
-                                      color: Colors.red,
+                                  if (isHovering)
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 6),
+                                      child: Text(
+                                        'Drop to nest this block inside',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Color(0xFF6366F1),
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      ),
                                     ),
-                                    onPressed: () {
-                                      setState(() {
-                                        final currentSlide =
-                                            _slides[_activeSlideIndex];
-                                        final updatedBlocks =
-                                            List<SlideBlock>.from(
-                                              currentSlide.blocks,
-                                            )..removeAt(blockIdx);
-                                        _slides[_activeSlideIndex] =
-                                            currentSlide.copyWith(
-                                                blocks: updatedBlocks);
-                                      });
-                                    },
-                                  ),
                                 ],
                               ),
-                              SlideBlockRenderer(block: block, isDark: isDark),
-                            ],
-                          ),
-                        ),
+                            ),
+                          );
+                        },
                       );
                     },
                   ),
