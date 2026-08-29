@@ -166,6 +166,11 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
   double containerBorderRadius = block.borderRadius ?? 14;
   double containerPadding = block.padding ?? 14;
   double containerMargin = block.marginVertical ?? 6;
+  double containerWidth = (block.width ?? 1.0) * 100;
+  double containerMinHeight = block.minHeight ?? 0;
+  String containerHorizontalAlign = block.horizontalAlign ?? 'left';
+  String containerVerticalAlign = block.verticalAlign ?? 'top';
+  String containerSelfAlign = block.selfAlign ?? 'center';
 
   // Table editing works on a structured header/row list rather than raw
   // JSON -- parsed once here, re-serialized back into block.content on
@@ -799,6 +804,77 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     ),
                   ],
                 ),
+                Row(
+                  children: [
+                    const Text('Width', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: containerWidth.clamp(20, 100),
+                        min: 20,
+                        max: 100,
+                        divisions: 16,
+                        label: '${containerWidth.toStringAsFixed(0)}%',
+                        onChanged: (val) =>
+                            setDialogState(() => containerWidth = val),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Height (min)', style: TextStyle(fontSize: 13)),
+                    Expanded(
+                      child: Slider(
+                        value: containerMinHeight.clamp(0, 400),
+                        min: 0,
+                        max: 400,
+                        divisions: 40,
+                        label: containerMinHeight.toStringAsFixed(0),
+                        onChanged: (val) =>
+                            setDialogState(() => containerMinHeight = val),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Text('Item Alignment (content inside the box)',
+                    style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'left', label: Text('Left')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'right', label: Text('Right')),
+                  ],
+                  selected: {containerHorizontalAlign},
+                  onSelectionChanged: (sel) => setDialogState(
+                      () => containerHorizontalAlign = sel.first),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'top', label: Text('Top')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'bottom', label: Text('Bottom')),
+                  ],
+                  selected: {containerVerticalAlign},
+                  onSelectionChanged: (sel) => setDialogState(
+                      () => containerVerticalAlign = sel.first),
+                ),
+                const SizedBox(height: 10),
+                const Text('Self Align (position the box itself, if narrower)',
+                    style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'left', label: Text('Left')),
+                    ButtonSegment(value: 'center', label: Text('Center')),
+                    ButtonSegment(value: 'right', label: Text('Right')),
+                  ],
+                  selected: {containerSelfAlign},
+                  onSelectionChanged: (sel) =>
+                      setDialogState(() => containerSelfAlign = sel.first),
+                ),
               ],
             ],
           ),
@@ -917,10 +993,23 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                         ? textHorizontalAlign
                         : block.type == SlideBlockType.card
                             ? cardHorizontalAlign
-                            : null,
+                            : containerEligible
+                                ? containerHorizontalAlign
+                                : null,
                 verticalAlign: block.type == SlideBlockType.banner
                     ? layoutVerticalAlign
+                    : containerEligible
+                        ? containerVerticalAlign
+                        : null,
+                width: containerEligible
+                    ? (containerWidth >= 100 ? null : containerWidth / 100)
                     : null,
+                clearWidth: containerEligible && containerWidth >= 100,
+                minHeight: containerEligible
+                    ? (containerMinHeight <= 0 ? null : containerMinHeight)
+                    : null,
+                clearMinHeight: containerEligible && containerMinHeight <= 0,
+                selfAlign: containerEligible ? containerSelfAlign : null,
                 bold: block.type == SlideBlockType.text ? textBold : null,
                 italic: block.type == SlideBlockType.text ? textItalic : null,
                 underline:

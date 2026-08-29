@@ -141,30 +141,80 @@ class SlideBlockRenderer extends StatelessWidget {
     final Widget content = _buildContent(context);
     final Color? bg = parseHexColor(block.backgroundColor);
     final Color? border = parseHexColor(block.borderColor);
-    if (bg == null && border == null) return content;
+    final bool hasBoxStyling = bg != null || border != null;
+    final bool hasSizing = block.width != null || block.minHeight != null;
+    final bool hasItemAlignment =
+        block.horizontalAlign != null || block.verticalAlign != null;
+    if (!hasBoxStyling && !hasSizing && !hasItemAlignment) return content;
 
     // The generic "Container" -- lets any block type that doesn't
     // already own its full box rendering (banner/card/text/bulletList,
     // all excluded above) be wrapped in a decorated box, same idea as
     // Flutter's own Container: background/border/radius + padding/
-    // margin, all optional and independent of what the block itself
-    // renders. padding/marginVertical are the same fields banner reads
-    // directly for itself; reusing them here is safe since a block is
-    // only ever one type at a time.
-    return Container(
-      margin: EdgeInsets.symmetric(vertical: block.marginVertical ?? 6.0),
-      padding: EdgeInsets.all(block.padding ?? 14.0),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(block.borderRadius ?? 14),
-        border: border != null
-            ? Border.all(
-                color: border,
-                width: block.borderWidth > 0 ? block.borderWidth : 1.5,
-              )
-            : null,
-      ),
+    // margin + width/height + item alignment (aligning content WITHIN
+    // the box) + self-align (positioning the box itself, only relevant
+    // once width makes it narrower than full), all optional and
+    // independent of what the block itself renders. padding/
+    // marginVertical/horizontalAlign/verticalAlign are the same fields
+    // banner already reads for itself; reusing them here is safe since
+    // a block is only ever one type at a time. Height is a MINIMUM
+    // (block.minHeight), not a forced height -- a hard cap risks
+    // clipping content that turns out taller than expected, same
+    // reasoning as banner's own use of minHeight.
+    final Alignment? itemAlignment = !hasItemAlignment
+        ? null
+        : switch ((block.horizontalAlign, block.verticalAlign)) {
+            ('left', 'top') => Alignment.topLeft,
+            ('left', 'bottom') => Alignment.bottomLeft,
+            ('left', _) => Alignment.centerLeft,
+            ('right', 'top') => Alignment.topRight,
+            ('right', 'bottom') => Alignment.bottomRight,
+            ('right', _) => Alignment.centerRight,
+            (_, 'top') => Alignment.topCenter,
+            (_, 'bottom') => Alignment.bottomCenter,
+            (_, _) => Alignment.center,
+          };
+
+    Widget box = Container(
+      padding: hasBoxStyling ? EdgeInsets.all(block.padding ?? 14.0) : null,
+      alignment: itemAlignment,
+      constraints: block.minHeight != null
+          ? BoxConstraints(minHeight: block.minHeight!)
+          : null,
+      decoration: hasBoxStyling
+          ? BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(block.borderRadius ?? 14),
+              border: border != null
+                  ? Border.all(
+                      color: border,
+                      width: block.borderWidth > 0 ? block.borderWidth : 1.5,
+                    )
+                  : null,
+            )
+          : null,
       child: content,
+    );
+
+    if (block.width != null) {
+      final Alignment selfAlignment = switch (block.selfAlign) {
+        'left' => Alignment.centerLeft,
+        'right' => Alignment.centerRight,
+        _ => Alignment.center,
+      };
+      box = Align(
+        alignment: selfAlignment,
+        child: FractionallySizedBox(
+          widthFactor: block.width!.clamp(0.05, 1.0),
+          child: box,
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.symmetric(vertical: block.marginVertical ?? 6.0),
+      child: box,
     );
   }
 

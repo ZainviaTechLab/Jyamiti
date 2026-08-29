@@ -296,6 +296,8 @@ class SlideJsonHelper {
     final glassStyle = map['glassStyle']?.toString();
     final fontFamily = map['fontFamily']?.toString();
     final borderRadius = (map['borderRadius'] as num?)?.toDouble();
+    final width = (map['width'] as num?)?.toDouble();
+    final selfAlign = map['selfAlign']?.toString();
 
     return SlideBlock(
       id: blockId,
@@ -322,6 +324,8 @@ class SlideJsonHelper {
       glassStyle: glassStyle,
       fontFamily: fontFamily,
       borderRadius: borderRadius,
+      width: width,
+      selfAlign: selfAlign,
     );
   }
 
@@ -560,7 +564,9 @@ class SlideJsonHelper {
             "borderColor": "FF6366F1",
             "borderWidth": 1.5,
             "borderRadius": 20.0,
-            "padding": 18.0
+            "padding": 18.0,
+            "width": 0.6,
+            "selfAlign": "center"
           },
           {
             "type": "svg",
@@ -672,6 +678,9 @@ class SlideJsonHelper {
             "borderWidth": 1.5,
             "borderRadius": 18.0,
             "padding": 16.0,
+            "minHeight": 160.0,
+            "horizontalAlign": "center",
+            "verticalAlign": "center",
             "children": [
               {
                 "type": "subheading",
@@ -748,7 +757,9 @@ class SlideJsonHelper {
               "borderColor": "FF0EA5E9",
               "borderWidth": 1.5,
               "borderRadius": 20.0,
-              "padding": 18.0
+              "padding": 18.0,
+              "width": 0.6,
+              "selfAlign": "center"
             },
             {
               "type": "svg",
@@ -934,7 +945,9 @@ class SlideJsonHelper {
                 "borderColor": "FFA78BFA",
                 "borderWidth": 1.5,
                 "borderRadius": 20.0,
-                "padding": 18.0
+                "padding": 18.0,
+                "width": 0.6,
+                "selfAlign": "center"
               },
               {
                 "type": "svg",

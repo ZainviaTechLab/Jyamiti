@@ -280,6 +280,21 @@ class ContainerStyleSection extends StatelessWidget {
   final ValueChanged<double> onPaddingChanged;
   final double margin;
   final ValueChanged<double> onMarginChanged;
+  // Width as a 0-100 percentage (100 = full width, i.e. null/unset on
+  // the block); minHeight in px (0 = unset). horizontalAlign/
+  // verticalAlign here mean "align content WITHIN the box" (Flutter
+  // Container.alignment); selfAlign means "position the box itself"
+  // and only visibly matters once width < 100.
+  final double width;
+  final ValueChanged<double> onWidthChanged;
+  final double minHeight;
+  final ValueChanged<double> onMinHeightChanged;
+  final String horizontalAlign;
+  final ValueChanged<String> onHorizontalAlignChanged;
+  final String verticalAlign;
+  final ValueChanged<String> onVerticalAlignChanged;
+  final String selfAlign;
+  final ValueChanged<String> onSelfAlignChanged;
 
   const ContainerStyleSection({
     super.key,
@@ -295,6 +310,16 @@ class ContainerStyleSection extends StatelessWidget {
     required this.onPaddingChanged,
     required this.margin,
     required this.onMarginChanged,
+    required this.width,
+    required this.onWidthChanged,
+    required this.minHeight,
+    required this.onMinHeightChanged,
+    required this.horizontalAlign,
+    required this.onHorizontalAlignChanged,
+    required this.verticalAlign,
+    required this.onVerticalAlignChanged,
+    required this.selfAlign,
+    required this.onSelfAlignChanged,
   });
 
   @override
@@ -378,6 +403,85 @@ class ContainerStyleSection extends StatelessWidget {
               ),
             ),
           ],
+        ),
+        Row(
+          children: [
+            const Text('Width', style: TextStyle(fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: width.clamp(20, 100),
+                min: 20,
+                max: 100,
+                divisions: 16,
+                label: '${width.toStringAsFixed(0)}%',
+                onChanged: onWidthChanged,
+              ),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            const Text('Height (min)', style: TextStyle(fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: minHeight.clamp(0, 400),
+                min: 0,
+                max: 400,
+                divisions: 40,
+                label: minHeight.toStringAsFixed(0),
+                onChanged: onMinHeightChanged,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        const Text('Item Alignment (content inside the box)',
+            style: TextStyle(fontSize: 13)),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'left', label: Text('Left')),
+                  ButtonSegment(value: 'center', label: Text('Center')),
+                  ButtonSegment(value: 'right', label: Text('Right')),
+                ],
+                selected: {horizontalAlign},
+                onSelectionChanged: (sel) =>
+                    onHorizontalAlignChanged(sel.first),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'top', label: Text('Top')),
+                  ButtonSegment(value: 'center', label: Text('Center')),
+                  ButtonSegment(value: 'bottom', label: Text('Bottom')),
+                ],
+                selected: {verticalAlign},
+                onSelectionChanged: (sel) => onVerticalAlignChanged(sel.first),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        const Text('Self Align (position the box itself, if narrower)',
+            style: TextStyle(fontSize: 13)),
+        const SizedBox(height: 6),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'left', label: Text('Left')),
+            ButtonSegment(value: 'center', label: Text('Center')),
+            ButtonSegment(value: 'right', label: Text('Right')),
+          ],
+          selected: {selfAlign},
+          onSelectionChanged: (sel) => onSelfAlignChanged(sel.first),
         ),
       ],
     );

@@ -104,6 +104,23 @@ class SlideBlock {
   // default (14) rather than no radius.
   final double? borderRadius;
 
+  // Rest of the Container concept, alongside borderRadius above:
+  // - width: a fraction (0.0-1.0) of the available width; null means
+  //   full width (the existing default -- every current deck keeps
+  //   rendering exactly as before). A fraction rather than raw pixels
+  //   since slides are viewed at very different sizes.
+  // - selfAlign ('left'|'center'|'right'): where the box itself sits
+  //   when narrower than full width because of `width` above. Only
+  //   meaningful together with width -- a full-width box has nowhere
+  //   to align to.
+  // - Item alignment (positioning content WITHIN the box, as opposed
+  //   to positioning the box itself) deliberately reuses
+  //   horizontalAlign/verticalAlign above rather than adding yet more
+  //   fields -- none of the container-eligible types read those for
+  //   anything else.
+  final double? width;
+  final String? selfAlign;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -129,6 +146,8 @@ class SlideBlock {
     this.glassStyle,
     this.fontFamily,
     this.borderRadius,
+    this.width,
+    this.selfAlign,
   });
 
   SlideBlock copyWith({
@@ -170,6 +189,10 @@ class SlideBlock {
     bool clearFontFamily = false,
     double? borderRadius,
     bool clearBorderRadius = false,
+    double? width,
+    bool clearWidth = false,
+    String? selfAlign,
+    bool clearSelfAlign = false,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -205,6 +228,8 @@ class SlideBlock {
       fontFamily: clearFontFamily ? null : (fontFamily ?? this.fontFamily),
       borderRadius:
           clearBorderRadius ? null : (borderRadius ?? this.borderRadius),
+      width: clearWidth ? null : (width ?? this.width),
+      selfAlign: clearSelfAlign ? null : (selfAlign ?? this.selfAlign),
     );
   }
 
@@ -234,6 +259,8 @@ class SlideBlock {
       'glassStyle': glassStyle,
       'fontFamily': fontFamily,
       'borderRadius': borderRadius,
+      'width': width,
+      'selfAlign': selfAlign,
     };
   }
 
@@ -267,6 +294,8 @@ class SlideBlock {
       glassStyle: map['glassStyle']?.toString(),
       fontFamily: map['fontFamily']?.toString(),
       borderRadius: (map['borderRadius'] as num?)?.toDouble(),
+      width: (map['width'] as num?)?.toDouble(),
+      selfAlign: map['selfAlign']?.toString(),
     );
   }
 

@@ -37,6 +37,11 @@ class _ContainerBlockEditorScreenState
   double _borderRadius = 14;
   double _padding = 14;
   double _margin = 6;
+  double _width = 100;
+  double _minHeight = 0;
+  String _horizontalAlign = 'left';
+  String _verticalAlign = 'top';
+  String _selfAlign = 'center';
 
   @override
   void initState() {
@@ -48,6 +53,11 @@ class _ContainerBlockEditorScreenState
     _borderRadius = widget.block.borderRadius ?? 14;
     _padding = widget.block.padding ?? 14;
     _margin = widget.block.marginVertical ?? 6;
+    _width = (widget.block.width ?? 1.0) * 100;
+    _minHeight = widget.block.minHeight ?? 0;
+    _horizontalAlign = widget.block.horizontalAlign ?? 'left';
+    _verticalAlign = widget.block.verticalAlign ?? 'top';
+    _selfAlign = widget.block.selfAlign ?? 'center';
   }
 
   List<SlideBlock> _parseChildren(String content) {
@@ -76,6 +86,13 @@ class _ContainerBlockEditorScreenState
         borderRadius: _borderRadius,
         padding: _padding,
         marginVertical: _margin,
+        width: _width >= 100 ? null : _width / 100,
+        clearWidth: _width >= 100,
+        minHeight: _minHeight <= 0 ? null : _minHeight,
+        clearMinHeight: _minHeight <= 0,
+        horizontalAlign: _horizontalAlign,
+        verticalAlign: _verticalAlign,
+        selfAlign: _selfAlign,
       ),
     );
   }
@@ -191,6 +208,18 @@ class _ContainerBlockEditorScreenState
               onPaddingChanged: (val) => setState(() => _padding = val),
               margin: _margin,
               onMarginChanged: (val) => setState(() => _margin = val),
+              width: _width,
+              onWidthChanged: (val) => setState(() => _width = val),
+              minHeight: _minHeight,
+              onMinHeightChanged: (val) => setState(() => _minHeight = val),
+              horizontalAlign: _horizontalAlign,
+              onHorizontalAlignChanged: (val) =>
+                  setState(() => _horizontalAlign = val),
+              verticalAlign: _verticalAlign,
+              onVerticalAlignChanged: (val) =>
+                  setState(() => _verticalAlign = val),
+              selfAlign: _selfAlign,
+              onSelfAlignChanged: (val) => setState(() => _selfAlign = val),
             ),
             const SizedBox(height: 16),
             const Divider(),

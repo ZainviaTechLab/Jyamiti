@@ -527,7 +527,12 @@ void main() {
             "borderWidth": 2.0,
             "borderRadius": 20.0,
             "padding": 18.0,
-            "marginVertical": 10.0
+            "marginVertical": 10.0,
+            "width": 0.75,
+            "minHeight": 200.0,
+            "horizontalAlign": "center",
+            "verticalAlign": "center",
+            "selfAlign": "right"
           }
         ]
       }
@@ -542,6 +547,11 @@ void main() {
       expect(block.borderRadius, 20.0);
       expect(block.padding, 18.0);
       expect(block.marginVertical, 10.0);
+      expect(block.width, 0.75);
+      expect(block.minHeight, 200.0);
+      expect(block.horizontalAlign, 'center');
+      expect(block.verticalAlign, 'center');
+      expect(block.selfAlign, 'right');
     });
 
     test('parses a container block holding a flat list of mixed children',
