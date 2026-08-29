@@ -810,6 +810,9 @@ class SlideJsonHelper {
               "borderWidth": 1.5,
               "borderRadius": 18.0,
               "padding": 16.0,
+              "minHeight": 160.0,
+              "horizontalAlign": "center",
+              "verticalAlign": "center",
               "children": [
                 {
                   "type": "subheading",
@@ -1011,6 +1014,8 @@ class SlideJsonHelper {
                 "borderWidth": 1.5,
                 "borderRadius": 18.0,
                 "padding": 16.0,
+                "width": 0.85,
+                "selfAlign": "center",
                 "children": [
                   {
                     "type": "subheading",
