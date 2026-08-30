@@ -110,6 +110,27 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
     _onJsonTextChanged();
   }
 
+  /// Copies (doesn't load into the editor -- see the button's own doc
+  /// comment) the PPTX-to-slide-JSON conversion prompt to the clipboard.
+  Future<void> _copyPptxConversionPrompt() async {
+    await Clipboard.setData(
+      ClipboardData(text: SlideJsonHelper.pptxConversionPrompt),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Conversion prompt copied! Paste it into ChatGPT/Claude/etc. '
+          'along with your PPTX content, then paste the JSON it gives '
+          'back into the box on the left.',
+        ),
+        backgroundColor: Color(0xFF10B981),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 5),
+      ),
+    );
+  }
+
   Future<void> _pickJsonFile() async {
     setState(() => _isLoadingFile = true);
     try {
@@ -150,7 +171,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
   }
 
   void _onConfirmImport() {
-    if (_parseResult == null || !_parseResult!.isSuccess || _parseResult!.slides.isEmpty) {
+    if (_parseResult == null ||
+        !_parseResult!.isSuccess ||
+        _parseResult!.slides.isEmpty) {
       return;
     }
 
@@ -160,7 +183,8 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
       deckTitle: _parseResult!.deckTitle,
       deckDescription: _parseResult!.deckDescription,
       courseName: _parseResult!.courseName,
-      updateDeckMetadata: _updateDeckMetadata && _parseResult!.deckTitle != null,
+      updateDeckMetadata:
+          _updateDeckMetadata && _parseResult!.deckTitle != null,
     );
 
     Navigator.pop(context, result);
@@ -219,7 +243,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                         'Import a single slide, multiple slides, or a full course deck structure.',
                         style: TextStyle(
                           fontSize: 12,
-                          color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                          color: isDark
+                              ? Colors.grey.shade400
+                              : Colors.grey.shade600,
                         ),
                       ),
                     ],
@@ -236,7 +262,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
             // Tabs
             Container(
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                color: isDark
+                    ? const Color(0xFF1E293B)
+                    : const Color(0xFFF1F5F9),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: TabBar(
@@ -246,10 +274,18 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                   color: const Color(0xFF6366F1),
                 ),
                 labelColor: Colors.white,
-                unselectedLabelColor: isDark ? Colors.grey.shade400 : Colors.grey.shade700,
+                unselectedLabelColor: isDark
+                    ? Colors.grey.shade400
+                    : Colors.grey.shade700,
                 tabs: const [
-                  Tab(icon: Icon(Icons.edit_note_rounded, size: 18), text: 'Paste JSON Text'),
-                  Tab(icon: Icon(Icons.file_upload_outlined, size: 18), text: 'Upload JSON File'),
+                  Tab(
+                    icon: Icon(Icons.edit_note_rounded, size: 18),
+                    text: 'Paste JSON Text',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.file_upload_outlined, size: 18),
+                    text: 'Upload JSON File',
+                  ),
                 ],
               ),
             ),
@@ -296,70 +332,125 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
   Widget _buildPasteTab(bool isDark) {
     return Column(
       children: [
-        // Quick Action Bar for Editor
-        Row(
-          children: [
-            OutlinedButton.icon(
-              onPressed: _pasteFromClipboard,
-              icon: const Icon(Icons.content_paste_rounded, size: 15),
-              label: const Text('Paste Clipboard', style: TextStyle(fontSize: 12)),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              ),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: _beautifyJson,
-              icon: const Icon(Icons.auto_fix_high_rounded, size: 15),
-              label: const Text('Format / Beautify', style: TextStyle(fontSize: 12)),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              ),
-            ),
-            const Spacer(),
-            PopupMenuButton<String>(
-              tooltip: 'Load Sample Template',
-              onSelected: _loadSample,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6366F1).withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.3)),
+        // Quick Action Bar for Editor -- horizontally scrollable, since
+        // the left panel (flex: 6 of a dialog that clamps as narrow as
+        // 550px) isn't wide enough to fit every button on one line once
+        // "Copy Conversion Prompt" joined the original 3 -- a plain Row
+        // overflowed on the right instead of just scrolling to reach it.
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _pasteFromClipboard,
+                icon: const Icon(Icons.content_paste_rounded, size: 15),
+                label: const Text(
+                  'Paste Clipboard',
+                  style: TextStyle(fontSize: 12),
                 ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.lightbulb_outline_rounded, size: 14, color: Color(0xFF818CF8)),
-                    SizedBox(width: 6),
-                    Text(
-                      'Load Sample',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF818CF8),
-                        fontWeight: FontWeight.w600,
-                      ),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _beautifyJson,
+                icon: const Icon(Icons.auto_fix_high_rounded, size: 15),
+                label: const Text(
+                  'Format / Beautify',
+                  style: TextStyle(fontSize: 12),
+                ),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              PopupMenuButton<String>(
+                tooltip: 'Load Sample Template',
+                onSelected: _loadSample,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6366F1).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFF6366F1).withOpacity(0.3),
                     ),
-                    Icon(Icons.arrow_drop_down, size: 16, color: Color(0xFF818CF8)),
-                  ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.lightbulb_outline_rounded,
+                        size: 14,
+                        color: Color(0xFF818CF8),
+                      ),
+                      SizedBox(width: 6),
+                      Text(
+                        'Load Sample',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF818CF8),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Icon(
+                        Icons.arrow_drop_down,
+                        size: 16,
+                        color: Color(0xFF818CF8),
+                      ),
+                    ],
+                  ),
+                ),
+                itemBuilder: (ctx) => [
+                  PopupMenuItem(
+                    value: SlideJsonHelper.sampleSingleSlideJson,
+                    child: const Text('Single Slide (Math + Quiz)'),
+                  ),
+                  PopupMenuItem(
+                    value: SlideJsonHelper.sampleMultiSlideJson,
+                    child: const Text('Multi-Slide Array (2 Slides)'),
+                  ),
+                  PopupMenuItem(
+                    value: SlideJsonHelper.sampleFullDeckJson,
+                    child: const Text('Full Course Slide Deck'),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 8),
+              // Copies (not loads into the editor -- this is instructions
+              // for an external AI tool, not app JSON) a ready-made prompt
+              // for converting an existing presentation (PPTX or otherwise)
+              // into this exact slide JSON format. Workflow: tap this, paste
+              // the prompt plus the PPTX content into ChatGPT/Claude/etc.,
+              // then paste ITS json output into the Paste JSON tab here.
+              OutlinedButton.icon(
+                onPressed: _copyPptxConversionPrompt,
+                icon: const Icon(Icons.smart_toy_outlined, size: 15),
+                label: const Text(
+                  'Copy Conversion Prompt',
+                  style: TextStyle(fontSize: 12),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF10B981),
+                  side: const BorderSide(color: Color(0xFF10B981)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                 ),
               ),
-              itemBuilder: (ctx) => [
-                PopupMenuItem(
-                  value: SlideJsonHelper.sampleSingleSlideJson,
-                  child: const Text('Single Slide (Math + Quiz)'),
-                ),
-                PopupMenuItem(
-                  value: SlideJsonHelper.sampleMultiSlideJson,
-                  child: const Text('Multi-Slide Array (2 Slides)'),
-                ),
-                PopupMenuItem(
-                  value: SlideJsonHelper.sampleFullDeckJson,
-                  child: const Text('Full Course Slide Deck'),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
         const SizedBox(height: 8),
 
@@ -370,7 +461,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
               color: isDark ? const Color(0xFF030712) : const Color(0xFFF8FAFC),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isDark ? const Color(0xFF1F2937) : const Color(0xFFCBD5E1),
+                color: isDark
+                    ? const Color(0xFF1F2937)
+                    : const Color(0xFFCBD5E1),
               ),
             ),
             child: TextField(
@@ -380,11 +473,14 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
               style: TextStyle(
                 fontFamily: 'Courier',
                 fontSize: 12.5,
-                color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
+                color: isDark
+                    ? const Color(0xFFE2E8F0)
+                    : const Color(0xFF1E293B),
                 height: 1.45,
               ),
               decoration: InputDecoration(
-                hintText: '{\n  "title": "Slide Title",\n  "blocks": [\n    {\n      "type": "heading",\n      "content": "..." \n    }\n  ]\n}',
+                hintText:
+                    '{\n  "title": "Slide Title",\n  "blocks": [\n    {\n      "type": "heading",\n      "content": "..." \n    }\n  ]\n}',
                 hintStyle: TextStyle(
                   color: isDark ? Colors.grey.shade700 : Colors.grey.shade400,
                   fontFamily: 'Courier',
@@ -449,7 +545,10 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                 if (_selectedFileName != null) ...[
                   const SizedBox(height: 16),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFF10B981).withOpacity(0.15),
                       borderRadius: BorderRadius.circular(20),
@@ -458,7 +557,11 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.check_circle_rounded, size: 16, color: Color(0xFF10B981)),
+                        const Icon(
+                          Icons.check_circle_rounded,
+                          size: 16,
+                          color: Color(0xFF10B981),
+                        ),
                         const SizedBox(width: 6),
                         Text(
                           _selectedFileName!,
@@ -517,7 +620,8 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
           ),
           _buildPlacementTile(
             title: 'Insert After Active Slide',
-            subtitle: 'Insert right after slide #${widget.activeSlideIndex + 1}',
+            subtitle:
+                'Insert right after slide #${widget.activeSlideIndex + 1}',
             value: SlideImportPlacement.insertAfterActive,
             icon: Icons.add_to_photos_rounded,
           ),
@@ -545,7 +649,8 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                 style: const TextStyle(fontSize: 12),
               ),
               value: _updateDeckMetadata,
-              onChanged: (val) => setState(() => _updateDeckMetadata = val ?? true),
+              onChanged: (val) =>
+                  setState(() => _updateDeckMetadata = val ?? true),
               controlAffinity: ListTileControlAffinity.leading,
             ),
           ],
@@ -564,9 +669,7 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
           ),
           const SizedBox(height: 6),
 
-          Expanded(
-            child: _buildSlidesPreviewList(isDark),
-          ),
+          Expanded(child: _buildSlidesPreviewList(isDark)),
         ],
       ),
     );
@@ -604,7 +707,11 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.error_outline_rounded, size: 16, color: Colors.redAccent),
+            const Icon(
+              Icons.error_outline_rounded,
+              size: 16,
+              color: Colors.redAccent,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -618,7 +725,10 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
     }
 
     final slideCount = _parseResult!.slides.length;
-    final totalBlocks = _parseResult!.slides.fold<int>(0, (sum, s) => sum + s.blocks.length);
+    final totalBlocks = _parseResult!.slides.fold<int>(
+      0,
+      (sum, s) => sum + s.blocks.length,
+    );
     final quizCount = _parseResult!.slides.where((s) => s.quiz != null).length;
 
     return Container(
@@ -630,7 +740,11 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
       ),
       child: Row(
         children: [
-          const Icon(Icons.check_circle_rounded, size: 18, color: Color(0xFF10B981)),
+          const Icon(
+            Icons.check_circle_rounded,
+            size: 18,
+            color: Color(0xFF10B981),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -675,7 +789,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
           color: isSelected
-              ? (isDestructive ? Colors.red.withOpacity(0.12) : const Color(0xFF6366F1).withOpacity(0.15))
+              ? (isDestructive
+                    ? Colors.red.withOpacity(0.12)
+                    : const Color(0xFF6366F1).withOpacity(0.15))
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
@@ -702,9 +818,13 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                     title,
                     style: TextStyle(
                       fontSize: 12,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      fontWeight: isSelected
+                          ? FontWeight.bold
+                          : FontWeight.normal,
                       color: isSelected
-                          ? (isDestructive ? Colors.redAccent : const Color(0xFF818CF8))
+                          ? (isDestructive
+                                ? Colors.redAccent
+                                : const Color(0xFF818CF8))
                           : null,
                     ),
                   ),
@@ -718,7 +838,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
             Radio<SlideImportPlacement>(
               value: value,
               groupValue: _placement,
-              activeColor: isDestructive ? Colors.redAccent : const Color(0xFF6366F1),
+              activeColor: isDestructive
+                  ? Colors.redAccent
+                  : const Color(0xFF6366F1),
               onChanged: (val) {
                 if (val != null) setState(() => _placement = val);
               },
@@ -730,7 +852,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
   }
 
   Widget _buildSlidesPreviewList(bool isDark) {
-    if (_parseResult == null || !_parseResult!.isSuccess || _parseResult!.slides.isEmpty) {
+    if (_parseResult == null ||
+        !_parseResult!.isSuccess ||
+        _parseResult!.slides.isEmpty) {
       return Center(
         child: Text(
           'No slides parsed yet.',
@@ -771,7 +895,10 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
                   children: [
                     Text(
                       slide.title,
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -784,7 +911,10 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
               ),
               if (slide.quiz != null)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0EA5E9).withOpacity(0.2),
                     borderRadius: BorderRadius.circular(4),
@@ -806,7 +936,10 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
   }
 
   Widget _buildFooter(bool isDark) {
-    final canImport = _parseResult != null && _parseResult!.isSuccess && _parseResult!.slides.isNotEmpty;
+    final canImport =
+        _parseResult != null &&
+        _parseResult!.isSuccess &&
+        _parseResult!.slides.isNotEmpty;
     final slideCount = _parseResult?.slides.length ?? 0;
 
     return Row(
@@ -829,7 +962,9 @@ class _SlideJsonImportDialogState extends State<SlideJsonImportDialog>
             foregroundColor: Colors.white,
             disabledBackgroundColor: Colors.grey.withOpacity(0.3),
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
           ),
         ),
       ],

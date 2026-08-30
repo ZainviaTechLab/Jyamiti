@@ -1149,4 +1149,156 @@ class SlideJsonHelper {
       },
     ],
   });
+
+  /// A ready-to-copy prompt for an external AI chat tool (ChatGPT, Claude,
+  /// etc.) that converts an existing presentation (PPTX or otherwise) into
+  /// this app's slide JSON format -- the "Copy Conversion Prompt" button
+  /// next to "Load Sample" in SlideJsonImportDialog copies this to the
+  /// clipboard so a tutor can paste it alongside their PPTX content into
+  /// an AI tool, then paste the JSON result it produces back into the
+  /// Paste JSON tab here. Deliberately just a big block of instructional
+  /// text, not app JSON itself -- kept in this file (rather than inline
+  /// in the dialog widget) purely to keep that widget file from being
+  /// dominated by a multi-thousand-character string literal, the same
+  /// reasoning as the sample*Json getters above.
+  static String get pptxConversionPrompt => r'''
+You are converting a PowerPoint presentation into a specific JSON format used by a math-tutoring app's slide CMS. Output ONLY valid JSON — no markdown code fences, no commentary before or after, no trailing commas.
+
+=== OUTPUT SHAPE ===
+Return a JSON ARRAY, one object per PPTX slide, in slide order:
+
+[
+  { "title": "...", "theme": "...", "blocks": [ ...block objects... ] },
+  { "title": "...", "theme": "...", "blocks": [ ...block objects... ] }
+]
+
+Each slide object:
+- "title" (string, required) — a short slide title, even if the PPTX slide has no explicit title text (summarize it).
+- "theme" (string, optional) — one of: darkGlass, jyamitiCosmos, midnightNeon, emeraldSlate, sunsetViolet, cleanLight. Pick one that suits the content; darkGlass is a safe default.
+- "blocks" (array, required) — the slide's content, as block objects (see below), in visual top-to-bottom order.
+
+=== BLOCK OBJECT SHAPE ===
+Every block is: { "type": "...", "content": "...", ...optional fields }
+
+"type" must be one of these 16 values, and "content" means something different per type:
+
+| type          | what "content" holds                                                              | notes |
+|---------------|-------------------------------------------------------------------------------------|-------|
+| heading       | main heading text                                                                   | use for the slide's H1-level title text |
+| subheading    | secondary heading text                                                              | |
+| paragraph     | a plain paragraph of text                                                           | |
+| text          | short styled text (a label/note), supports bold/italic/underline (see below)        | use for short callout-style text, not paragraphs |
+| bulletList    | list items joined with "\n" (one item per line)                                     | set "extra": "bullet" or "numbered" (default bullet) |
+| callout       | a highlighted note/tip/warning box                                                  | set "extra": "info" | "tip" | "warning" |
+| code          | source code text                                                                    | set "extra" to the language, e.g. "python" |
+| math          | a math expression/equation as plain text, e.g. "a^2 + b^2 = c^2"                    | LaTeX-ish is fine, plain text preferred for simple equations |
+| imageUrl      | a fully-qualified image URL                                                         | see IMAGES note below — do NOT invent fake URLs |
+| svg           | raw inline `<svg>...</svg>` markup                                                  | only if you're generating an actual diagram |
+| table         | leave "content" as "" and instead add top-level "headers": [...], "rows": [[...],...] | see TABLE example below |
+| video         | leave "content" as "" and add "videoUrl": "..." instead                             | only if a real video URL is known |
+| card          | body text; "caption" is the card's title                                            | a distinct highlighted box, e.g. for a key formula |
+| columns       | leave "content" as "" and add "columns": [[block,...], [block,...]]                 | array of columns, each a list of nested block objects (side-by-side layout) |
+| container     | leave "content" as "" and add "children": [block, block, ...]                       | a flat list of nested block objects, wrapped in one decorated box |
+| banner        | a highlighted title/callout banner spanning the slide width                         | good for a module/section-opener slide |
+
+Optional per-block styling fields (add only when it genuinely helps, otherwise omit — omitted means "use default"):
+- "caption" (string) — used by card (title) and imageUrl (image caption).
+- "textColor", "backgroundColor", "borderColor" — hex strings WITHOUT '#', e.g. "6366F1" (6-digit) or "FF6366F1" (8-digit with alpha).
+- "borderWidth", "borderRadius", "padding", "marginVertical", "fontSize", "minHeight", "width" — numbers. "width" is a 0.0–1.0 fraction of slide width (only set if you want a narrower box).
+- "horizontalAlign" / "verticalAlign" — "left"|"center"|"right" / "top"|"center"|"bottom" (positions content WITHIN a box).
+- "selfAlign" — "left"|"center"|"right" (positions the box itself, only meaningful if "width" < 1.0).
+- "bold" / "italic" / "underline" / "strikethrough" — booleans, mainly for "text" blocks.
+
+=== TABLE EXAMPLE ===
+{ "type": "table", "headers": ["Term", "Meaning"], "rows": [["Even number", "Divisible by 2"], ["Odd number", "Not divisible by 2"]] }
+
+=== CONTAINER EXAMPLE (a boxed recap, narrower than full width, centered on the slide) ===
+{
+  "type": "container",
+  "backgroundColor": "331E293B", "borderColor": "FFA78BFA", "borderRadius": 18, "padding": 16,
+  "width": 0.8, "selfAlign": "center",
+  "horizontalAlign": "center", "verticalAlign": "center", "minHeight": 160,
+  "selfAlignVertical": "center",
+  "children": [
+    { "type": "subheading", "content": "Quick Recap" },
+    { "type": "bulletList", "content": "Point one\nPoint two", "extra": "bullet" }
+  ]
+}
+
+=== VISUAL FIDELITY — MATCH THE ORIGINAL SLIDE EXACTLY ===
+Don't just capture the "idea" of a slide — reproduce it as faithfully as possible: same visual elements, same layout/positions, same labels and numbers, same colors where identifiable, same emphasis (bold/highlighted parts), in the same order they appear on the original slide. Do not simplify, paraphrase, or drop visual details to make conversion easier. If the original slide had 3 labeled arrows pointing at 3 parts of a number line, the SVG must have all 3 arrows at the correct positions with the correct labels — not "an arrow" as a stand-in.
+
+=== DIAGRAMS: REDRAW AS SVG, DITTO SAME AS THE ORIGINAL ===
+Any diagram, chart, number line, geometric figure, or drawn illustration on a slide must be redrawn as inline SVG that looks AS CLOSE AS POSSIBLE to the original — not a rough approximation. Match:
+- The exact layout/positions of every element (don't rearrange or center things that were off-center in the original).
+- Every label, number, and piece of text shown on the diagram, in the same position relative to the shapes.
+- The number of shapes/points/arrows/segments — if the original shows 7 tick marks, draw 7 tick marks, not "a few."
+- Relative proportions and spacing (a number line spanning -10 to 10 should have evenly spaced, correctly proportioned ticks, not a stylized guess).
+- Colors, where the original used color meaningfully (e.g. red for negative, green for positive) — reproduce that color coding.
+
+Example (number line from -5 to 5, matching this exact structure):
+{
+  "type": "svg",
+  "content": "<svg viewBox='0 0 500 120' xmlns='http://www.w3.org/2000/svg'><rect width='500' height='120' fill='#0b2240' rx='12'/><line x1='40' y1='60' x2='460' y2='60' stroke='#818cf8' stroke-width='3'/><circle cx='250' cy='60' r='6' fill='#38bdf8'/><text x='250' y='40' fill='#ffffff' font-size='16' text-anchor='middle'>0</text><text x='40' y='40' fill='#ffffff' font-size='16' text-anchor='middle'>-5</text><text x='460' y='40' fill='#ffffff' font-size='16' text-anchor='middle'>5</text></svg>",
+  "extra": "boxed"
+}
+
+Technical rules (unchanged): viewBox roughly 400-600 wide x 150-300 tall, self-contained (no external fonts/images/CSS classes), dark background rect with light strokes/text to match the dark slide theme, "extra": "boxed" to render with a border.
+
+Take the time to actually count and place every element correctly — a diagram that's "close enough" but missing labels or mispositioned elements is not acceptable; it should be recognizably the SAME diagram, not a redrawn approximation of it.
+
+ONLY fall back to a placeholder callout (below) when it's a genuine photograph/screenshot with no line-art structure to trace at all — every drawn diagram, chart, or geometric figure should be redrawn in full, matching detail.
+
+=== PHOTOS/SCREENSHOTS (truly can't be redrawn) ===
+For an actual photo or screenshot with no vector structure, and no real hosted URL exists, skip the imageUrl block and add a placeholder callout instead:
+{ "type": "callout", "content": "[Image placeholder: description of what was here]", "extra": "info" }
+Never invent a fake image URL — it will render as a broken image.
+
+
+=== FULL WORKED EXAMPLE ===
+[
+  {
+    "title": "What is Place Value?",
+    "theme": "darkGlass",
+    "blocks": [
+      { "type": "heading", "content": "What is Place Value?" },
+      { "type": "paragraph", "content": "Every digit in a number has a place value based on its position." },
+      {
+        "type": "table",
+        "headers": ["Number", "Thousands", "Hundreds", "Tens", "Ones"],
+        "rows": [["3,482", "3", "4", "8", "2"]]
+      },
+      {
+        "type": "callout",
+        "content": "The same digit can have a different value depending on where it sits in the number.",
+        "extra": "tip"
+      }
+    ]
+  },
+  {
+    "title": "Even and Odd Numbers",
+    "theme": "darkGlass",
+    "blocks": [
+      { "type": "heading", "content": "Even and Odd Numbers" },
+      {
+        "type": "bulletList",
+        "content": "Even numbers end in 0, 2, 4, 6, or 8\nOdd numbers end in 1, 3, 5, 7, or 9\nZero is an even number",
+        "extra": "bullet"
+      },
+      { "type": "math", "content": "12 = 2 x 6  (even)" },
+      {
+        "type": "container",
+        "backgroundColor": "331E293B", "borderColor": "FFA78BFA", "borderRadius": 18, "padding": 16,
+        "children": [
+          { "type": "subheading", "content": "Quick Recap" },
+          { "type": "bulletList", "content": "Look at the last digit\nEven -> 0,2,4,6,8\nOdd -> 1,3,5,7,9" }
+        ]
+      }
+    ]
+  }
+]
+
+=== NOW CONVERT ===
+Convert the following PowerPoint content (attached / pasted below) into this exact JSON array format, following every rule above. Output ONLY the JSON array, nothing else.
+''';
 }

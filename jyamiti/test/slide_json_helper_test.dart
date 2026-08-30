@@ -746,5 +746,22 @@ void main() {
       expect(result.isSuccess, isTrue);
       expect(result.slides.first.blocks.first.type, SlideBlockType.text);
     });
+
+    test(
+      'pptxConversionPrompt is non-empty instructional text, not app JSON',
+      () {
+        final prompt = SlideJsonHelper.pptxConversionPrompt;
+        expect(prompt, isNotEmpty);
+        // It's a prompt FOR converting to the JSON format, not JSON
+        // itself -- parsing it as a slide should fail cleanly rather
+        // than being silently accepted as some degenerate valid deck.
+        expect(SlideJsonHelper.parseJson(prompt).isSuccess, isFalse);
+        // Sanity-check it actually documents the block types it asks
+        // an AI to produce, rather than being some unrelated string.
+        expect(prompt, contains('"container"'));
+        expect(prompt, contains('"columns"'));
+        expect(prompt, contains('NOW CONVERT'));
+      },
+    );
   });
 }
