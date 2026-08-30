@@ -8,6 +8,20 @@ import ClassMeeting from './models/ClassMeeting.js';
 
 let io;
 
+// Compares a student's typed NUMERIC answer against the stored correct
+// answer. Both are stored/submitted as strings (correctAnswer can carry a
+// decimal), so this parses to Number and allows a tiny epsilon for
+// floating-point comparisons rather than doing a brittle string match
+// (" 18" vs "18", "18.0" vs "18", etc. should all count as correct).
+function numericAnswersMatch(submitted, correct) {
+  const a = parseFloat(submitted);
+  const b = parseFloat(correct);
+  if (Number.isNaN(a) || Number.isNaN(b)) {
+    return String(submitted).trim() === String(correct ?? '').trim();
+  }
+  return Math.abs(a - b) < 1e-9;
+}
+
 export const initSocket = async (httpServer) => {
   io = new Server(httpServer, {
     cors: {
@@ -103,11 +117,17 @@ export const initSocket = async (httpServer) => {
         competition.startedAt = new Date();
         await competition.save();
 
+        // Note: correctOptionIndex is included here for MCQ questions (this
+        // predates NUMERIC support and isn't fully tamper-proof either way,
+        // out of scope to harden here) but NUMERIC questions never send
+        // correctAnswer up front -- that would hand the typed answer to
+        // anyone glancing at the socket payload before answering.
         const formattedQuestions = competition.questions.map((q, idx) => ({
           id: q.id || `q_${idx}`,
           text: q.text,
+          answerType: q.answerType || 'MCQ',
           options: q.options,
-          correctOptionIndex: q.correctOptionIndex,
+          correctOptionIndex: q.answerType === 'NUMERIC' ? undefined : q.correctOptionIndex,
           explanation: q.explanation,
           category: q.category,
           subtopic: q.subtopic
@@ -129,7 +149,7 @@ export const initSocket = async (httpServer) => {
       }
     });
 
-    socket.on('competition:submit_answer', async ({ roomCode, userId, roundIndex, selectedOptionIndex, timeTakenSec }) => {
+    socket.on('competition:submit_answer', async ({ roomCode, userId, roundIndex, selectedOptionIndex, answerText, timeTakenSec }) => {
       try {
         const code = roomCode.toUpperCase();
         const competition = await Competition.findOne({ roomCode: code });
@@ -146,7 +166,11 @@ export const initSocket = async (httpServer) => {
         // Check if student already answered this round
         const existingResp = participant.responseHistory.find(r => r.roundIndex === rIdx);
         if (!existingResp) {
-          const isCorrect = (selectedOptionIndex === question.correctOptionIndex);
+          const isNumeric = question.answerType === 'NUMERIC';
+          const submittedText = isNumeric ? String(answerText ?? '').trim() : '';
+          const isCorrect = isNumeric
+            ? submittedText !== '' && numericAnswersMatch(submittedText, question.correctAnswer)
+            : (selectedOptionIndex === question.correctOptionIndex);
           let pointsEarned = 0;
 
           if (isCorrect) {
@@ -165,7 +189,7 @@ export const initSocket = async (httpServer) => {
           participant.responseHistory.push({
             roundIndex: rIdx,
             questionId: question.id,
-            selectedOption: question.options[selectedOptionIndex] || '',
+            selectedOption: isNumeric ? submittedText : (question.options[selectedOptionIndex] || ''),
             isCorrect,
             timeTakenSec: timeTakenSec || 0,
             pointsEarned
@@ -258,7 +282,9 @@ export const initSocket = async (httpServer) => {
         io.to(code).emit('competition:round_ended', {
           roomCode: code,
           roundIndex: competition.currentRoundIndex,
+          answerType: currentQ ? (currentQ.answerType || 'MCQ') : 'MCQ',
           correctOptionIndex: currentQ ? currentQ.correctOptionIndex : 0,
+          correctAnswer: currentQ && currentQ.answerType === 'NUMERIC' ? currentQ.correctAnswer : undefined,
           explanation: currentQ ? currentQ.explanation : '',
           isLastRound,
           leaderboard: competition.participants.map(p => ({
@@ -297,6 +323,7 @@ export const initSocket = async (httpServer) => {
           question: {
             id: q.id || `q_${nextRound}`,
             text: q.text,
+            answerType: q.answerType || 'MCQ',
             options: q.options,
             category: q.category,
             subtopic: q.subtopic

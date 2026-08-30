@@ -172,7 +172,7 @@ router.get('/batch/:batchId/topics', authenticateToken, async (req, res) => {
 // 1. Create a new Live Competition Arena Room
 router.post('/create', authenticateToken, requireRole(['tutor', 'admin']), async (req, res) => {
   try {
-    const { title, batchId, grade, timePerQuestion, numberOfRounds, roundDurationMinutes, selectedTopics, questionCount, questions } = req.body;
+    const { title, batchId, grade, timePerQuestion, numberOfRounds, roundDurationMinutes, selectedTopics, questionCount, questions, mode } = req.body;
 
     if (!title || !batchId) {
       return res.status(400).json({ message: 'Title and batchId are required.' });
@@ -194,16 +194,23 @@ router.post('/create', authenticateToken, requireRole(['tutor', 'admin']), async
     // Prepare questions list
     let formattedQuestions = [];
     if (questions && Array.isArray(questions) && questions.length > 0) {
-      formattedQuestions = questions.map((q, idx) => ({
-        id: q.id || `q_${idx}_${Date.now()}`,
-        text: q.text || q.questionText || 'Solve the equation',
-        options: q.options || q.choices || ['Option A', 'Option B', 'Option C', 'Option D'],
-        correctOptionIndex: q.correctOptionIndex !== undefined ? q.correctOptionIndex : (q.correctAnswerIndex || 0),
-        explanation: q.explanation || '',
-        category: q.category || q.topic || 'Mathematics',
-        subtopic: q.subtopic || '',
-        points: q.points || 1000
-      }));
+      formattedQuestions = questions.map((q, idx) => {
+        const isNumeric = q.answerType === 'NUMERIC';
+        return {
+          id: q.id || `q_${idx}_${Date.now()}`,
+          text: q.text || q.questionText || 'Solve the equation',
+          answerType: isNumeric ? 'NUMERIC' : 'MCQ',
+          options: isNumeric ? [] : (q.options || q.choices || ['Option A', 'Option B', 'Option C', 'Option D']),
+          correctOptionIndex: isNumeric
+            ? undefined
+            : (q.correctOptionIndex !== undefined ? q.correctOptionIndex : (q.correctAnswerIndex || 0)),
+          correctAnswer: isNumeric ? String(q.correctAnswer ?? '') : undefined,
+          explanation: q.explanation || '',
+          category: q.category || q.topic || 'Mathematics',
+          subtopic: q.subtopic || '',
+          points: q.points || 1000
+        };
+      });
     } else {
       // 1. Fetch practice questions from course syllabus matching selected topics
       const batch = await Batch.findById(batchId).populate('course');
@@ -291,6 +298,7 @@ router.post('/create', authenticateToken, requireRole(['tutor', 'admin']), async
       batchId,
       tutorId: req.user.id,
       grade: grade || 10,
+      mode: mode === 'MATH_FUNDAMENTALS' ? 'MATH_FUNDAMENTALS' : 'SYLLABUS',
       numberOfRounds: rounds,
       roundDurationMinutes: durationMinutes,
       timePerQuestion: calculatedTimePerQuestion,

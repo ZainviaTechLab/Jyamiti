@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
@@ -8,6 +9,82 @@ import '../../../../services/competition_service.dart';
 import '../../../../services/api_service.dart';
 import '../../../../widgets/latex_rich_text.dart';
 import 'competition_analytics_dashboard_screen.dart';
+
+// ==========================================
+// MATH FUNDAMENTALS (99math-style arithmetic drills) generation
+// ==========================================
+// Kept file-scoped (not instance methods) since none of this needs
+// context/setState -- it's pure number generation shared by the live
+// "Example Problems" preview and the actual questions sent at creation.
+
+class _NumRange {
+  final num min;
+  final num max;
+  const _NumRange(this.min, this.max);
+}
+
+/// Preset range chips, in display order. Keys double as their labels.
+const Map<String, _NumRange> kMathFundamentalsRangePresets = {
+  '1...10': _NumRange(1, 10),
+  '1...20': _NumRange(1, 20),
+  '10...20': _NumRange(10, 20),
+  '20...100': _NumRange(20, 100),
+  '100...1000': _NumRange(100, 1000),
+};
+
+class MathFundamentalsProblem {
+  final num a;
+  final num b;
+  final num answer;
+  final String text;
+  MathFundamentalsProblem(this.a, this.b)
+      : answer = a + b,
+        text = '${formatMathNumber(a)} + ${formatMathNumber(b)}';
+}
+
+/// Renders a number the way a student should see it: whole numbers with no
+/// trailing ".0", decimals trimmed of trailing zeros (18.50 -> "18.5").
+String formatMathNumber(num n) {
+  if (n == n.roundToDouble()) return n.toInt().toString();
+  var s = n.toStringAsFixed(2);
+  s = s.replaceFirst(RegExp(r'0+$'), '');
+  s = s.replaceFirst(RegExp(r'\.$'), '');
+  return s;
+}
+
+final Random _mathFundamentalsRandom = Random();
+
+num _randomNumberInRanges(
+  List<_NumRange> ranges, {
+  required bool isDecimal,
+  int? multipleOf,
+}) {
+  final range = ranges[_mathFundamentalsRandom.nextInt(ranges.length)];
+  if (multipleOf != null && multipleOf > 1) {
+    final lo = (range.min / multipleOf).ceil();
+    final hi = (range.max / multipleOf).floor();
+    if (hi < lo) return (range.min / multipleOf).round() * multipleOf;
+    return (lo + _mathFundamentalsRandom.nextInt(hi - lo + 1)) * multipleOf;
+  }
+  if (isDecimal) {
+    final v = range.min + _mathFundamentalsRandom.nextDouble() * (range.max - range.min);
+    return double.parse(v.toStringAsFixed(1));
+  }
+  final lo = range.min.round();
+  final hi = range.max.round();
+  if (hi <= lo) return lo;
+  return lo + _mathFundamentalsRandom.nextInt(hi - lo + 1);
+}
+
+MathFundamentalsProblem generateAdditionProblem({
+  required List<_NumRange> ranges,
+  required bool isDecimal,
+  int? multipleOf,
+}) {
+  final a = _randomNumberInRanges(ranges, isDecimal: isDecimal, multipleOf: multipleOf);
+  final b = _randomNumberInRanges(ranges, isDecimal: isDecimal, multipleOf: multipleOf);
+  return MathFundamentalsProblem(a, b);
+}
 
 class TutorCompetitionHostScreen extends StatefulWidget {
   final Map<String, dynamic> batch;
@@ -53,6 +130,41 @@ class _TutorCompetitionHostScreenState
   Set<String> _selectedTopics = {};
   bool _isLoadingTopics = true;
 
+  // Math Fundamentals creation mode (99math-style arithmetic drills), an
+  // alternative to picking questions from the course syllabus above.
+  String _creationMode = 'SYLLABUS'; // 'SYLLABUS' | 'MATH_FUNDAMENTALS'
+  String _mfOperation = 'addition'; // only addition is implemented so far
+  String _mfSubtopic = 'integers'; // 'integers' | 'decimals'
+  String _mfSelectedPreset = '1...20';
+  bool _mfShowCustomize = false;
+  final List<_NumRange> _mfCustomRanges = [const _NumRange(1, 20)];
+  int? _mfMultipleOf; // null | 10 | 100 | 1000
+  MathFundamentalsProblem? _mfExampleProblem;
+
+  List<_NumRange> _mfEffectiveRanges() {
+    if (_mfShowCustomize) {
+      final valid = _mfCustomRanges.where((r) => r.max >= r.min).toList();
+      if (valid.isNotEmpty) return valid;
+    }
+    return [kMathFundamentalsRangePresets[_mfSelectedPreset] ?? const _NumRange(1, 20)];
+  }
+
+  /// Mutates _mfExampleProblem only -- callers already inside a setState
+  /// (e.g. a config chip's onTap) call this directly; _refreshExample
+  /// below wraps it in its own setState for standalone callers (the
+  /// "Show more" button).
+  void _regenerateExampleProblem() {
+    _mfExampleProblem = generateAdditionProblem(
+      ranges: _mfEffectiveRanges(),
+      isDecimal: _mfSubtopic == 'decimals',
+      multipleOf: _mfMultipleOf,
+    );
+  }
+
+  void _refreshExampleProblem() {
+    setState(_regenerateExampleProblem);
+  }
+
   List<String> get _availableTopicsForSelectedChapters {
     final Set<String> available = {};
     for (var chap in _chapters) {
@@ -77,6 +189,7 @@ class _TutorCompetitionHostScreenState
         ? (int.tryParse(widget.batch['grade'].toString().replaceAll(RegExp(r'\D'), '')) ?? 10)
         : 10;
     _loadBatchTopics();
+    _regenerateExampleProblem();
   }
 
   // Timer & Racetrack State
@@ -215,14 +328,44 @@ class _TutorCompetitionHostScreenState
 
     try {
       final batchId = widget.batch['id'] ?? widget.batch['_id'];
+
+      // Math Fundamentals questions are generated right here (client-side)
+      // rather than resolved server-side from selectedTopics -- there's no
+      // question bank to look up, just the tutor's chosen operation/range.
+      List<Map<String, dynamic>> generatedQuestions = [];
+      if (_creationMode == 'MATH_FUNDAMENTALS') {
+        final ranges = _mfEffectiveRanges();
+        final isDecimal = _mfSubtopic == 'decimals';
+        final subtopicLabel = 'Addition (${isDecimal ? 'Decimals' : 'Integers'})';
+        for (int i = 0; i < _numberOfRounds; i++) {
+          final problem = generateAdditionProblem(
+            ranges: ranges,
+            isDecimal: isDecimal,
+            multipleOf: _mfMultipleOf,
+          );
+          generatedQuestions.add({
+            'id': 'mf_${DateTime.now().millisecondsSinceEpoch}_$i',
+            'text': problem.text,
+            'answerType': 'NUMERIC',
+            'correctAnswer': formatMathNumber(problem.answer),
+            'category': 'Math Fundamentals',
+            'subtopic': subtopicLabel,
+            'points': 1000,
+          });
+        }
+      }
+
       final res = await CompetitionService.createCompetition(
         title: title,
         batchId: batchId.toString(),
         grade: _grade,
         numberOfRounds: _numberOfRounds,
         roundDurationMinutes: _roundDurationMinutes,
-        selectedTopics: _selectedTopics.toList(),
-        questions: [], // Auto-populated by server matching selected topics
+        selectedTopics: _creationMode == 'SYLLABUS' ? _selectedTopics.toList() : [],
+        // Auto-populated server-side from selectedTopics for SYLLABUS mode
+        // (empty list); pre-generated above for MATH_FUNDAMENTALS.
+        questions: generatedQuestions,
+        mode: _creationMode,
       );
 
       final created = res['competition'];
@@ -394,6 +537,12 @@ class _TutorCompetitionHostScreenState
               ),
               const SizedBox(height: 16),
 
+              // Question Source: pull from the course syllabus, or
+              // procedurally-generated arithmetic drills (Math Fundamentals)
+              _buildCreationModeSwitch(),
+              const SizedBox(height: 20),
+
+              if (_creationMode == 'SYLLABUS') ...[
               // Step 1: Select Chapter(s)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -607,6 +756,10 @@ class _TutorCompetitionHostScreenState
                 ),
                 const SizedBox(height: 16),
               ],
+              ] else ...[
+                _buildMathFundamentalsConfig(),
+              ],
+              const SizedBox(height: 16),
 
               // Number of Rounds Picker (3 / 5)
               Text(
@@ -716,6 +869,440 @@ class _TutorCompetitionHostScreenState
           ),
         ),
         ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Math Fundamentals creation UI
+  // ---------------------------------------------------------------------
+
+  Widget _buildCreationModeSwitch() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _modeTab('SYLLABUS', 'From Syllabus', Icons.menu_book_rounded),
+          ),
+          Expanded(
+            child: _modeTab(
+              'MATH_FUNDAMENTALS',
+              'Math Fundamentals',
+              Icons.calculate_rounded,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeTab(String mode, String label, IconData icon) {
+    final isSelected = _creationMode == mode;
+    return GestureDetector(
+      onTap: () => setState(() {
+        _creationMode = mode;
+        _regenerateExampleProblem();
+      }),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF6366F1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(11),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18, color: isSelected ? Colors.white : context.textColor60),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : context.textColor60,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Text(
+      text,
+      style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold, fontSize: 13),
+    );
+  }
+
+  Widget _buildMathFundamentalsConfig() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionLabel('Operation'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _operationChip('addition', 'Addition', Icons.add_rounded, enabled: true),
+            _operationChip('subtraction', 'Subtraction', Icons.remove_rounded, enabled: false),
+            _operationChip('multiplication', 'Multiplication', Icons.close_rounded, enabled: false),
+            _operationChip('division', 'Division', Icons.percent_rounded, enabled: false),
+          ],
+        ),
+        const SizedBox(height: 20),
+
+        _sectionLabel('Subtopic'),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _toggleButton('Integers', _mfSubtopic == 'integers', () {
+                setState(() {
+                  _mfSubtopic = 'integers';
+                  _regenerateExampleProblem();
+                });
+              }),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _toggleButton('Decimals', _mfSubtopic == 'decimals', () {
+                setState(() {
+                  _mfSubtopic = 'decimals';
+                  _regenerateExampleProblem();
+                });
+              }),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+
+        _sectionLabel('Number Range'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ...kMathFundamentalsRangePresets.keys.map((label) {
+              final isSelected = !_mfShowCustomize && _mfSelectedPreset == label;
+              return _rangeChip(label, isSelected, () {
+                setState(() {
+                  _mfSelectedPreset = label;
+                  _mfShowCustomize = false;
+                  _regenerateExampleProblem();
+                });
+              });
+            }),
+            _rangeChip(
+              'Customize',
+              _mfShowCustomize,
+              () {
+                setState(() {
+                  _mfShowCustomize = !_mfShowCustomize;
+                  _regenerateExampleProblem();
+                });
+              },
+              icon: _mfShowCustomize ? Icons.close_rounded : Icons.tune_rounded,
+            ),
+          ],
+        ),
+
+        if (_mfShowCustomize) ...[
+          const SizedBox(height: 16),
+          _buildCustomRangeEditor(),
+        ],
+
+        const SizedBox(height: 20),
+        _sectionLabel('Example Problems'),
+        const SizedBox(height: 8),
+        _buildExamplePreview(),
+      ],
+    );
+  }
+
+  Widget _operationChip(String key, String label, IconData icon, {required bool enabled}) {
+    final isSelected = enabled && _mfOperation == key;
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.45,
+      child: GestureDetector(
+        onTap: enabled
+            ? () => setState(() {
+                  _mfOperation = key;
+                  _regenerateExampleProblem();
+                })
+            : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? const Color(0xFF6366F1)
+                : (context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9)),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? const Color(0xFF6366F1) : context.glassBorder,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: isSelected ? Colors.white : context.textColor70),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : context.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+              if (!enabled) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: context.textColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    'Soon',
+                    style: TextStyle(
+                      color: context.textColor60,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _toggleButton(String label, bool isSelected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFFF59E0B)
+              : (context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9)),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFF59E0B) : context.glassBorder,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.white : context.textColor,
+            fontWeight: FontWeight.bold,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _rangeChip(String label, bool isSelected, VoidCallback onTap, {IconData? icon}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFFF59E0B)
+              : (context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9)),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFF59E0B) : context.glassBorder,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 14, color: isSelected ? Colors.white : context.textColor70),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : context.textColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCustomRangeEditor() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: context.glassBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Choose custom range(s)',
+            style: TextStyle(color: context.textColor70, fontWeight: FontWeight.bold, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          for (int i = 0; i < _mfCustomRanges.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _rangeBoundField(_mfCustomRanges[i].min, (v) {
+                      setState(() {
+                        _mfCustomRanges[i] = _NumRange(v, _mfCustomRanges[i].max);
+                        _regenerateExampleProblem();
+                      });
+                    }),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Text('to', style: TextStyle(color: context.textColor60, fontSize: 12)),
+                  ),
+                  Expanded(
+                    child: _rangeBoundField(_mfCustomRanges[i].max, (v) {
+                      setState(() {
+                        _mfCustomRanges[i] = _NumRange(_mfCustomRanges[i].min, v);
+                        _regenerateExampleProblem();
+                      });
+                    }),
+                  ),
+                  if (_mfCustomRanges.length > 1)
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 20),
+                      tooltip: 'Remove range',
+                      onPressed: () => setState(() {
+                        _mfCustomRanges.removeAt(i);
+                        _regenerateExampleProblem();
+                      }),
+                    ),
+                ],
+              ),
+            ),
+          TextButton.icon(
+            onPressed: () => setState(() {
+              _mfCustomRanges.add(const _NumRange(1, 20));
+            }),
+            icon: const Icon(Icons.add_circle_outline, size: 18),
+            label: const Text('Add another range'),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Whole tens, hundreds and thousands',
+            style: TextStyle(color: context.textColor70, fontWeight: FontWeight.bold, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              _multipleChip('x10', 10),
+              _multipleChip('x100', 100),
+              _multipleChip('x1000', 1000),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rangeBoundField(num value, ValueChanged<num> onChanged) {
+    return TextFormField(
+      initialValue: formatMathNumber(value),
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      textAlign: TextAlign.center,
+      style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold),
+      decoration: InputDecoration(
+        filled: true,
+        fillColor: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: context.glassBorder),
+        ),
+      ),
+      onChanged: (v) {
+        final parsed = num.tryParse(v);
+        if (parsed != null) onChanged(parsed);
+      },
+    );
+  }
+
+  Widget _multipleChip(String label, int multiplier) {
+    final isSelected = _mfMultipleOf == multiplier;
+    return GestureDetector(
+      onTap: () => setState(() {
+        _mfMultipleOf = isSelected ? null : multiplier;
+        _regenerateExampleProblem();
+      }),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFF6366F1)
+              : (context.isDark ? const Color(0xFF1E293B) : Colors.white),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF6366F1) : context.glassBorder,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.white : context.textColor,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExamplePreview() {
+    final problem = _mfExampleProblem;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: context.glassBorder),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              problem?.text ?? 'Adjust settings to preview a problem',
+              style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold, fontSize: 20),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: _refreshExampleProblem,
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: const Text('Show more'),
+          ),
+        ],
       ),
     );
   }

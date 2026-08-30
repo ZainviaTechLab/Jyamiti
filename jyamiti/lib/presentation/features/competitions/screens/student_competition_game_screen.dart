@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:provider/provider.dart';
@@ -56,6 +57,10 @@ class _StudentCompetitionGameScreenState
   List<dynamic> _roundLeaderboard = [];
   List<dynamic> _finalPodium = [];
 
+  // Math Fundamentals (NUMERIC answerType) free-response input
+  final TextEditingController _numericAnswerCtrl = TextEditingController();
+  bool get _isNumericQuestion => _currentQuestion?['answerType'] == 'NUMERIC';
+
   @override
   void initState() {
     super.initState();
@@ -76,6 +81,7 @@ class _StudentCompetitionGameScreenState
       CompetitionService.leaveRoom(_roomCode!);
     }
     _codeCtrl.dispose();
+    _numericAnswerCtrl.dispose();
     super.dispose();
   }
 
@@ -144,7 +150,14 @@ class _StudentCompetitionGameScreenState
             _secondsRemaining = 0;
           });
           if (!_answerSubmitted) {
-            _submitOption(-1);
+            // On timeout: NUMERIC submits whatever's typed so far (empty
+            // counts as wrong), MCQ submits an out-of-range index (also
+            // always wrong, matching the pre-NUMERIC behavior here).
+            if (_isNumericQuestion) {
+              _submitAnswer(answerText: _numericAnswerCtrl.text.trim());
+            } else {
+              _submitOption(-1);
+            }
           }
         }
       } else {
@@ -273,6 +286,22 @@ class _StudentCompetitionGameScreenState
   }
 
   void _submitOption(int idx) {
+    _submitAnswer(selectedOptionIndex: idx);
+  }
+
+  void _submitNumericAnswer() {
+    if (_answerSubmitted) return;
+    final text = _numericAnswerCtrl.text.trim();
+    if (text.isEmpty) return;
+    _submitAnswer(answerText: text);
+  }
+
+  /// Shared by both answer types: records the response, sends it to the
+  /// server, then auto-advances to the next locally-cached question after
+  /// a short delay (this student moves at their own pace through
+  /// `_allQuestions` -- it doesn't wait for the tutor's round_ended/
+  /// next_round, which only drives the host's own view).
+  void _submitAnswer({int? selectedOptionIndex, String? answerText}) {
     if (_answerSubmitted || _gameState != 'QUESTION' || _roomCode == null) return;
 
     _countdownTimer?.cancel();
@@ -280,7 +309,7 @@ class _StudentCompetitionGameScreenState
     final uId = auth.user?['id'] ?? auth.user?['_id'] ?? '';
 
     setState(() {
-      _selectedOptionIndex = idx;
+      _selectedOptionIndex = selectedOptionIndex;
       _answerSubmitted = true;
     });
 
@@ -288,7 +317,8 @@ class _StudentCompetitionGameScreenState
       roomCode: _roomCode!,
       userId: uId,
       roundIndex: _currentRoundIndex,
-      selectedOptionIndex: idx,
+      selectedOptionIndex: selectedOptionIndex,
+      answerText: answerText,
       timeTakenSec: _timeTakenSec,
     );
 
@@ -306,6 +336,7 @@ class _StudentCompetitionGameScreenState
           _secondsRemaining = _timePerQuestion;
           _timeTakenSec = 0;
         });
+        _numericAnswerCtrl.clear();
         _startTimer();
       } else {
         setState(() {
@@ -611,6 +642,9 @@ class _StudentCompetitionGameScreenState
 
           const SizedBox(height: 24),
 
+          if (_isNumericQuestion)
+            _buildNumericAnswerInput()
+          else
           // Option Cards Grid
           GridView.builder(
             shrinkWrap: true,
@@ -706,6 +740,77 @@ class _StudentCompetitionGameScreenState
           ],
         ],
       ),
+    );
+  }
+
+  /// Free-response numeric input for Math Fundamentals (NUMERIC answerType)
+  /// questions, in place of the MCQ option grid.
+  Widget _buildNumericAnswerInput() {
+    return Column(
+      children: [
+        TextField(
+          controller: _numericAnswerCtrl,
+          enabled: !_answerSubmitted,
+          autofocus: true,
+          textAlign: TextAlign.center,
+          keyboardType: const TextInputType.numberWithOptions(
+            decimal: true,
+            signed: true,
+          ),
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
+          ],
+          style: TextStyle(
+            color: context.textColor,
+            fontSize: 30,
+            fontWeight: FontWeight.bold,
+          ),
+          decoration: InputDecoration(
+            hintText: 'Your answer',
+            hintStyle: TextStyle(
+              color: context.textColor60,
+              fontSize: 16,
+              fontWeight: FontWeight.normal,
+            ),
+            filled: true,
+            fillColor:
+                context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(color: context.glassBorder),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(color: context.glassBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(color: Color(0xFF6366F1), width: 2),
+            ),
+            contentPadding: const EdgeInsets.symmetric(vertical: 18),
+          ),
+          onSubmitted: (_) => _submitNumericAnswer(),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _answerSubmitted ? null : _submitNumericAnswer,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF10B981),
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: const Color(0xFF10B981).withOpacity(0.4),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            icon: const Icon(Icons.check_circle_rounded),
+            label: const Text(
+              'SUBMIT ANSWER',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

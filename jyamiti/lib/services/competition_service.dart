@@ -56,6 +56,11 @@ class CompetitionService {
     required int roundDurationMinutes,
     List<String>? selectedTopics,
     List<Map<String, dynamic>>? questions,
+    // 'SYLLABUS' (default) or 'MATH_FUNDAMENTALS'. For MATH_FUNDAMENTALS,
+    // `questions` is expected to already be fully generated client-side
+    // (each with answerType: 'NUMERIC' + correctAnswer) rather than
+    // resolved server-side from selectedTopics.
+    String mode = 'SYLLABUS',
   }) async {
     final response = await ApiService.post('/competitions/create', {
       'title': title,
@@ -65,6 +70,7 @@ class CompetitionService {
       'roundDurationMinutes': roundDurationMinutes,
       'selectedTopics': selectedTopics ?? [],
       'questions': questions ?? [],
+      'mode': mode,
     });
 
     if (response.statusCode == 201) {
@@ -141,11 +147,15 @@ class CompetitionService {
     }
   }
 
+  /// For MCQ questions pass [selectedOptionIndex]; for NUMERIC (Math
+  /// Fundamentals) questions pass [answerText] (the student's typed
+  /// answer) instead -- exactly one of the two applies per question.
   static void submitAnswer({
     required String roomCode,
     required String userId,
     int? roundIndex,
-    required int selectedOptionIndex,
+    int? selectedOptionIndex,
+    String? answerText,
     required int timeTakenSec,
   }) {
     _socket?.emit('competition:submit_answer', {
@@ -153,6 +163,7 @@ class CompetitionService {
       'userId': userId,
       'roundIndex': roundIndex,
       'selectedOptionIndex': selectedOptionIndex,
+      'answerText': answerText,
       'timeTakenSec': timeTakenSec,
     });
   }

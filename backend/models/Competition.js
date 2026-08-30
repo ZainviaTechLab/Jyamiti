@@ -23,8 +23,14 @@ const participantSchema = new mongoose.Schema({
 const questionSchema = new mongoose.Schema({
   id: { type: String },
   text: { type: String, required: true },
+  // MCQ (default): pick from options, graded via correctOptionIndex.
+  // NUMERIC (Math Fundamentals arithmetic drills): typed free-response,
+  // graded via correctAnswer instead -- options/correctOptionIndex are
+  // unused/omitted for this type.
+  answerType: { type: String, enum: ['MCQ', 'NUMERIC'], default: 'MCQ' },
   options: [{ type: String }],
-  correctOptionIndex: { type: Number, required: true },
+  correctOptionIndex: { type: Number },
+  correctAnswer: { type: String },
   explanation: { type: String, default: '' },
   category: { type: String, default: 'General Math' },
   subtopic: { type: String, default: '' },
@@ -37,6 +43,15 @@ const competitionSchema = new mongoose.Schema({
   batchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Batch', required: true },
   tutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   grade: { type: Number, default: 10 },
+  // SYLLABUS: questions pulled from the course/question bank by topic.
+  // MATH_FUNDAMENTALS: procedurally-generated arithmetic drills (99math-
+  // style), client-generated at creation time per the tutor's chosen
+  // operation/range/etc. and passed in as `questions` like any other mode.
+  mode: {
+    type: String,
+    enum: ['SYLLABUS', 'MATH_FUNDAMENTALS'],
+    default: 'SYLLABUS'
+  },
   status: {
     type: String,
     enum: ['LOBBY', 'IN_PROGRESS', 'ROUND_RESULT', 'COMPLETED'],
