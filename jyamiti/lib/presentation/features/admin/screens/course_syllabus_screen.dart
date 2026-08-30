@@ -20,7 +20,6 @@ import '../../exams/screens/assessment_question_form_screen.dart';
 import '../../exams/screens/assessment_taking_screen.dart';
 import '../../academic/screens/video_player_screen.dart';
 import '../../academic/screens/student_learning_path_screen.dart';
-import '../../academic/screens/live_classroom_presentation_screen.dart';
 import 'package:jyamiti/utils/file_downloader.dart';
 import '../../../../domain/models/slide_deck_models.dart';
 import '../../../../services/slide_cache_service.dart';
@@ -2018,58 +2017,6 @@ Chapter 2: Polynomials
     );
   }
 
-  List<dynamic> _collectAllQuestions() {
-    final List<dynamic> questions = [];
-
-    void processNode(dynamic rawNode) {
-      if (rawNode is! Map) return;
-      final node = Map<String, dynamic>.from(rawNode);
-
-      if (node['practiceQuestions'] is List) {
-        questions.addAll(node['practiceQuestions'] as List);
-      }
-      if (node['practiceSets'] is List) {
-        for (var set in node['practiceSets']) {
-          if (set is Map && set['questions'] is List) {
-            questions.addAll(set['questions'] as List);
-          }
-        }
-      }
-      if (node['topics'] is List) {
-        for (var topic in node['topics']) {
-          if (topic is Map) processNode(topic);
-        }
-      }
-      if (node['subTopics'] is List) {
-        for (var sub in node['subTopics']) {
-          if (sub is Map) processNode(sub);
-        }
-      }
-    }
-
-    if (_focusedChapterIndex != null && _focusedTopicIndex != null) {
-      if (_focusedChapterIndex! < _syllabus.length) {
-        final chapter = _syllabus[_focusedChapterIndex!];
-        final topics = (chapter['topics'] as List?) ?? [];
-        if (_focusedTopicIndex! < topics.length) {
-          final topic = topics[_focusedTopicIndex!];
-          if (topic is Map) processNode(topic);
-        }
-      }
-    } else if (_focusedChapterIndex != null) {
-      if (_focusedChapterIndex! < _syllabus.length) {
-        final chapter = _syllabus[_focusedChapterIndex!];
-        if (chapter is Map) processNode(chapter);
-      }
-    } else {
-      for (var chapter in _syllabus) {
-        if (chapter is Map) processNode(chapter);
-      }
-    }
-
-    return questions;
-  }
-
   Widget _buildFocusedTopicCard(int cIndex, int tIndex) {
     if (cIndex >= _syllabus.length) return const SizedBox.shrink();
     final chapter = _syllabus[cIndex];
@@ -2358,32 +2305,6 @@ Chapter 2: Polynomials
                 icon: const Icon(Icons.account_tree_rounded),
                 onPressed: _showFullSyllabusStructure,
                 tooltip: 'Syllabus Structure',
-              ),
-              IconButton(
-                icon: const Icon(Icons.tv_rounded, color: Color(0xFF8B5CF6)),
-                onPressed: () {
-                  final allQuestions = _collectAllQuestions();
-                  if (allQuestions.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                            'No practice or classwork questions found in this syllabus section yet.'),
-                        backgroundColor: Colors.orange,
-                      ),
-                    );
-                    return;
-                  }
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => LiveClassroomPresentationScreen(
-                        title: widget.courseName,
-                        questions: allQuestions,
-                      ),
-                    ),
-                  );
-                },
-                tooltip: 'Live Classroom Presentation Mode (Smartboard)',
               ),
               IconButton(
                 icon: const Icon(Icons.explore_rounded, color: Color(0xFF6366F1)),
