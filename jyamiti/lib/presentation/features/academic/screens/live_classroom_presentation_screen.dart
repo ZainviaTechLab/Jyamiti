@@ -225,6 +225,30 @@ class _LiveClassroomPresentationScreenState
     return null;
   }
 
+  /// Right-hand column for MATCHING-type questions (Course practice
+  /// questions and AssessmentQuestion share this field).
+  List<dynamic> _rawRightOptions(dynamic q) {
+    if (q is Map && q['rightOptions'] is List) {
+      return List.from(q['rightOptions'] as List);
+    }
+    return [];
+  }
+
+  /// For MATCHING questions, correctAnswers[leftIndex] stores the index of
+  /// the right-hand option it pairs with — same convention
+  /// assessment_taking_screen uses to grade a student's drag-to-match
+  /// answer. Returns the display letter (A, B, C, ...) for that pairing,
+  /// since the smartboard shows rightOptions in their authored order
+  /// (no shuffle — this is a read-only presentation, not a student quiz).
+  String? _matchingRightLetter(dynamic q, int leftIndex) {
+    if (q is! Map || q['correctAnswers'] is! List) return null;
+    final correct = q['correctAnswers'] as List;
+    if (leftIndex >= correct.length) return null;
+    final idx = int.tryParse(correct[leftIndex].toString());
+    if (idx == null) return null;
+    return String.fromCharCode(65 + idx);
+  }
+
   /// Correct option indices (as they line up with _rawOptions), tutor-only
   /// answer key. correctAnswers stores the 0-based option index as a
   /// string, matching the convention used when a student's tap records
@@ -320,6 +344,101 @@ class _LiveClassroomPresentationScreenState
           ),
         );
       },
+    );
+  }
+
+  /// One option/left-item/right-item row: a badge, the option text and/or
+  /// image, and an optional trailing hint chip (used by MATCHING to show
+  /// "↔ B" once the tutor reveals the answer key). Shared by the plain
+  /// single-column option list and both columns of a MATCHING question.
+  Widget _buildLinearOptionRow(
+    dynamic opt, {
+    required String badge,
+    bool isCorrect = false,
+    String? trailingHint,
+  }) {
+    final optText = _optionText(opt);
+    final optImage = _optionImage(opt);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isCorrect
+            ? const Color(0xFF10B981).withOpacity(0.12)
+            : const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isCorrect ? const Color(0xFF10B981) : Colors.white12,
+          width: isCorrect ? 1.5 : 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 14,
+            backgroundColor: isCorrect
+                ? const Color(0xFF10B981)
+                : const Color(0xFF6366F1).withOpacity(0.2),
+            child: Text(
+              badge,
+              style: TextStyle(
+                color: isCorrect ? Colors.white : const Color(0xFF818CF8),
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          if (optText.isNotEmpty)
+            Expanded(
+              child: Text(
+                optText,
+                style: GoogleFonts.outfit(
+                  color: Colors.white.withOpacity(0.9),
+                  fontSize: _fontSize * 0.85,
+                ),
+              ),
+            ),
+          if (optImage != null) ...[
+            if (optText.isNotEmpty) const SizedBox(width: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                height: 56,
+                width: 84,
+                child: SvgLabelOverlay(
+                  imagePath: optImage['imageUrl'],
+                  isSvg: optImage['isSvg'],
+                  labels: const [],
+                ),
+              ),
+            ),
+          ],
+          if (trailingHint != null) ...[
+            const SizedBox(width: 10),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                trailingHint,
+                style: const TextStyle(
+                  color: Color(0xFF10B981),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ] else if (isCorrect) ...[
+            const SizedBox(width: 10),
+            const Icon(Icons.check_circle_rounded,
+                color: Color(0xFF10B981), size: 20),
+          ],
+        ],
+      ),
     );
   }
 
@@ -448,6 +567,8 @@ class _LiveClassroomPresentationScreenState
     final solText = _extractSolutionText(currentQ);
     final hintText = _extractHintText(currentQ);
     final rawOptions = _rawOptions(currentQ);
+    final rawRightOptions = _rawRightOptions(currentQ);
+    final isMatching = rawRightOptions.isNotEmpty;
     final correctIndices = _correctOptionIndices(currentQ);
     final diagram = _buildQuestionDiagram(currentQ);
     final isClasswork = _isClassworkQuestion(currentQ);
@@ -665,117 +786,70 @@ class _LiveClassroomPresentationScreenState
                                         ),
                                       ),
 
-                                      // Options Grid / List
-                                      if (rawOptions.isNotEmpty) ...[
+                                      // Options: two-column "match the
+                                      // following" layout when the question
+                                      // has a right-hand column, otherwise a
+                                      // plain single-column option list.
+                                      if (isMatching) ...[
+                                        const SizedBox(height: 24),
+                                        const Divider(color: Colors.white10),
+                                        const SizedBox(height: 12),
+                                        Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Expanded(
+                                              child: Column(
+                                                children: [
+                                                  for (int i = 0;
+                                                      i < rawOptions.length;
+                                                      i++)
+                                                    _buildLinearOptionRow(
+                                                      rawOptions[i],
+                                                      badge: '${i + 1}',
+                                                      trailingHint:
+                                                          _showAnswerKey
+                                                              ? _matchingRightLetter(
+                                                                  currentQ, i)
+                                                              : null,
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(width: 16),
+                                            Expanded(
+                                              child: Column(
+                                                children: [
+                                                  for (int i = 0;
+                                                      i <
+                                                          rawRightOptions
+                                                              .length;
+                                                      i++)
+                                                    _buildLinearOptionRow(
+                                                      rawRightOptions[i],
+                                                      badge: String
+                                                          .fromCharCode(
+                                                              65 + i),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ] else if (rawOptions.isNotEmpty) ...[
                                         const SizedBox(height: 24),
                                         const Divider(color: Colors.white10),
                                         const SizedBox(height: 12),
                                         for (int i = 0;
                                             i < rawOptions.length;
                                             i++)
-                                          Builder(builder: (_) {
-                                            final optText =
-                                                _optionText(rawOptions[i]);
-                                            final optImage =
-                                                _optionImage(rawOptions[i]);
-                                            final isCorrect = _showAnswerKey &&
-                                                correctIndices.contains(i);
-                                            return Container(
-                                              margin: const EdgeInsets.only(
-                                                  bottom: 10),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                horizontal: 16,
-                                                vertical: 12,
-                                              ),
-                                              decoration: BoxDecoration(
-                                                color: isCorrect
-                                                    ? const Color(0xFF10B981)
-                                                        .withOpacity(0.12)
-                                                    : const Color(0xFF0F172A),
-                                                borderRadius:
-                                                    BorderRadius.circular(10),
-                                                border: Border.all(
-                                                  color: isCorrect
-                                                      ? const Color(0xFF10B981)
-                                                      : Colors.white12,
-                                                  width: isCorrect ? 1.5 : 1,
-                                                ),
-                                              ),
-                                              child: Row(
-                                                children: [
-                                                  CircleAvatar(
-                                                    radius: 14,
-                                                    backgroundColor: isCorrect
-                                                        ? const Color(
-                                                            0xFF10B981)
-                                                        : const Color(
-                                                                0xFF6366F1)
-                                                            .withOpacity(0.2),
-                                                    child: Text(
-                                                      String.fromCharCode(
-                                                          65 + i),
-                                                      style: TextStyle(
-                                                        color: isCorrect
-                                                            ? Colors.white
-                                                            : const Color(
-                                                                0xFF818CF8),
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        fontSize: 12,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 14),
-                                                  if (optText.isNotEmpty)
-                                                    Expanded(
-                                                      child: Text(
-                                                        optText,
-                                                        style: GoogleFonts
-                                                            .outfit(
-                                                          color: Colors.white
-                                                              .withOpacity(
-                                                                  0.9),
-                                                          fontSize:
-                                                              _fontSize * 0.85,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  if (optImage != null) ...[
-                                                    if (optText.isNotEmpty)
-                                                      const SizedBox(
-                                                          width: 12),
-                                                    ClipRRect(
-                                                      borderRadius:
-                                                          BorderRadius
-                                                              .circular(8),
-                                                      child: SizedBox(
-                                                        height: 56,
-                                                        width: 84,
-                                                        child: SvgLabelOverlay(
-                                                          imagePath: optImage[
-                                                              'imageUrl'],
-                                                          isSvg: optImage[
-                                                              'isSvg'],
-                                                          labels: const [],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                  if (isCorrect) ...[
-                                                    const SizedBox(width: 10),
-                                                    const Icon(
-                                                      Icons
-                                                          .check_circle_rounded,
-                                                      color:
-                                                          Color(0xFF10B981),
-                                                      size: 20,
-                                                    ),
-                                                  ],
-                                                ],
-                                              ),
-                                            );
-                                          }),
+                                          _buildLinearOptionRow(
+                                            rawOptions[i],
+                                            badge: String.fromCharCode(
+                                                65 + i),
+                                            isCorrect: _showAnswerKey &&
+                                                correctIndices.contains(i),
+                                          ),
                                       ],
                                     ],
                                   ),
