@@ -282,22 +282,27 @@ Future<SlideBlock?> showSlideBlockEditorDialog(
                     labelText: 'Display Width Mode',
                     border: OutlineInputBorder(),
                   ),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'boxed',
-                      child: Text('Boxed Card (85% Width Frame)'),
-                    ),
-                    DropdownMenuItem(
+                  items: [
+                    if (block.type == SlideBlockType.svg)
+                      const DropdownMenuItem(
+                        value: 'original',
+                        child: Text('🎯 Original SVG Size (viewBox dimensions)'),
+                      ),
+                    const DropdownMenuItem(
                       value: 'full',
-                      child: Text('Full Width (Edge-to-Edge)'),
+                      child: Text('🌐 Full Width (Widescreen 16:9 / Edge-to-Edge)'),
                     ),
-                    DropdownMenuItem(
+                    const DropdownMenuItem(
+                      value: 'boxed',
+                      child: Text('📦 Boxed Card (85% Width Frame)'),
+                    ),
+                    const DropdownMenuItem(
                       value: 'compact',
-                      child: Text('Compact (75% Width)'),
+                      child: Text('📐 Compact (75% Width)'),
                     ),
-                    DropdownMenuItem(
+                    const DropdownMenuItem(
                       value: 'small',
-                      child: Text('Small (50% Width)'),
+                      child: Text('🔍 Small (50% Width)'),
                     ),
                   ],
                   onChanged: (val) {

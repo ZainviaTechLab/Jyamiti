@@ -3613,7 +3613,8 @@ class _SyllabusResourceEditorState extends State<SyllabusResourceEditor>
               );
 
               await cms_screen.loadLibrary();
-              await Navigator.push(
+              if (!context.mounted) return;
+              final savedDeck = await Navigator.push<SlideDeck>(
                 context,
                 MaterialPageRoute(
                   builder: (_) =>
@@ -3621,9 +3622,13 @@ class _SyllabusResourceEditorState extends State<SyllabusResourceEditor>
                 ),
               );
 
-              setState(() {
-                _slides.add(initialDeck.toMap());
-              });
+              final resolvedDeck = savedDeck ??
+                  await SlideCacheService.instance.getDeckById(initialDeck.id);
+              if (resolvedDeck != null) {
+                setState(() {
+                  _slides.add(resolvedDeck.toMap());
+                });
+              }
             },
             icon: const Icon(Icons.add_rounded, size: 16),
             label: const Text('Create Slide Deck in CMS'),
@@ -3743,7 +3748,9 @@ class _SyllabusResourceEditorState extends State<SyllabusResourceEditor>
                               tooltip: 'Open CMS Editor',
                               onPressed: () async {
                                 await cms_screen.loadLibrary();
-                                await Navigator.push(
+                                if (!context.mounted) return;
+                                final savedDeck =
+                                    await Navigator.push<SlideDeck>(
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) =>
@@ -3752,9 +3759,14 @@ class _SyllabusResourceEditorState extends State<SyllabusResourceEditor>
                                         ),
                                   ),
                                 );
-                                setState(() {
-                                  _slides[index] = deck.toMap();
-                                });
+                                final resolvedDeck = savedDeck ??
+                                    await SlideCacheService.instance
+                                        .getDeckById(deck.id);
+                                if (resolvedDeck != null) {
+                                  setState(() {
+                                    _slides[index] = resolvedDeck.toMap();
+                                  });
+                                }
                               },
                             ),
                             IconButton(

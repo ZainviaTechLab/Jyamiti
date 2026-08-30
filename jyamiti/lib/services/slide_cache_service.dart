@@ -23,11 +23,11 @@ class SlideCacheService {
       final res = await ApiService.get('/slide-decks');
       if (res.statusCode == 200) {
         final List<dynamic> list = json.decode(res.body);
-        final decks = list
-            .map((x) => SlideDeck.fromMap(x as Map<String, dynamic>))
-            .toList();
-        await saveSlideDecks(decks); // Sync to local offline cache
-        return decks;
+        final decks = list.map((x) => SlideDeck.fromMap(x as Map<String, dynamic>)).toList();
+        if (decks.isNotEmpty) {
+          await saveSlideDecks(decks); // Sync to local offline cache
+          return decks;
+        }
       }
     } catch (_) {
       // Offline fallback
@@ -45,9 +45,13 @@ class SlideCacheService {
 
     try {
       final List<dynamic> list = json.decode(rawJson);
-      return list
-          .map((x) => SlideDeck.fromMap(x as Map<String, dynamic>))
-          .toList();
+      final cachedDecks = list.map((x) => SlideDeck.fromMap(x as Map<String, dynamic>)).toList();
+      if (cachedDecks.isEmpty) {
+        final seedDecks = _getInitialSeedDecks();
+        await saveSlideDecks(seedDecks);
+        return seedDecks;
+      }
+      return cachedDecks;
     } catch (e) {
       final seedDecks = _getInitialSeedDecks();
       await saveSlideDecks(seedDecks);
@@ -55,12 +59,7 @@ class SlideCacheService {
     }
   }
 
-  // Fetch a single slide deck by id, straight from the backend -- used by
-  // the live-class-presentation "follow the tutor's slides" viewer, which
-  // only needs the ONE deck being shared rather than the full catalog
-  // getSlideDecks() returns. No offline fallback here (unlike
-  // getSlideDecks): a student following a live presentation is, by
-  // definition, online and already inside a live video call.
+  // Fetch a single slide deck by id with local cache fallback
   Future<SlideDeck?> getDeckById(String deckId) async {
     try {
       final res = await ApiService.get('/slide-decks/$deckId');
@@ -68,6 +67,12 @@ class SlideCacheService {
         return SlideDeck.fromMap(json.decode(res.body) as Map<String, dynamic>);
       }
     } catch (_) {}
+
+    try {
+      final allDecks = await getSlideDecks();
+      return allDecks.firstWhere((d) => d.id == deckId);
+    } catch (_) {}
+
     return null;
   }
 
@@ -78,29 +83,41 @@ class SlideCacheService {
     await prefs.setString(_decksKey, jsonStr);
   }
 
-  // Save single slide deck (posts to backend server API or enqueues offline
-  // sync). Returns true only when the backend actually confirmed the save
-  // (200/201) -- false when it was only enqueued for later offline sync
-  // (network error, or a non-2xx response), so callers can tell a real
-  // save from "saved locally, will sync later" instead of assuming
-  // success either way.
-  Future<bool> saveDeck(SlideDeck deck) async {
+  // Save single slide deck (persists to local storage and syncs to backend server or enqueues offline)
+  Future<void> saveDeck(SlideDeck deck) async {
+    // 1. Immediately update local storage / offline cache
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? rawJson = prefs.getString(_decksKey);
+      List<SlideDeck> decks = [];
+      if (rawJson != null && rawJson.isNotEmpty) {
+        try {
+          final List<dynamic> list = json.decode(rawJson);
+          decks = list.map((x) => SlideDeck.fromMap(x as Map<String, dynamic>)).toList();
+        } catch (_) {
+          decks = _getInitialSeedDecks();
+        }
+      } else {
+        decks = _getInitialSeedDecks();
+      }
+
+      final index = decks.indexWhere((d) => d.id == deck.id);
+      if (index >= 0) {
+        decks[index] = deck;
+      } else {
+        decks.insert(0, deck);
+      }
+      await saveSlideDecks(decks);
+    } catch (_) {}
+
+    // 2. Sync to backend API or queue for offline sync
     try {
       final res = await ApiService.post('/slide-decks', deck.toMap());
-      if (res.statusCode == 200 || res.statusCode == 201) {
-        return true;
+      if (res.statusCode != 200 && res.statusCode != 201) {
+        await OfflineSyncService.instance.enqueueRequest('/slide-decks', deck.toMap());
       }
-      await OfflineSyncService.instance.enqueueRequest(
-        '/slide-decks',
-        deck.toMap(),
-      );
-      return false;
     } catch (_) {
-      await OfflineSyncService.instance.enqueueRequest(
-        '/slide-decks',
-        deck.toMap(),
-      );
-      return false;
+      await OfflineSyncService.instance.enqueueRequest('/slide-decks', deck.toMap());
     }
   }
 
@@ -109,14 +126,10 @@ class SlideCacheService {
     try {
       final res = await ApiService.delete('/slide-decks/$deckId');
       if (res.statusCode != 200) {
-        await OfflineSyncService.instance.enqueueRequest('/slide-decks', {
-          'id': deckId,
-        }, method: 'DELETE');
+        await OfflineSyncService.instance.enqueueRequest('/slide-decks', {'id': deckId}, method: 'DELETE');
       }
     } catch (_) {
-      await OfflineSyncService.instance.enqueueRequest('/slide-decks', {
-        'id': deckId,
-      }, method: 'DELETE');
+      await OfflineSyncService.instance.enqueueRequest('/slide-decks', {'id': deckId}, method: 'DELETE');
     }
 
     // Clear from local offline cache
@@ -125,9 +138,7 @@ class SlideCacheService {
       final String? rawJson = prefs.getString(_decksKey);
       if (rawJson != null && rawJson.isNotEmpty) {
         final List<dynamic> list = json.decode(rawJson);
-        final decks = list
-            .map((x) => SlideDeck.fromMap(x as Map<String, dynamic>))
-            .toList();
+        final decks = list.map((x) => SlideDeck.fromMap(x as Map<String, dynamic>)).toList();
         decks.removeWhere((d) => d.id == deckId);
         await saveSlideDecks(decks);
       }
@@ -169,39 +180,23 @@ class SlideCacheService {
   // Save student slide progress (saves locally and syncs to backend server or enqueues offline sync)
   Future<void> saveProgress(SlideProgress progress) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      '$_progressKeyPrefix${progress.deckId}',
-      progress.toJson(),
-    );
+    await prefs.setString('$_progressKeyPrefix${progress.deckId}', progress.toJson());
 
     // Sync progress to backend server API or enqueue for offline sync
     try {
-      final res = await ApiService.post(
-        '/slide-decks/${progress.deckId}/progress',
-        progress.toMap(),
-      );
+      final res = await ApiService.post('/slide-decks/${progress.deckId}/progress', progress.toMap());
       if (res.statusCode != 200 && res.statusCode != 201) {
-        await OfflineSyncService.instance.enqueueRequest(
-          '/slide-decks/${progress.deckId}/progress',
-          progress.toMap(),
-        );
+        await OfflineSyncService.instance.enqueueRequest('/slide-decks/${progress.deckId}/progress', progress.toMap());
       }
     } catch (_) {
-      await OfflineSyncService.instance.enqueueRequest(
-        '/slide-decks/${progress.deckId}/progress',
-        progress.toMap(),
-      );
+      await OfflineSyncService.instance.enqueueRequest('/slide-decks/${progress.deckId}/progress', progress.toMap());
     }
   }
 
   // Generate mock analytics report for Admin
-  Future<List<SlideAnalyticsReport>> getAnalyticsForDeck(
-    String deckId,
-    String deckTitle,
-    int totalSlides,
-  ) async {
+  Future<List<SlideAnalyticsReport>> getAnalyticsForDeck(String deckId, String deckTitle, int totalSlides) async {
     final progress = await getProgress(deckId);
-
+    
     // Add real student progress plus representative student cohort data
     final List<SlideAnalyticsReport> reports = [
       SlideAnalyticsReport(
@@ -252,8 +247,7 @@ class SlideCacheService {
         courseId: 'math_101',
         courseName: 'Advanced Geometry',
         title: 'Pythagorean Theorem & Right Triangles',
-        description:
-            'Interactive course slides covering fundamental geometric proofs, formulas, code demos, and inline quiz checks.',
+        description: 'Interactive course slides covering fundamental geometric proofs, formulas, code demos, and inline quiz checks.',
         createdAt: DateTime.now().subtract(const Duration(days: 2)),
         isPublished: true,
         isDownloadedOffline: true,
@@ -273,21 +267,18 @@ class SlideCacheService {
               SlideBlock(
                 id: 'b2',
                 type: SlideBlockType.paragraph,
-                content:
-                    'In mathematics, the Pythagorean theorem states that in a right-angled triangle, the area of the square whose side is the hypotenuse is equal to the sum of the areas of the squares on the other two sides.',
+                content: 'In mathematics, the Pythagorean theorem states that in a right-angled triangle, the area of the square whose side is the hypotenuse is equal to the sum of the areas of the squares on the other two sides.',
               ),
               SlideBlock(
                 id: 'b3',
                 type: SlideBlockType.callout,
-                content:
-                    'Key Formula: a² + b² = c² (where c is the hypotenuse)',
+                content: 'Key Formula: a² + b² = c² (where c is the hypotenuse)',
                 extra: 'info',
               ),
               SlideBlock(
                 id: 'b4',
                 type: SlideBlockType.bulletList,
-                content:
-                    'Applicable ONLY to right-angled triangles (90°).\nForms the foundation of coordinate geometry & trigonometry.\nDiscovered independently by ancient Indian, Chinese, and Greek mathematicians.',
+                content: 'Applicable ONLY to right-angled triangles (90°).\nForms the foundation of coordinate geometry & trigonometry.\nDiscovered independently by ancient Indian, Chinese, and Greek mathematicians.',
               ),
             ],
           ),
@@ -306,21 +297,18 @@ class SlideCacheService {
               SlideBlock(
                 id: 'b6',
                 type: SlideBlockType.paragraph,
-                content:
-                    'Below is how we compute the hypotenuse programmatically in Flutter/Dart using double precision math:',
+                content: 'Below is how we compute the hypotenuse programmatically in Flutter/Dart using double precision math:',
               ),
               SlideBlock(
                 id: 'b7',
                 type: SlideBlockType.code,
-                content:
-                    'import "dart:math";\n\ndouble calculateHypotenuse(double a, double b) {\n  return sqrt(pow(a, 2) + pow(b, 2));\n}\n\nvoid main() {\n  print(calculateHypotenuse(3.0, 4.0)); // Output: 5.0\n}',
+                content: 'import "dart:math";\n\ndouble calculateHypotenuse(double a, double b) {\n  return sqrt(pow(a, 2) + pow(b, 2));\n}\n\nvoid main() {\n  print(calculateHypotenuse(3.0, 4.0)); // Output: 5.0\n}',
                 extra: 'dart',
               ),
               SlideBlock(
                 id: 'b8',
                 type: SlideBlockType.callout,
-                content:
-                    'Pro-tip: Try tapping the Whiteboard Drawing button above to annotate right on top of this code snippet!',
+                content: 'Pro-tip: Try tapping the Whiteboard Drawing button above to annotate right on top of this code snippet!',
                 extra: 'tip',
               ),
             ],
@@ -332,12 +320,10 @@ class SlideCacheService {
             theme: 'emeraldSlate',
             enableWhiteboard: true,
             quiz: SlideQuiz(
-              question:
-                  'Which of the following side length triplets forms a valid right-angled triangle?',
+              question: 'Which of the following side length triplets forms a valid right-angled triangle?',
               options: ['3, 4, 6', '5, 12, 13', '6, 8, 11', '7, 9, 12'],
               correctIndex: 1,
-              explanation:
-                  'Because 5² + 12² = 25 + 144 = 169, and 13² = 169. This satisfies a² + b² = c²!',
+              explanation: 'Because 5² + 12² = 25 + 144 = 169, and 13² = 169. This satisfies a² + b² = c²!',
             ),
             blocks: [
               SlideBlock(
@@ -348,8 +334,7 @@ class SlideCacheService {
               SlideBlock(
                 id: 'b10',
                 type: SlideBlockType.paragraph,
-                content:
-                    'Test your understanding before proceeding to coordinate geometry.',
+                content: 'Test your understanding before proceeding to coordinate geometry.',
               ),
             ],
           ),

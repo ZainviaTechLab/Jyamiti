@@ -29,6 +29,9 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
   late TextEditingController _descController;
   late TextEditingController _courseController;
   late List<SlideItem> _slides;
+  late String _deckId;
+  late DateTime _createdAt;
+  SlideDeck? _lastSavedDeck;
   int _activeSlideIndex = 0;
   bool _isSaving = false;
 
@@ -45,6 +48,9 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
   void initState() {
     super.initState();
     final deck = widget.initialDeck;
+    _deckId = deck?.id ?? 'deck_${DateTime.now().millisecondsSinceEpoch}';
+    _createdAt = deck?.createdAt ?? DateTime.now();
+    _lastSavedDeck = deck;
     _titleController = TextEditingController(
       text: deck?.title ?? 'New Interactive Course Deck',
     );
@@ -264,15 +270,13 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
 
   Future<void> _exportFullDeckJson() async {
     final currentDeck = SlideDeck(
-      id:
-          widget.initialDeck?.id ??
-          'deck_${DateTime.now().millisecondsSinceEpoch}',
+      id: _deckId,
       courseId: widget.initialDeck?.courseId ?? 'course_101',
       courseName: _courseController.text.trim(),
       title: _titleController.text.trim(),
       description: _descController.text.trim(),
       slides: _slides,
-      createdAt: widget.initialDeck?.createdAt ?? DateTime.now(),
+      createdAt: _createdAt,
     );
 
     final jsonStr = SlideJsonHelper.exportDeckJson(currentDeck);
@@ -311,35 +315,27 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     setState(() => _isSaving = true);
 
     final deck = SlideDeck(
-      id:
-          widget.initialDeck?.id ??
-          'deck_${DateTime.now().millisecondsSinceEpoch}',
+      id: _deckId,
       courseId: widget.initialDeck?.courseId ?? 'course_101',
       courseName: _courseController.text.trim(),
       title: _titleController.text.trim(),
       description: _descController.text.trim(),
       slides: _slides,
-      createdAt: widget.initialDeck?.createdAt ?? DateTime.now(),
+      createdAt: _createdAt,
       isPublished: true,
       isDownloadedOffline: true,
     );
 
-    final bool savedOnline = await SlideCacheService.instance.saveDeck(deck);
+    await SlideCacheService.instance.saveDeck(deck);
+    _lastSavedDeck = deck;
 
     setState(() => _isSaving = false);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            savedOnline
-                ? 'Slide Deck Saved Successfully!'
-                : "Couldn't reach the server -- saved locally and will "
-                      'sync automatically once back online.',
-          ),
-          backgroundColor: savedOnline
-              ? const Color(0xFF10B981)
-              : const Color(0xFFF59E0B),
+        const SnackBar(
+          content: Text('Slide Deck Saved Successfully!'),
+          backgroundColor: Color(0xFF10B981),
         ),
       );
     }
@@ -789,12 +785,22 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
     final isDark = context.isDark;
     final activeSlide = _slides[_activeSlideIndex];
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'Admin Slide Deck CMS',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          Navigator.of(context).pop(_lastSavedDeck);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: BackButton(
+            onPressed: () => Navigator.of(context).pop(_lastSavedDeck),
+          ),
+          title: const Text(
+            'Admin Slide Deck CMS',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
         actions: [
           OutlinedButton.icon(
             onPressed: _importFromJson,
@@ -1404,6 +1410,7 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 
