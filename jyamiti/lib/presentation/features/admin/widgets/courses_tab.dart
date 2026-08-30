@@ -809,6 +809,133 @@ class _CoursesTabState extends State<CoursesTab> {
     );
   }
 
+  Widget _buildCourseCard(Map<String, dynamic> course, int idx) {
+    final grade = course['grade'];
+    final subject = course['subject'];
+    final hasBadge = grade != null &&
+        grade.toString().isNotEmpty &&
+        subject != null &&
+        subject.toString().isNotEmpty;
+    final description = (course['description'] ?? '').toString();
+    final animationDelay = (idx % 10) * 50;
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: context.glassBg,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.3)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF8B5CF6).withOpacity(0.05),
+                blurRadius: 10,
+                spreadRadius: 0,
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _showCourseDetails(course),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 16, 44, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          course['name'] ?? '',
+                          style: TextStyle(
+                            color: context.textColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 8),
+                        if (hasBadge)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF8B5CF6).withOpacity(context.isDark ? 0.15 : 0.08),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: const Color(0xFF8B5CF6).withOpacity(context.isDark ? 0.3 : 0.2),
+                              ),
+                            ),
+                            child: Text(
+                              '$grade • $subject',
+                              style: TextStyle(
+                                color: context.isDark ? const Color(0xFFD8B4FE) : const Color(0xFF6D28D9),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        Expanded(
+                          child: Text(
+                            description.isEmpty ? 'No description' : description,
+                            style: TextStyle(color: context.textColor60, fontSize: 12.5, height: 1.35),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ).animate().fade(duration: 400.ms, delay: animationDelay.ms).slideY(begin: 0.05, end: 0),
+        Positioned(
+          top: 6,
+          right: 6,
+          child: _AnimatedCourseActions(
+            onManage: () {
+              final isLargeScreen = MediaQuery.of(context).size.width > 900;
+              if (isLargeScreen) {
+                setState(() {
+                  _selectedCourseId = course['id'];
+                  _selectedCourseName = course['name'];
+                });
+              } else {
+                Navigator.push(
+                  context,
+                  PageRouteBuilder(
+                    pageBuilder: (ctx, animation, secondaryAnimation) => BlocProvider.value(
+                      value: context.read<CourseBloc>(),
+                      child: CourseSyllabusScreen(
+                        courseId: course['id'],
+                        courseName: course['name'],
+                      ),
+                    ),
+                    transitionsBuilder: (ctx, animation, secondaryAnimation, child) {
+                      return FadeTransition(opacity: animation, child: child);
+                    },
+                  ),
+                );
+              }
+            },
+            onEdit: () => _showEditCourseDialog(course),
+            onDelete: () => _confirmDelete(
+              context,
+              course['name'],
+              () => _deleteCourse(course['id']),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildStatCard(String label, String value, IconData icon, Color color) {
     return Container(
       padding: const EdgeInsets.all(12),
@@ -923,173 +1050,28 @@ class _CoursesTabState extends State<CoursesTab> {
                     style: TextStyle(color: context.textColor70),
                   ),
                 )
-              : ListView.builder(
-                  padding: EdgeInsets.only(
-                    top: 24,
-                    left: 16,
-                    right: 16,
-                    bottom: 100,
-                  ),
-                  itemCount: courses.length,
-                  itemBuilder: (ctx, idx) {
-                    final course = courses[idx];
-                    final animationDelay = (idx % 10) * 50;
-
-                    return Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        Container(
-                              margin: EdgeInsets.only(bottom: 16),
-                              decoration: BoxDecoration(
-                                color: context.glassBg,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: const Color(
-                                    0xFF8B5CF6,
-                                  ).withOpacity(0.3),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(
-                                      0xFF8B5CF6,
-                                    ).withOpacity(0.05),
-                                    blurRadius: 10,
-                                    spreadRadius: 0,
-                                  ),
-                                ],
-                              ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(16),
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(
-                                    sigmaX: 10,
-                                    sigmaY: 10,
-                                  ),
-                                  child: Material(
-                                    color: Colors.transparent,
-                                    child: ListTile(
-                                      onTap: () => _showCourseDetails(course),
-                                      contentPadding:
-                                          EdgeInsets.symmetric(
-                                            horizontal: 20,
-                                            vertical: 12,
-                                          ),
-                                      title: Text(
-                                        course['name'],
-                                        style: TextStyle(
-                                          color: context.textColor,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 18,
-                                        ),
-                                      ),
-                                      subtitle: Padding(
-                                        padding: EdgeInsets.only(
-                                          top: 8.0,
-                                        ),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            if (course['grade'] != null &&
-                                                course['grade'].isNotEmpty &&
-                                                course['subject'] != null &&
-                                                course['subject'].isNotEmpty)
-                                              Container(
-                                                margin: EdgeInsets.only(
-                                                  bottom: 8,
-                                                ),
-                                                padding:
-                                                    EdgeInsets.symmetric(
-                                                      horizontal: 10,
-                                                      vertical: 4,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: const Color(
-                                                    0xFF8B5CF6,
-                                                  ).withOpacity(context.isDark ? 0.15 : 0.08),
-                                                  borderRadius:
-                                                      BorderRadius.circular(20),
-                                                  border: Border.all(
-                                                    color: const Color(
-                                                      0xFF8B5CF6,
-                                                    ).withOpacity(context.isDark ? 0.3 : 0.2),
-                                                  ),
-                                                ),
-                                                child: Text(
-                                                  '${course['grade']} • ${course['subject']}',
-                                                  style: TextStyle(
-                                                    color: context.isDark ? const Color(0xFFD8B4FE) : const Color(0xFF6D28D9),
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                            Text(
-                                              course['description'] ??
-                                                  'No description',
-                                              style: TextStyle(color: context.textColor60,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            )
-                            .animate()
-                            .fade(duration: 400.ms, delay: animationDelay.ms)
-                            .slideX(begin: 0.1, end: 0),
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: _AnimatedCourseActions(
-                            onManage: () {
-                              final isLargeScreen = MediaQuery.of(context).size.width > 900;
-                              if (isLargeScreen) {
-                                setState(() {
-                                  _selectedCourseId = course['id'];
-                                  _selectedCourseName = course['name'];
-                                });
-                              } else {
-                                Navigator.push(
-                                  context,
-                                  PageRouteBuilder(
-                                    pageBuilder:
-                                        (ctx, animation, secondaryAnimation) =>
-                                            BlocProvider.value(
-                                              value: context.read<CourseBloc>(),
-                                              child: CourseSyllabusScreen(
-                                                courseId: course['id'],
-                                                courseName: course['name'],
-                                              ),
-                                            ),
-                                    transitionsBuilder:
-                                        (
-                                          ctx,
-                                          animation,
-                                          secondaryAnimation,
-                                          child,
-                                        ) {
-                                          return FadeTransition(
-                                            opacity: animation,
-                                            child: child,
-                                          );
-                                        },
-                                  ),
-                                );
-                              }
-                            },
-                            onEdit: () => _showEditCourseDialog(course),
-                            onDelete: () => _confirmDelete(
-                              context,
-                              course['name'],
-                              () => _deleteCourse(course['id']),
-                            ),
-                          ),
-                        ),
-                      ],
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = constraints.maxWidth;
+                    final crossAxisCount = width > 1300
+                        ? 4
+                        : (width > 950 ? 3 : (width > 620 ? 2 : 1));
+                    return GridView.builder(
+                      padding: EdgeInsets.only(
+                        top: 24,
+                        left: 16,
+                        right: 16,
+                        bottom: 100,
+                      ),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                        mainAxisExtent: 156,
+                      ),
+                      itemCount: courses.length,
+                      itemBuilder: (ctx, idx) =>
+                          _buildCourseCard(courses[idx], idx),
                     );
                   },
                 ),
