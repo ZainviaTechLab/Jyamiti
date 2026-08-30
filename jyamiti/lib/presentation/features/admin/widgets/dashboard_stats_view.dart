@@ -461,13 +461,11 @@ class DashboardStatsView extends StatelessWidget {
     double screenWidth,
   ) {
     final growthPercent = _num(userGrowth['growthPercent']);
-    return GridView.count(
-      crossAxisCount: screenWidth > 900 ? 4 : (screenWidth > 600 ? 3 : 2),
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      childAspectRatio: 1.3,
+    final cols = screenWidth > 1100 ? 4 : (screenWidth > 700 ? 3 : (screenWidth > 480 ? 2 : 1));
+    return _responsiveWrap(
+      context,
+      screenWidth,
+      cols: cols,
       children: [
         _statCard(
           context,
@@ -528,6 +526,10 @@ class DashboardStatsView extends StatelessWidget {
     );
   }
 
+  /// Compact, content-sized KPI card: a small icon badge beside a
+  /// label/value/subtitle stack. Deliberately does NOT stretch to fill a
+  /// tall grid cell — it's meant to be dropped into [_responsiveWrap] so
+  /// its height follows its content instead of an arbitrary aspect ratio.
   Widget _statCard(
     BuildContext context,
     String title,
@@ -540,62 +542,73 @@ class DashboardStatsView extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: context.glassBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3)),
-        boxShadow: [
-          BoxShadow(color: color.withOpacity(0.1), blurRadius: 20, spreadRadius: -5),
-        ],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.25)),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(icon, color: color.withOpacity(0.8), size: 26),
-                const SizedBox(height: 8),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    value,
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.bold,
-                      color: context.textColor,
-                      shadows: [Shadow(color: color, blurRadius: 10)],
-                    ),
+                Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(11),
                   ),
+                  child: Icon(icon, color: color, size: 19),
                 ),
-                const SizedBox(height: 4),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      color: context.textColor70,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 2),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      subtitle,
-                      style: TextStyle(
-                        color: subtitleColor ?? context.textColor60,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          color: context.textColor60,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.6,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
+                      const SizedBox(height: 6),
+                      Text(
+                        value,
+                        style: TextStyle(
+                          color: context.textColor,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          height: 1.1,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            color: subtitleColor ?? context.textColor60,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
                   ),
-                ],
+                ),
               ],
             ),
           ),
@@ -669,13 +682,11 @@ class DashboardStatsView extends StatelessWidget {
 
   Widget _buildRevenueStats(BuildContext context, Map<String, dynamic> revenue, double screenWidth) {
     final collectionRate = _num(revenue['collectionRate']).toDouble();
-    return GridView.count(
-      crossAxisCount: screenWidth > 900 ? 4 : (screenWidth > 600 ? 2 : 1),
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      childAspectRatio: screenWidth > 600 ? 1.5 : 2.4,
+    final cols = screenWidth > 1100 ? 4 : (screenWidth > 700 ? 2 : 1);
+    return _responsiveWrap(
+      context,
+      screenWidth,
+      cols: cols,
       children: [
         _statCard(
           context,
