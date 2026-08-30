@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../widgets/svg_label_overlay.dart';
 
 class DrawnLine {
   final List<Offset> path;
@@ -89,6 +90,7 @@ class _LiveClassroomPresentationScreenState
   // Question Presentation State
   bool _showHint = false;
   bool _showSolution = false;
+  bool _showAnswerKey = false; // Tutor-only: reveals the correct option(s)
   double _fontSize = 22.0; // Adjustable presentation font size
 
   // Formula Database
@@ -195,26 +197,130 @@ class _LiveClassroomPresentationScreenState
     return '';
   }
 
-  List<String> _extractOptions(dynamic q) {
+  // Options come in two shapes depending on the source: plain strings
+  // (Question model) or {text, imageUrl, isSvg} objects (AssessmentQuestion
+  // / Course practice questions). Kept raw here (rather than flattened to
+  // display strings) so the option row can render text AND/OR an image.
+  List<dynamic> _rawOptions(dynamic q) {
     if (q is Map && q['options'] is List) {
-      return (q['options'] as List).map((e) {
-        // Options come in two shapes depending on the source: plain
-        // strings (Question model) or {text, imageUrl, isSvg} objects
-        // (AssessmentQuestion / Course practice questions). Calling
-        // e.toString() on the latter dumped the raw Map representation
-        // onto the smartboard instead of the option text.
-        if (e is String) return e;
-        if (e is Map) {
-          final text = (e['text'] ?? '').toString().trim();
-          if (text.isNotEmpty) return text;
-          final imageUrl = (e['imageUrl'] ?? '').toString().trim();
-          if (imageUrl.isNotEmpty) return '[Image]';
-          return '';
-        }
-        return e.toString();
-      }).toList();
+      return List.from(q['options'] as List);
     }
     return [];
+  }
+
+  String _optionText(dynamic opt) {
+    if (opt is String) return opt;
+    if (opt is Map) return (opt['text'] ?? '').toString().trim();
+    return opt?.toString() ?? '';
+  }
+
+  /// Returns {imageUrl, isSvg} for an image-bearing option, or null.
+  Map<String, dynamic>? _optionImage(dynamic opt) {
+    if (opt is Map) {
+      final imageUrl = (opt['imageUrl'] ?? '').toString().trim();
+      if (imageUrl.isNotEmpty) {
+        return {'imageUrl': imageUrl, 'isSvg': opt['isSvg'] == true};
+      }
+    }
+    return null;
+  }
+
+  /// Correct option indices (as they line up with _rawOptions), tutor-only
+  /// answer key. correctAnswers stores the 0-based option index as a
+  /// string, matching the convention used when a student's tap records
+  /// `_selectedAnswers[i] = [optionIndex.toString()]` elsewhere in the app.
+  Set<int> _correctOptionIndices(dynamic q) {
+    if (q is! Map || q['correctAnswers'] is! List) return {};
+    final indices = <int>{};
+    for (final answer in (q['correctAnswers'] as List)) {
+      final idx = int.tryParse(answer.toString());
+      if (idx != null) indices.add(idx);
+    }
+    return indices;
+  }
+
+  /// The main question diagram: a background image/SVG (questionImage),
+  /// optional text labels (svgLabels), and optional labeled reference
+  /// points (geometryNodes) — used by geometry-type practice questions.
+  /// Returns null when the question has neither an image nor nodes.
+  Widget? _buildQuestionDiagram(dynamic q) {
+    if (q is! Map) return null;
+    final String imagePath = (q['questionImage'] ?? '').toString().trim();
+    final List<dynamic> nodes =
+        (q['geometryNodes'] is List) ? q['geometryNodes'] as List : [];
+    final List<dynamic> labels =
+        (q['svgLabels'] is List) ? q['svgLabels'] as List : [];
+    if (imagePath.isEmpty && nodes.isEmpty) return null;
+    final bool hideNodes = q['hideGeometryNodes'] == true;
+
+    return LayoutBuilder(
+      builder: (ctx, constraints) {
+        final double width = constraints.maxWidth.clamp(0.0, 640.0);
+        final double height = width * 0.75;
+        return Center(
+          child: Container(
+            width: width,
+            height: height,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(11),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  if (imagePath.isNotEmpty)
+                    Positioned.fill(
+                      child: SvgLabelOverlay(
+                        imagePath: imagePath,
+                        isSvg: q['isSvg'] == true,
+                        labels: labels,
+                      ),
+                    ),
+                  if (!hideNodes)
+                    ...nodes.map((node) {
+                      if (node is! Map) return const SizedBox.shrink();
+                      final double nx =
+                          ((node['x'] as num?)?.toDouble() ?? 0) / 100;
+                      final double ny =
+                          ((node['y'] as num?)?.toDouble() ?? 0) / 100;
+                      final bool isFixed = node['isFixed'] == true;
+                      return Positioned(
+                        left: nx * width - 12,
+                        top: ny * height - 12,
+                        child: Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: isFixed
+                                ? const Color(0xFF3B82F6)
+                                : const Color(0xFF1E293B),
+                            border:
+                                Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          child: Center(
+                            child: Text(
+                              (node['label'] ?? '').toString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   bool _isClassworkQuestion(dynamic q) {
@@ -341,7 +447,9 @@ class _LiveClassroomPresentationScreenState
     final qText = _extractQuestionText(currentQ);
     final solText = _extractSolutionText(currentQ);
     final hintText = _extractHintText(currentQ);
-    final options = _extractOptions(currentQ);
+    final rawOptions = _rawOptions(currentQ);
+    final correctIndices = _correctOptionIndices(currentQ);
+    final diagram = _buildQuestionDiagram(currentQ);
     final isClasswork = _isClassworkQuestion(currentQ);
 
     return Scaffold(
@@ -541,6 +649,10 @@ class _LiveClassroomPresentationScreenState
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
+                                      if (diagram != null) ...[
+                                        diagram,
+                                        const SizedBox(height: 20),
+                                      ],
                                       SelectableText(
                                         qText.isNotEmpty
                                             ? qText
@@ -554,58 +666,116 @@ class _LiveClassroomPresentationScreenState
                                       ),
 
                                       // Options Grid / List
-                                      if (options.isNotEmpty) ...[
+                                      if (rawOptions.isNotEmpty) ...[
                                         const SizedBox(height: 24),
                                         const Divider(color: Colors.white10),
                                         const SizedBox(height: 12),
                                         for (int i = 0;
-                                            i < options.length;
+                                            i < rawOptions.length;
                                             i++)
-                                          Container(
-                                            margin: const EdgeInsets.only(
-                                                bottom: 10),
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 16, vertical: 12),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFF0F172A),
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                              border: Border.all(
-                                                  color: Colors.white12),
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                CircleAvatar(
-                                                  radius: 14,
-                                                  backgroundColor:
-                                                      const Color(0xFF6366F1)
-                                                          .withOpacity(0.2),
-                                                  child: Text(
-                                                    String.fromCharCode(
-                                                        65 + i),
-                                                    style: const TextStyle(
-                                                      color: Color(0xFF818CF8),
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 12,
+                                          Builder(builder: (_) {
+                                            final optText =
+                                                _optionText(rawOptions[i]);
+                                            final optImage =
+                                                _optionImage(rawOptions[i]);
+                                            final isCorrect = _showAnswerKey &&
+                                                correctIndices.contains(i);
+                                            return Container(
+                                              margin: const EdgeInsets.only(
+                                                  bottom: 10),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 16,
+                                                vertical: 12,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: isCorrect
+                                                    ? const Color(0xFF10B981)
+                                                        .withOpacity(0.12)
+                                                    : const Color(0xFF0F172A),
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                border: Border.all(
+                                                  color: isCorrect
+                                                      ? const Color(0xFF10B981)
+                                                      : Colors.white12,
+                                                  width: isCorrect ? 1.5 : 1,
+                                                ),
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  CircleAvatar(
+                                                    radius: 14,
+                                                    backgroundColor: isCorrect
+                                                        ? const Color(
+                                                            0xFF10B981)
+                                                        : const Color(
+                                                                0xFF6366F1)
+                                                            .withOpacity(0.2),
+                                                    child: Text(
+                                                      String.fromCharCode(
+                                                          65 + i),
+                                                      style: TextStyle(
+                                                        color: isCorrect
+                                                            ? Colors.white
+                                                            : const Color(
+                                                                0xFF818CF8),
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 12,
+                                                      ),
                                                     ),
                                                   ),
-                                                ),
-                                                const SizedBox(width: 14),
-                                                Expanded(
-                                                  child: Text(
-                                                    options[i],
-                                                    style: GoogleFonts.outfit(
-                                                      color: Colors.white
-                                                          .withOpacity(0.9),
-                                                      fontSize:
-                                                          _fontSize * 0.85,
+                                                  const SizedBox(width: 14),
+                                                  if (optText.isNotEmpty)
+                                                    Expanded(
+                                                      child: Text(
+                                                        optText,
+                                                        style: GoogleFonts
+                                                            .outfit(
+                                                          color: Colors.white
+                                                              .withOpacity(
+                                                                  0.9),
+                                                          fontSize:
+                                                              _fontSize * 0.85,
+                                                        ),
+                                                      ),
                                                     ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
+                                                  if (optImage != null) ...[
+                                                    if (optText.isNotEmpty)
+                                                      const SizedBox(
+                                                          width: 12),
+                                                    ClipRRect(
+                                                      borderRadius:
+                                                          BorderRadius
+                                                              .circular(8),
+                                                      child: SizedBox(
+                                                        height: 56,
+                                                        width: 84,
+                                                        child: SvgLabelOverlay(
+                                                          imagePath: optImage[
+                                                              'imageUrl'],
+                                                          isSvg: optImage[
+                                                              'isSvg'],
+                                                          labels: const [],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                  if (isCorrect) ...[
+                                                    const SizedBox(width: 10),
+                                                    const Icon(
+                                                      Icons
+                                                          .check_circle_rounded,
+                                                      color:
+                                                          Color(0xFF10B981),
+                                                      size: 20,
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            );
+                                          }),
                                       ],
                                     ],
                                   ),
@@ -615,6 +785,31 @@ class _LiveClassroomPresentationScreenState
                                 // Hint & Solution Reveal Section
                                 Row(
                                   children: [
+                                    if (correctIndices.isNotEmpty)
+                                      OutlinedButton.icon(
+                                        onPressed: () {
+                                          setState(() =>
+                                              _showAnswerKey = !_showAnswerKey);
+                                        },
+                                        icon: Icon(
+                                          _showAnswerKey
+                                              ? Icons.key
+                                              : Icons.key_outlined,
+                                          color: const Color(0xFF10B981),
+                                          size: 18,
+                                        ),
+                                        label: Text(_showAnswerKey
+                                            ? 'Hide Answer Key'
+                                            : '🔑 Answer Key'),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor:
+                                              const Color(0xFF10B981),
+                                          side: const BorderSide(
+                                              color: Color(0xFF10B981)),
+                                        ),
+                                      ),
+                                    if (correctIndices.isNotEmpty)
+                                      const SizedBox(width: 12),
                                     if (hintText.isNotEmpty)
                                       OutlinedButton.icon(
                                         onPressed: () {
