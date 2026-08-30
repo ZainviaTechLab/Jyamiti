@@ -1,10 +1,7 @@
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
-import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
-import 'package:fl_chart/fl_chart.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:jyamiti/providers/auth_provider.dart';
 import '../../../widgets/theme_reveal.dart';
@@ -22,7 +19,7 @@ import '../widgets/users_tab.dart';
 import '../widgets/courses_tab.dart';
 import '../widgets/batches_tab.dart';
 import '../widgets/desktop_upload_tab.dart';
-import '../../slides/screens/slide_decks_manager_screen.dart';
+import '../widgets/dashboard_stats_view.dart';
 import '../../exams/screens/question_bank_screen.dart';
 import '../../exams/screens/assessment_question_management_screen.dart';
 
@@ -164,90 +161,11 @@ class _AdminStatsDashboardState extends State<AdminStatsDashboard> {
               );
             }
             if (state is AdminStatsLoaded) {
-              final _stats = state.stats;
-              final totals = _stats['totals'];
-              final Map<String, dynamic> regTrends =
-                  _stats['registrationTrends'] ?? {};
-              return Center(
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 1000),
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 16),
-                        // Totals Cards
-                        GridView.count(
-                          crossAxisCount:
-                              MediaQuery.of(context).size.width > 600 ? 4 : 2,
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          childAspectRatio: 1.3,
-                          children: [
-                            _buildStatCard(
-                              'TOTAL STUDENTS',
-                              totals['students'] ?? 0,
-                              const Color(0xFF6366F1),
-                              Icons.people_alt_rounded,
-                            ),
-                            _buildStatCard(
-                              'TOTAL TUTORS',
-                              totals['tutors'] ?? 0,
-                              const Color(0xFF10B981),
-                              Icons.person_rounded,
-                            ),
-                            _buildStatCard(
-                              'TOTAL COURSES',
-                              totals['courses'] ?? 0,
-                              const Color(0xFFF59E0B),
-                              Icons.book_rounded,
-                            ),
-                            _buildStatCard(
-                              'TOTAL BATCHES',
-                              totals['batches'] ?? 0,
-                              const Color(0xFFEC4899),
-                              Icons.class_rounded,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 32),
-                        // Charts / Graphs
-                        Text(
-                          'Registration Trends',
-                          style: TextStyle(
-                            color: context.textColor,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Container(
-                          height: 300,
-                          padding: EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: context.glassBg,
-                            borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: context.glassBorder),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(24),
-                            child: regTrends.isEmpty
-                                ? const Center(
-                                    child: Text(
-                                      'No registration data available',
-                                    ),
-                                  )
-                                : _buildRegistrationGraph(regTrends),
-                          ),
-                        ),
-                        const SizedBox(height: 40),
-                      ],
-                    ),
-                  ),
-                ),
+              return RefreshIndicator(
+                onRefresh: () async {
+                  context.read<AdminStatsBloc>().add(FetchAdminStats());
+                },
+                child: DashboardStatsView(stats: state.stats),
               );
             }
             return const SizedBox.shrink();
@@ -859,144 +777,4 @@ class _AdminStatsDashboardState extends State<AdminStatsDashboard> {
     );
   }
 
-  Widget _buildStatCard(String title, int count, Color color, IconData icon) {
-    return Container(
-      decoration: BoxDecoration(
-        color: context.glassBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3)),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.1),
-            blurRadius: 20,
-            spreadRadius: -5,
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, color: color.withOpacity(0.8), size: 28),
-                const SizedBox(height: 8),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    count.toString(),
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: context.textColor,
-                      shadows: [Shadow(color: color, blurRadius: 10)],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      color: context.textColor70,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRegistrationGraph(Map<String, dynamic> data) {
-    final sortedKeys = data.keys.toList()..sort();
-    final barGroups = <BarChartGroupData>[];
-    double maxY = 0;
-
-    for (int i = 0; i < sortedKeys.length; i++) {
-      final value = data[sortedKeys[i]]['student'].toDouble();
-      if (value > maxY) maxY = value;
-      barGroups.add(
-        BarChartGroupData(
-          x: i,
-          barRods: [
-            BarChartRodData(
-              toY: value,
-              color: const Color(0xFF6366F1),
-              width: 16,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return BarChart(
-      BarChartData(
-        alignment: BarChartAlignment.spaceAround,
-        maxY: maxY + (maxY * 0.2) + 1, // Add some top padding
-        barTouchData: BarTouchData(enabled: false),
-        titlesData: FlTitlesData(
-          show: true,
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              getTitlesWidget: (double value, TitleMeta meta) {
-                if (value.toInt() >= 0 && value.toInt() < sortedKeys.length) {
-                  return Padding(
-                    padding: EdgeInsets.only(top: 8.0),
-                    child: Text(
-                      sortedKeys[value.toInt()].split('-')[1], // Month only
-                      style: TextStyle(
-                        color: context.textColor70,
-                        fontSize: 12,
-                      ),
-                    ),
-                  );
-                }
-                return const Text('');
-              },
-            ),
-          ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 30,
-              getTitlesWidget: (value, meta) {
-                if (value % 1 != 0) return const Text(''); // Only show integers
-                return Text(
-                  value.toInt().toString(),
-                  style: TextStyle(color: context.textColor70, fontSize: 12),
-                );
-              },
-            ),
-          ),
-          topTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          rightTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-        ),
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: false,
-          horizontalInterval: 1,
-          getDrawingHorizontalLine: (value) =>
-              FlLine(color: context.glassBorder, strokeWidth: 1),
-        ),
-        borderData: FlBorderData(show: false),
-        barGroups: barGroups,
-      ),
-    );
-  }
 }
