@@ -582,30 +582,38 @@ class DashboardStatsView extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        value,
-                        style: TextStyle(
-                          color: context.textColor,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          height: 1.1,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (subtitle != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            color: subtitleColor ?? context.textColor60,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text(
+                            value,
+                            style: TextStyle(
+                              color: context.textColor,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              height: 1.1,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                          if (subtitle != null) ...[
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                subtitle,
+                                style: TextStyle(
+                                  color: subtitleColor ?? context.textColor60,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
                 ),
