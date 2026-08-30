@@ -20,8 +20,16 @@ export function authenticateToken(req, res, next) {
 }
 
 export function requireRole(roles) {
+  // Case-insensitive on purpose: req.user.role is always uppercase (it's
+  // issued straight from User.role, whose enum is ADMIN/TUTOR/MENTOR/
+  // STUDENT), but several call sites have passed lowercase role names --
+  // a case-sensitive check silently locked out every legitimate user who
+  // hit one of those routes. Normalizing here fixes it at the root instead
+  // of relying on every route remembering to spell roles in uppercase.
+  const normalizedRoles = roles.map((r) => String(r).toUpperCase());
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    const userRole = req.user ? String(req.user.role || '').toUpperCase() : '';
+    if (!userRole || !normalizedRoles.includes(userRole)) {
       return res.status(403).json({ message: 'Access denied: insufficient permissions' });
     }
     next();
