@@ -1,4 +1,5 @@
 import 'package:jyamiti/presentation/widgets/jyamiti_loader.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -36,17 +37,39 @@ class _BatchesTabState extends State<BatchesTab> {
   bool _isLoading = false;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  Timer? _searchDebounce;
 
   @override
   void initState() {
     super.initState();
     _fetchData();
+    // Search and pagination are both server-side now (hundreds of batches
+    // shouldn't mean downloading them all up front), so ask for the next
+    // page as the admin scrolls near the bottom instead of loading
+    // everything at once.
+    _scrollController.addListener(() {
+      if (_scrollController.position.pixels >=
+          _scrollController.position.maxScrollExtent - 400) {
+        context.read<BatchBloc>().add(LoadMoreBatches());
+      }
+    });
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _scrollController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() => _searchQuery = value);
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      context.read<BatchBloc>().add(FetchBatches(search: value.trim()));
+    });
   }
 
   Future<void> _fetchData() async {
@@ -80,7 +103,7 @@ class _BatchesTabState extends State<BatchesTab> {
   }
 
   void _triggerRefresh() {
-    context.read<BatchBloc>().add(FetchBatches());
+    context.read<BatchBloc>().add(FetchBatches(search: _searchQuery.trim()));
   }
 
   void _createBatch(
@@ -1696,77 +1719,76 @@ class _BatchesTabState extends State<BatchesTab> {
       builder: (context, state) {
         bool isBlocLoading = state is BatchLoading || state is BatchInitial;
         List<dynamic> batches = [];
+        bool isLoadingMore = false;
+        int total = 0;
         if (state is BatchLoaded) {
           batches = state.batches;
           _batches = state.batches;
+          isLoadingMore = state.isLoadingMore;
+          total = state.total;
         }
 
         if (_isLoading || isBlocLoading) {
           return const Center(child: JyamitiLoader(color: Color(0xFF6366F1)));
         }
 
-        final filteredBatches = _searchQuery.isEmpty
-            ? batches
-            : batches.where((b) {
-                final name = (b['name'] ?? '').toString().toLowerCase();
-                final course = (b['course']?['name'] ?? '')
-                    .toString()
-                    .toLowerCase();
-                final category = (b['category']?['name'] ?? '')
-                    .toString()
-                    .toLowerCase();
-                final tutor = (b['tutor']?['name'] ?? '')
-                    .toString()
-                    .toLowerCase();
-
-                bool mentorMatch = false;
-                if (b['mentors'] != null) {
-                  for (var m in b['mentors']) {
-                    if ((m['name'] ?? '').toString().toLowerCase().contains(
-                      _searchQuery,
-                    )) {
-                      mentorMatch = true;
-                      break;
-                    }
-                  }
-                }
-
-                return name.contains(_searchQuery) ||
-                    course.contains(_searchQuery) ||
-                    category.contains(_searchQuery) ||
-                    tutor.contains(_searchQuery) ||
-                    mentorMatch;
-              }).toList();
-
         return Scaffold(
           backgroundColor: Colors.transparent,
           body: batches.isEmpty
               ? Center(
                   child: Text(
-                    'No batches created yet',
+                    _searchQuery.isEmpty
+                        ? 'No batches created yet'
+                        : 'No matching batches found',
                     style: TextStyle(color: context.textColor70),
                   ),
                 )
-              : filteredBatches.isEmpty
-              ? Center(
-                  child: Text(
-                    'No matching batches found',
-                    style: TextStyle(color: context.textColor70),
-                  ),
-                )
-              : ListView.builder(
-                  padding: EdgeInsets.only(
-                    top: 24,
-                    left: 16,
-                    right: 16,
-                    bottom: 100,
-                  ),
-                  itemCount: filteredBatches.length,
-                  itemBuilder: (ctx, idx) {
-                    final batch = filteredBatches[idx];
-                    final animationDelay = (idx % 10) * 50;
+              : Column(
+                  children: [
+                    if (total > 0)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Showing ${batches.length} of $total batch(es)',
+                            style: TextStyle(
+                              color: context.textColor60,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: ListView.builder(
+                        controller: _scrollController,
+                        padding: EdgeInsets.only(
+                          top: 12,
+                          left: 16,
+                          right: 16,
+                          bottom: 100,
+                        ),
+                        // +1 trailing slot for the "loading next page" spinner
+                        // — scrolling near the bottom triggers LoadMoreBatches
+                        // (see the ScrollController listener in initState)
+                        // instead of ever loading the full dataset at once.
+                        itemCount: batches.length + (isLoadingMore ? 1 : 0),
+                        itemBuilder: (ctx, idx) {
+                          if (idx >= batches.length) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 20),
+                              child: Center(
+                                child: JyamitiLoader(
+                                  color: Color(0xFF6366F1),
+                                ),
+                              ),
+                            );
+                          }
+                          final batch = batches[idx];
+                          final animationDelay = (idx % 10) * 50;
 
-                    return Container(
+                          return Container(
                           margin: EdgeInsets.only(bottom: 16),
                           decoration: BoxDecoration(
                             color: context.glassBg,
@@ -2044,7 +2066,10 @@ class _BatchesTabState extends State<BatchesTab> {
                         .animate()
                         .fade(duration: 400.ms, delay: animationDelay.ms)
                         .slideX(begin: 0.1, end: 0);
-                  },
+                        },
+                      ),
+                    ),
+                  ],
                 ),
           floatingActionButtonLocation:
               FloatingActionButtonLocation.centerFloat,
@@ -2121,18 +2146,12 @@ class _BatchesTabState extends State<BatchesTab> {
                                           ),
                                           onPressed: () {
                                             _searchController.clear();
-                                            setState(() {
-                                              _searchQuery = '';
-                                            });
+                                            _onSearchChanged('');
                                           },
                                         )
                                       : null,
                                 ),
-                                onChanged: (val) {
-                                  setState(() {
-                                    _searchQuery = val.toLowerCase();
-                                  });
-                                },
+                                onChanged: _onSearchChanged,
                               ),
                             ),
                           )

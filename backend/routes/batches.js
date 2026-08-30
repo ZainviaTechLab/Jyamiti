@@ -36,7 +36,14 @@ function formatBatch(b) {
   };
 }
 
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // GET /api/batches
+// Without ?page & ?limit, behaves exactly as before (returns the full
+// array) — existing callers (tutor/mentor/student dashboards, schedules)
+// are unaffected. Pass ?page=&limit=[&search=] to get a paginated
+// { data, hasMore, total } response instead, for admin lists with
+// hundreds of batches.
 router.get('/', authenticateToken, async (req, res) => {
   try {
     let filter = {};
@@ -44,7 +51,48 @@ router.get('/', authenticateToken, async (req, res) => {
     else if (req.user.role === 'MENTOR') filter = { mentors: req.user.id };
     else if (req.user.role === 'STUDENT') filter = { students: req.user.id };
 
-    const batches = await Batch.find(filter).populate(populateFields).sort({ createdAt: -1 });
+    const { page, limit, search } = req.query;
+
+    if (search && search.trim()) {
+      const regex = new RegExp(escapeRegex(search.trim()), 'i');
+      const [courseIds, tutorIds, mentorIds, categoryIds] = await Promise.all([
+        Course.find({ name: regex }).distinct('_id'),
+        User.find({ role: 'TUTOR', name: regex }).distinct('_id'),
+        User.find({ role: 'MENTOR', name: regex }).distinct('_id'),
+        BatchCategory.find({ name: regex }).distinct('_id'),
+      ]);
+      filter = {
+        ...filter,
+        $or: [
+          { name: regex },
+          { course: { $in: courseIds } },
+          { tutor: { $in: tutorIds } },
+          { mentors: { $in: mentorIds } },
+          { category: { $in: categoryIds } },
+        ],
+      };
+    }
+
+    const query = Batch.find(filter).populate(populateFields).sort({ createdAt: -1 });
+
+    if (page && limit) {
+      const pageNum = Math.max(1, parseInt(page) || 1);
+      const limitNum = Math.max(1, parseInt(limit) || 30);
+      const skip = (pageNum - 1) * limitNum;
+
+      const [batches, totalCount] = await Promise.all([
+        query.skip(skip).limit(limitNum),
+        Batch.countDocuments(filter),
+      ]);
+
+      return res.json({
+        data: batches.map(formatBatch),
+        hasMore: skip + batches.length < totalCount,
+        total: totalCount,
+      });
+    }
+
+    const batches = await query;
     res.json(batches.map(formatBatch));
   } catch (error) {
     console.error('Fetch batches error:', error);

@@ -5,8 +5,11 @@ import 'batch_event.dart';
 import 'batch_state.dart';
 
 class BatchBloc extends Bloc<BatchEvent, BatchState> {
+  static const int _pageSize = 30;
+
   BatchBloc() : super(BatchInitial()) {
     on<FetchBatches>(_onFetchBatches);
+    on<LoadMoreBatches>(_onLoadMoreBatches);
     on<CreateBatch>(_onCreateBatch);
     on<UpdateBatch>(_onUpdateBatch);
     on<DeleteBatch>(_onDeleteBatch);
@@ -14,18 +17,73 @@ class BatchBloc extends Bloc<BatchEvent, BatchState> {
     on<RemoveStudentFromBatch>(_onRemoveStudentFromBatch);
   }
 
+  String _pagePath(int page, String search) {
+    final query = {
+      'page': '$page',
+      'limit': '$_pageSize',
+      if (search.isNotEmpty) 'search': search,
+    };
+    final queryString = query.entries
+        .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+    return '/batches?$queryString';
+  }
+
   Future<void> _onFetchBatches(FetchBatches event, Emitter<BatchState> emit) async {
     emit(BatchLoading());
     try {
-      final res = await ApiService.get('/batches');
+      final res = await ApiService.get(_pagePath(1, event.search));
       if (res.statusCode == 200) {
-        final List<dynamic> batches = jsonDecode(res.body);
-        emit(BatchLoaded(batches));
+        final Map<String, dynamic> body = jsonDecode(res.body);
+        emit(
+          BatchLoaded(
+            body['data'] ?? [],
+            hasMore: body['hasMore'] == true,
+            page: 1,
+            total: body['total'] ?? 0,
+            search: event.search,
+          ),
+        );
       } else {
         emit(BatchError('Failed to load batches: ${res.statusCode}'));
       }
     } catch (e) {
       emit(BatchError('Error fetching batches: $e'));
+    }
+  }
+
+  Future<void> _onLoadMoreBatches(
+    LoadMoreBatches event,
+    Emitter<BatchState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is! BatchLoaded ||
+        !currentState.hasMore ||
+        currentState.isLoadingMore) {
+      return;
+    }
+
+    emit(currentState.copyWith(isLoadingMore: true));
+    try {
+      final nextPage = currentState.page + 1;
+      final res = await ApiService.get(_pagePath(nextPage, currentState.search));
+      if (res.statusCode == 200) {
+        final Map<String, dynamic> body = jsonDecode(res.body);
+        final List<dynamic> nextBatch = body['data'] ?? [];
+        emit(
+          currentState.copyWith(
+            batches: [...currentState.batches, ...nextBatch],
+            hasMore: body['hasMore'] == true,
+            page: nextPage,
+            total: body['total'] ?? currentState.total,
+            isLoadingMore: false,
+          ),
+        );
+      } else {
+        emit(currentState.copyWith(isLoadingMore: false));
+      }
+    } catch (e) {
+      emit(currentState.copyWith(isLoadingMore: false));
     }
   }
 
@@ -44,7 +102,7 @@ class BatchBloc extends Bloc<BatchEvent, BatchState> {
     }
 
     if (currentState is BatchLoaded) {
-      emit(BatchLoaded(currentState.batches));
+      emit(currentState);
     }
   }
 
@@ -63,7 +121,7 @@ class BatchBloc extends Bloc<BatchEvent, BatchState> {
     }
 
     if (currentState is BatchLoaded) {
-      emit(BatchLoaded(currentState.batches));
+      emit(currentState);
     }
   }
 
@@ -81,7 +139,7 @@ class BatchBloc extends Bloc<BatchEvent, BatchState> {
     }
 
     if (currentState is BatchLoaded) {
-      emit(BatchLoaded(currentState.batches));
+      emit(currentState);
     }
   }
 
@@ -103,7 +161,7 @@ class BatchBloc extends Bloc<BatchEvent, BatchState> {
     }
 
     if (currentState is BatchLoaded) {
-      emit(BatchLoaded(currentState.batches));
+      emit(currentState);
     }
   }
 
@@ -122,7 +180,7 @@ class BatchBloc extends Bloc<BatchEvent, BatchState> {
     }
 
     if (currentState is BatchLoaded) {
-      emit(BatchLoaded(currentState.batches));
+      emit(currentState);
     }
   }
 }

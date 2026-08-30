@@ -7,7 +7,23 @@ abstract class BatchEvent extends Equatable {
   List<Object?> get props => [];
 }
 
-class FetchBatches extends BatchEvent {}
+/// Fetches page 1, replacing whatever batches were previously loaded.
+/// [search] is resolved server-side (matches batch name, course, tutor,
+/// mentor, or category name) so it searches the *whole* dataset, not just
+/// whatever page happens to be loaded on the client.
+class FetchBatches extends BatchEvent {
+  final String search;
+
+  const FetchBatches({this.search = ''});
+
+  @override
+  List<Object?> get props => [search];
+}
+
+/// Fetches the next page and appends it to the currently loaded batches.
+/// No-ops (via the bloc) if there's no next page or a load is already in
+/// flight.
+class LoadMoreBatches extends BatchEvent {}
 
 class CreateBatch extends BatchEvent {
   final Map<String, dynamic> batchData;
