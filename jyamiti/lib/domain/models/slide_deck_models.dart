@@ -139,6 +139,21 @@ class SlideBlock {
   // add/reorder/edit/delete-editing a slide's blocks.
   final String? selfAlignVertical;
 
+  // columnMainAxisAlignment ('start'|'end'|'center'|'spaceBetween'|
+  // 'spaceAround'|'spaceEvenly'): only meaningful on a `columns` block --
+  // how items are distributed along each column's own vertical axis,
+  // using the exact same vocabulary as Flutter's MainAxisAlignment enum
+  // (see SlideBlockRenderer._buildColumnsBlock's mapping). Distinct from
+  // horizontalAlign/verticalAlign (which position a block's content
+  // WITHIN its own box, or the columns block's box as a whole) -- this
+  // is specifically about spacing/positioning the items INSIDE each
+  // column relative to each other, only visible once a column's items
+  // don't already fill the row's full height (columns are height-matched
+  // to the tallest one). Applies uniformly to every column in the block,
+  // not per-column. Null means the existing default (items packed at the
+  // top, unchanged from before this field existed).
+  final String? columnMainAxisAlignment;
+
   SlideBlock({
     required this.id,
     required this.type,
@@ -167,6 +182,7 @@ class SlideBlock {
     this.width,
     this.selfAlign,
     this.selfAlignVertical,
+    this.columnMainAxisAlignment,
   });
 
   SlideBlock copyWith({
@@ -214,6 +230,8 @@ class SlideBlock {
     bool clearSelfAlign = false,
     String? selfAlignVertical,
     bool clearSelfAlignVertical = false,
+    String? columnMainAxisAlignment,
+    bool clearColumnMainAxisAlignment = false,
   }) {
     return SlideBlock(
       id: id ?? this.id,
@@ -255,6 +273,9 @@ class SlideBlock {
       selfAlignVertical: clearSelfAlignVertical
           ? null
           : (selfAlignVertical ?? this.selfAlignVertical),
+      columnMainAxisAlignment: clearColumnMainAxisAlignment
+          ? null
+          : (columnMainAxisAlignment ?? this.columnMainAxisAlignment),
     );
   }
 
@@ -287,6 +308,7 @@ class SlideBlock {
       'width': width,
       'selfAlign': selfAlign,
       'selfAlignVertical': selfAlignVertical,
+      'columnMainAxisAlignment': columnMainAxisAlignment,
     };
   }
 
@@ -323,6 +345,7 @@ class SlideBlock {
       width: (map['width'] as num?)?.toDouble(),
       selfAlign: map['selfAlign']?.toString(),
       selfAlignVertical: map['selfAlignVertical']?.toString(),
+      columnMainAxisAlignment: map['columnMainAxisAlignment']?.toString(),
     );
   }
 

@@ -346,7 +346,10 @@ class SlideBlockRenderer extends StatelessWidget {
           style: TextStyle(
             fontSize: 15.5,
             height: 1.55,
-            color: _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155)),
+            color: _textColorOr(
+              const Color(0xFFCBD5E1),
+              const Color(0xFF334155),
+            ),
             fontWeight: FontWeight.w400,
           ),
         ),
@@ -364,7 +367,10 @@ class SlideBlockRenderer extends StatelessWidget {
             style: TextStyle(
               fontSize: 15.5,
               height: 1.55,
-              color: _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155)),
+              color: _textColorOr(
+                const Color(0xFFCBD5E1),
+                const Color(0xFF334155),
+              ),
               fontWeight: FontWeight.w400,
             ),
           ),
@@ -386,7 +392,9 @@ class SlideBlockRenderer extends StatelessWidget {
               cleanTex,
               textStyle: TextStyle(
                 fontSize: 16.5,
-                color: isDark ? const Color(0xFF38BDF8) : const Color(0xFF4338CA),
+                color: isDark
+                    ? const Color(0xFF38BDF8)
+                    : const Color(0xFF4338CA),
                 fontWeight: FontWeight.w600,
               ),
               onErrorFallback: (_) => Text(
@@ -412,7 +420,10 @@ class SlideBlockRenderer extends StatelessWidget {
           style: TextStyle(
             fontSize: 15.5,
             height: 1.55,
-            color: _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155)),
+            color: _textColorOr(
+              const Color(0xFFCBD5E1),
+              const Color(0xFF334155),
+            ),
             fontWeight: FontWeight.w400,
           ),
         ),
@@ -421,9 +432,7 @@ class SlideBlockRenderer extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
-      child: SelectableText.rich(
-        TextSpan(children: spans),
-      ),
+      child: SelectableText.rich(TextSpan(children: spans)),
     );
   }
 
@@ -432,7 +441,8 @@ class SlideBlockRenderer extends StatelessWidget {
     final dim = SvgStyleInliner.extractDimensions(processedSvg);
     final mode = (block.extra ?? 'full').toLowerCase().trim();
 
-    final isOriginal = mode == 'original' ||
+    final isOriginal =
+        mode == 'original' ||
         mode == 'viewbox' ||
         mode == 'intrinsic' ||
         mode == 'native';
@@ -505,10 +515,7 @@ class SlideBlockRenderer extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 12.0),
       alignment: Alignment.center,
       child: widthFactor != null
-          ? FractionallySizedBox(
-              widthFactor: widthFactor,
-              child: svgCore,
-            )
+          ? FractionallySizedBox(widthFactor: widthFactor, child: svgCore)
           : svgCore,
     );
   }
@@ -627,7 +634,8 @@ class SlideBlockRenderer extends StatelessWidget {
     // as before. `numbered` is the only other style so far ("1.", "2.",
     // ..." instead of a bullet dot); anything else in `extra` (including
     // unset) means the original plain bullet.
-    final bool numbered = (block.extra ?? '').toLowerCase().trim() == 'numbered';
+    final bool numbered =
+        (block.extra ?? '').toLowerCase().trim() == 'numbered';
     // Reuses borderColor for the marker (bullet dot / number) rather
     // than adding a new field -- bulletList doesn't otherwise draw a
     // border, so the field was sitting unused for this type anyway.
@@ -639,8 +647,7 @@ class SlideBlockRenderer extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: items.asMap().entries.map((entry) {
-          final cleanItem =
-              entry.value.replaceFirst(RegExp(r'^[-*•]\s*'), '');
+          final cleanItem = entry.value.replaceFirst(RegExp(r'^[-*•]\s*'), '');
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 4.0),
             child: Row(
@@ -678,7 +685,9 @@ class SlideBlockRenderer extends StatelessWidget {
                       fontSize: 15,
                       height: 1.45,
                       color: _textColorOr(
-                          const Color(0xFFE2E8F0), const Color(0xFF334155)),
+                        const Color(0xFFE2E8F0),
+                        const Color(0xFF334155),
+                      ),
                     ),
                   ),
                 ),
@@ -736,7 +745,9 @@ class SlideBlockRenderer extends StatelessWidget {
                 fontSize: 14.5,
                 height: 1.45,
                 color: _textColorOr(
-                    const Color(0xFFF1F5F9), const Color(0xFF1E293B)),
+                  const Color(0xFFF1F5F9),
+                  const Color(0xFF1E293B),
+                ),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -852,12 +863,16 @@ class SlideBlockRenderer extends StatelessWidget {
       // Malformed/empty table data -- render nothing rather than crash.
     }
 
-    final Color gridColor =
-        isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-    final Color headerBg =
-        isDark ? const Color(0xFF1E293B) : const Color(0xFFEEF2FF);
-    final Color textColor =
-        _textColorOr(const Color(0xFFE2E8F0), const Color(0xFF334155));
+    final Color gridColor = isDark
+        ? const Color(0xFF334155)
+        : const Color(0xFFE2E8F0);
+    final Color headerBg = isDark
+        ? const Color(0xFF1E293B)
+        : const Color(0xFFEEF2FF);
+    final Color textColor = _textColorOr(
+      const Color(0xFFE2E8F0),
+      const Color(0xFF334155),
+    );
 
     if (headers.isEmpty && rows.isEmpty) {
       return Container(
@@ -875,16 +890,16 @@ class SlideBlockRenderer extends StatelessWidget {
     }
 
     Widget cell(String text, {bool isHeader = false}) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Text(
-            text,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 13.5,
-              fontWeight: isHeader ? FontWeight.bold : FontWeight.normal,
-            ),
-          ),
-        );
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 13.5,
+          fontWeight: isHeader ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+    );
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 10.0),
@@ -905,8 +920,7 @@ class SlideBlockRenderer extends StatelessWidget {
             if (headers.isNotEmpty)
               TableRow(
                 decoration: BoxDecoration(color: headerBg),
-                children:
-                    headers.map((h) => cell(h, isHeader: true)).toList(),
+                children: headers.map((h) => cell(h, isHeader: true)).toList(),
               ),
             ...rows.map(
               (r) => TableRow(children: r.map((c) => cell(c)).toList()),
@@ -922,8 +936,7 @@ class SlideBlockRenderer extends StatelessWidget {
   /// syllabus explorer) rather than embedding a player from scratch.
   Widget _buildVideoBlock(BuildContext context) {
     final String raw = block.content.trim();
-    final String videoId =
-        YoutubePlayerController.convertUrlToId(raw) ?? raw;
+    final String videoId = YoutubePlayerController.convertUrlToId(raw) ?? raw;
 
     if (videoId.isEmpty) {
       return Container(
@@ -937,7 +950,9 @@ class SlideBlockRenderer extends StatelessWidget {
           'No video URL set',
           style: TextStyle(
             color: _textColorOr(
-                const Color(0xFF94A3B8), const Color(0xFF64748B)),
+              const Color(0xFF94A3B8),
+              const Color(0xFF64748B),
+            ),
           ),
         ),
       );
@@ -963,8 +978,7 @@ class SlideBlockRenderer extends StatelessWidget {
       try {
         final decoded = json.decode(block.content) as List;
         if (decoded.isNotEmpty && decoded.first is Map) {
-          return _buildCardsList(
-              context, decoded.cast<Map<String, dynamic>>());
+          return _buildCardsList(context, decoded.cast<Map<String, dynamic>>());
         }
       } catch (_) {}
     }
@@ -1010,8 +1024,9 @@ class SlideBlockRenderer extends StatelessWidget {
       _ => CrossAxisAlignment.start,
     };
     final Color? explicitBorder = parseHexColor(borderColorStr);
-    final Color defaultAccent =
-        isDark ? const Color(0xFF22C55E) : const Color(0xFF16A34A);
+    final Color defaultAccent = isDark
+        ? const Color(0xFF22C55E)
+        : const Color(0xFF16A34A);
     // The box border can go translucent under glass (that's the whole
     // point), but the title text below reuses this same accent color --
     // keep a separate, always-opaque version for that so an unset
@@ -1025,8 +1040,9 @@ class SlideBlockRenderer extends StatelessWidget {
     final Color bgColor = glass
         ? _glassTint(parseHexColor(bgColorStr), subtle: subtleGlass)
         : (parseHexColor(bgColorStr) ??
-            (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9)));
-    final Color textColor = parseHexColor(textColorStr) ??
+              (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9)));
+    final Color textColor =
+        parseHexColor(textColorStr) ??
         (isDark || glass ? const Color(0xFFFFFFFF) : const Color(0xFF0F172A));
 
     final mode = (extra ?? 'boxed').toLowerCase().trim();
@@ -1102,16 +1118,15 @@ class SlideBlockRenderer extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 10.0),
       alignment: Alignment.center,
       child: widthFactor != null
-          ? FractionallySizedBox(
-              widthFactor: widthFactor,
-              child: cardWidget,
-            )
+          ? FractionallySizedBox(widthFactor: widthFactor, child: cardWidget)
           : cardWidget,
     );
   }
 
   Widget _buildCardsList(
-      BuildContext context, List<Map<String, dynamic>> cardItems) {
+    BuildContext context,
+    List<Map<String, dynamic>> cardItems,
+  ) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 12.0),
       child: LayoutBuilder(
@@ -1120,21 +1135,27 @@ class SlideBlockRenderer extends StatelessWidget {
           final cardWidgets = cardItems.map((item) {
             final title =
                 item['title']?.toString() ?? item['caption']?.toString();
-            final content = item['content']?.toString() ??
+            final content =
+                item['content']?.toString() ??
                 item['text']?.toString() ??
                 item['math']?.toString() ??
                 '';
-            final bColor = parseHexColor(item['borderColor']?.toString()) ??
+            final bColor =
+                parseHexColor(item['borderColor']?.toString()) ??
                 (isDark ? const Color(0xFFF472B6) : const Color(0xFFDB2777));
-            final bg = parseHexColor(item['backgroundColor']?.toString()) ??
+            final bg =
+                parseHexColor(item['backgroundColor']?.toString()) ??
                 (isDark ? const Color(0xFF0B2240) : const Color(0xFFF1F5F9));
-            final txtColor = parseHexColor(item['textColor']?.toString()) ??
+            final txtColor =
+                parseHexColor(item['textColor']?.toString()) ??
                 (isDark ? Colors.white : const Color(0xFF0F172A));
 
             return Container(
               margin: const EdgeInsets.all(6.0),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16.0,
+                vertical: 14.0,
+              ),
               decoration: BoxDecoration(
                 color: bg,
                 borderRadius: BorderRadius.circular(16),
@@ -1330,7 +1351,9 @@ class SlideBlockRenderer extends StatelessWidget {
           'Empty container block',
           style: TextStyle(
             color: _textColorOr(
-                const Color(0xFF94A3B8), const Color(0xFF64748B)),
+              const Color(0xFF94A3B8),
+              const Color(0xFF64748B),
+            ),
             fontStyle: FontStyle.italic,
           ),
         ),
@@ -1383,16 +1406,26 @@ class SlideBlockRenderer extends StatelessWidget {
           'Empty columns block',
           style: TextStyle(
             color: _textColorOr(
-                const Color(0xFF94A3B8), const Color(0xFF64748B)),
+              const Color(0xFF94A3B8),
+              const Color(0xFF64748B),
+            ),
             fontStyle: FontStyle.italic,
           ),
         ),
       );
     }
 
-    Widget columnContent(List<SlideBlock> blocks) => Column(
+    // Only meaningful once a column actually has leftover vertical space
+    // to distribute items within -- i.e. the side-by-side case below,
+    // where IntrinsicHeight height-matches every column to the tallest
+    // one. Kept at MainAxisSize.min for the narrow stacked case (no
+    // shared height to speak of there, and MainAxisSize.max would try to
+    // fill unbounded height inside that plain Column, overflowing).
+    Widget columnContent(List<SlideBlock> blocks, {bool fillHeight = false}) =>
+        Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: fillHeight ? MainAxisSize.max : MainAxisSize.min,
+          mainAxisAlignment: _columnMainAxisAlignment,
           children: blocks
               .map((b) => SlideBlockRenderer(block: b, isDark: isDark))
               .toList(),
@@ -1423,7 +1456,7 @@ class SlideBlockRenderer extends StatelessWidget {
               children: [
                 for (int i = 0; i < columns.length; i++) ...[
                   if (i > 0) const SizedBox(width: 20),
-                  Expanded(child: columnContent(columns[i])),
+                  Expanded(child: columnContent(columns[i], fillHeight: true)),
                 ],
               ],
             ),
@@ -1431,6 +1464,27 @@ class SlideBlockRenderer extends StatelessWidget {
         },
       ),
     );
+  }
+
+  /// Maps [SlideBlock.columnMainAxisAlignment]'s string vocabulary to the
+  /// real enum -- unset/unrecognized falls back to `start` (packed at the
+  /// top), the existing default before this field existed.
+  MainAxisAlignment get _columnMainAxisAlignment {
+    switch (block.columnMainAxisAlignment) {
+      case 'end':
+        return MainAxisAlignment.end;
+      case 'center':
+        return MainAxisAlignment.center;
+      case 'spaceBetween':
+        return MainAxisAlignment.spaceBetween;
+      case 'spaceAround':
+        return MainAxisAlignment.spaceAround;
+      case 'spaceEvenly':
+        return MainAxisAlignment.spaceEvenly;
+      case 'start':
+      default:
+        return MainAxisAlignment.start;
+    }
   }
 
   /// A full-width colored bar with a title -- e.g. a section divider
@@ -1458,7 +1512,8 @@ class SlideBlockRenderer extends StatelessWidget {
     // A flat black default (banner's non-glass default) reads poorly on
     // a blurred, arbitrary slide background -- glass without an
     // explicit text color falls back to white instead.
-    final Color textColor = parseHexColor(block.textColor) ??
+    final Color textColor =
+        parseHexColor(block.textColor) ??
         (block.glass ? Colors.white : const Color(0xFF000000));
     final double padding = block.padding ?? 16;
     final double marginV = block.marginVertical ?? 12;
@@ -1471,7 +1526,7 @@ class SlideBlockRenderer extends StatelessWidget {
     };
     final Alignment boxAlignment = switch ((
       block.horizontalAlign,
-      block.verticalAlign
+      block.verticalAlign,
     )) {
       ('left', 'top') => Alignment.topLeft,
       ('left', 'bottom') => Alignment.bottomLeft,
@@ -1538,13 +1593,16 @@ class SlideBlockRenderer extends StatelessWidget {
     // Glass implies a box even if the author never touched Background/
     // Outline -- it's effectively a background choice of its own, so
     // turning it on alone should still produce a visible frosted panel.
-    final Color? bg =
-        block.glass ? _glassTint(explicitBg, subtle: subtleGlass) : explicitBg;
+    final Color? bg = block.glass
+        ? _glassTint(explicitBg, subtle: subtleGlass)
+        : explicitBg;
     final Color? border = block.glass
         ? (explicitBorder ?? _glassBorderColor(subtle: subtleGlass))
         : explicitBorder;
-    final Color textColor =
-        _textColorOr(const Color(0xFFCBD5E1), const Color(0xFF334155));
+    final Color textColor = _textColorOr(
+      const Color(0xFFCBD5E1),
+      const Color(0xFF334155),
+    );
     final double fontSize = block.fontSize ?? 15.5;
 
     final TextAlign textAlign = switch (block.horizontalAlign) {
@@ -1579,11 +1637,7 @@ class SlideBlockRenderer extends StatelessWidget {
         ? GoogleFonts.getFont(block.fontFamily!, textStyle: baseStyle)
         : baseStyle;
 
-    final text = Text(
-      block.content,
-      textAlign: textAlign,
-      style: textStyle,
-    );
+    final text = Text(block.content, textAlign: textAlign, style: textStyle);
 
     final bool boxed = bg != null || border != null || block.glass;
     final BorderRadius radius = BorderRadius.circular(14);
@@ -1648,9 +1702,6 @@ class SlideBlockRenderer extends StatelessWidget {
     if (block.glass) {
       box = _wrapGlass(box, borderRadius: radius, subtle: subtleGlass);
     }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
-      child: box,
-    );
+    return Padding(padding: const EdgeInsets.only(bottom: 12.0), child: box);
   }
 }

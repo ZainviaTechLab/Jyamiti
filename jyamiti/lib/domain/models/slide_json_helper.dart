@@ -310,6 +310,7 @@ class SlideJsonHelper {
     final width = (map['width'] as num?)?.toDouble();
     final selfAlign = map['selfAlign']?.toString();
     final selfAlignVertical = map['selfAlignVertical']?.toString();
+    final columnMainAxisAlignment = map['columnMainAxisAlignment']?.toString();
 
     return SlideBlock(
       id: blockId,
@@ -339,6 +340,7 @@ class SlideJsonHelper {
       width: width,
       selfAlign: selfAlign,
       selfAlignVertical: selfAlignVertical,
+      columnMainAxisAlignment: columnMainAxisAlignment,
     );
   }
 
@@ -648,6 +650,7 @@ class SlideJsonHelper {
         "verticalAlign": "top",
         "selfAlign": "center",
         "selfAlignVertical": "center",
+        "columnMainAxisAlignment": "spaceBetween",
         "columns": [
           [
             {"type": "heading", "content": "Diagram"},
@@ -800,6 +803,7 @@ class SlideJsonHelper {
           "horizontalAlign": "left",
           "verticalAlign": "top",
           "selfAlign": "center",
+          "columnMainAxisAlignment": "center",
           "columns": [
             [
               {"type": "heading", "content": "Quadrants"},
@@ -1002,6 +1006,7 @@ class SlideJsonHelper {
             "verticalAlign": "top",
             "selfAlign": "center",
             "selfAlignVertical": "bottom",
+            "columnMainAxisAlignment": "spaceEvenly",
             "columns": [
               [
                 {"type": "heading", "content": "Wave Model"},

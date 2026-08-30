@@ -747,6 +747,34 @@ void main() {
       expect(result.slides.first.blocks.first.type, SlideBlockType.text);
     });
 
+    test('parses columnMainAxisAlignment on a columns block', () {
+      const columnsJson = '''
+      {
+        "title": "Aligned Columns",
+        "blocks": [
+          {
+            "type": "columns",
+            "columnMainAxisAlignment": "spaceEvenly",
+            "columns": [
+              [
+                {"type": "text", "content": "A"}
+              ],
+              [
+                {"type": "text", "content": "B"}
+              ]
+            ]
+          }
+        ]
+      }
+      ''';
+
+      final result = SlideJsonHelper.parseJson(columnsJson);
+      expect(result.isSuccess, isTrue);
+      final block = result.slides.first.blocks.first;
+      expect(block.type, SlideBlockType.columns);
+      expect(block.columnMainAxisAlignment, 'spaceEvenly');
+    });
+
     test(
       'pptxConversionPrompt is non-empty instructional text, not app JSON',
       () {

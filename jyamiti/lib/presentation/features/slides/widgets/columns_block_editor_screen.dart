@@ -49,6 +49,7 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
   String _verticalAlign = 'top';
   String _selfAlign = 'center';
   String _selfAlignVertical = 'off';
+  String _columnMainAxisAlignment = 'start';
 
   @override
   void initState() {
@@ -65,6 +66,7 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
     _verticalAlign = widget.block.verticalAlign ?? 'top';
     _selfAlign = widget.block.selfAlign ?? 'center';
     _selfAlignVertical = widget.block.selfAlignVertical ?? 'off';
+    _columnMainAxisAlignment = widget.block.columnMainAxisAlignment ?? 'start';
     _margin = widget.block.marginVertical ?? 6;
   }
 
@@ -111,6 +113,10 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
             ? null
             : _selfAlignVertical,
         clearSelfAlignVertical: _selfAlignVertical == 'off',
+        columnMainAxisAlignment: _columnMainAxisAlignment == 'start'
+            ? null
+            : _columnMainAxisAlignment,
+        clearColumnMainAxisAlignment: _columnMainAxisAlignment == 'start',
       ),
     );
   }
@@ -133,38 +139,82 @@ class _ColumnsBlockEditorScreenState extends State<ColumnsBlockEditorScreen> {
             bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
           ),
           child: SingleChildScrollView(
-            child: ContainerStyleSection(
-              backgroundColor: _bg,
-              onBackgroundColorChanged: (val) => setSheetState(() => _bg = val),
-              borderColor: _border,
-              onBorderColorChanged: (val) => setSheetState(() => _border = val),
-              borderWidth: _borderWidth,
-              onBorderWidthChanged: (val) =>
-                  setSheetState(() => _borderWidth = val),
-              borderRadius: _borderRadius,
-              onBorderRadiusChanged: (val) =>
-                  setSheetState(() => _borderRadius = val),
-              padding: _padding,
-              onPaddingChanged: (val) => setSheetState(() => _padding = val),
-              margin: _margin,
-              onMarginChanged: (val) => setSheetState(() => _margin = val),
-              width: _width,
-              onWidthChanged: (val) => setSheetState(() => _width = val),
-              minHeight: _minHeight,
-              onMinHeightChanged: (val) =>
-                  setSheetState(() => _minHeight = val),
-              horizontalAlign: _horizontalAlign,
-              onHorizontalAlignChanged: (val) =>
-                  setSheetState(() => _horizontalAlign = val),
-              verticalAlign: _verticalAlign,
-              onVerticalAlignChanged: (val) =>
-                  setSheetState(() => _verticalAlign = val),
-              selfAlign: _selfAlign,
-              onSelfAlignChanged: (val) =>
-                  setSheetState(() => _selfAlign = val),
-              selfAlignVertical: _selfAlignVertical,
-              onSelfAlignVerticalChanged: (val) =>
-                  setSheetState(() => _selfAlignVertical = val),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ContainerStyleSection(
+                  backgroundColor: _bg,
+                  onBackgroundColorChanged: (val) =>
+                      setSheetState(() => _bg = val),
+                  borderColor: _border,
+                  onBorderColorChanged: (val) =>
+                      setSheetState(() => _border = val),
+                  borderWidth: _borderWidth,
+                  onBorderWidthChanged: (val) =>
+                      setSheetState(() => _borderWidth = val),
+                  borderRadius: _borderRadius,
+                  onBorderRadiusChanged: (val) =>
+                      setSheetState(() => _borderRadius = val),
+                  padding: _padding,
+                  onPaddingChanged: (val) =>
+                      setSheetState(() => _padding = val),
+                  margin: _margin,
+                  onMarginChanged: (val) => setSheetState(() => _margin = val),
+                  width: _width,
+                  onWidthChanged: (val) => setSheetState(() => _width = val),
+                  minHeight: _minHeight,
+                  onMinHeightChanged: (val) =>
+                      setSheetState(() => _minHeight = val),
+                  horizontalAlign: _horizontalAlign,
+                  onHorizontalAlignChanged: (val) =>
+                      setSheetState(() => _horizontalAlign = val),
+                  verticalAlign: _verticalAlign,
+                  onVerticalAlignChanged: (val) =>
+                      setSheetState(() => _verticalAlign = val),
+                  selfAlign: _selfAlign,
+                  onSelfAlignChanged: (val) =>
+                      setSheetState(() => _selfAlign = val),
+                  selfAlignVertical: _selfAlignVertical,
+                  onSelfAlignVerticalChanged: (val) =>
+                      setSheetState(() => _selfAlignVertical = val),
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 8),
+                const Text(
+                  'Column Item Alignment (spaces items vertically inside '
+                  'each column -- only visible once columns differ in '
+                  'height)',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children:
+                      [
+                            ('start', 'Start'),
+                            ('center', 'Center'),
+                            ('end', 'End'),
+                            ('spaceBetween', 'Space Between'),
+                            ('spaceAround', 'Space Around'),
+                            ('spaceEvenly', 'Space Evenly'),
+                          ]
+                          .map(
+                            (opt) => ChoiceChip(
+                              label: Text(
+                                opt.$2,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              selected: _columnMainAxisAlignment == opt.$1,
+                              onSelected: (_) => setSheetState(
+                                () => _columnMainAxisAlignment = opt.$1,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                ),
+              ],
             ),
           ),
         ),
