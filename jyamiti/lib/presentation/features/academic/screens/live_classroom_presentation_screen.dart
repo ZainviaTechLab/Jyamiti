@@ -157,13 +157,21 @@ class _LiveClassroomPresentationScreenState
     if (q == null) return '';
     if (q is String) return q;
     if (q is Map) {
-      return (q['questionText'] ??
-              q['question'] ??
-              q['title'] ??
-              q['descriptiveText'] ??
-              q['text'] ??
-              '')
-          .toString();
+      // Note: `??` only skips null, not empty strings — and fields like
+      // descriptiveText default to '' server-side, so they must come
+      // *after* the real content fields or an empty descriptiveText would
+      // permanently mask a populated `text`/`questionText`.
+      for (final candidate in [
+        q['questionText'],
+        q['question'],
+        q['title'],
+        q['text'],
+        q['descriptiveText'],
+      ]) {
+        final s = candidate?.toString().trim() ?? '';
+        if (s.isNotEmpty) return s;
+      }
+      return '';
     }
     return q.toString();
   }
@@ -189,7 +197,22 @@ class _LiveClassroomPresentationScreenState
 
   List<String> _extractOptions(dynamic q) {
     if (q is Map && q['options'] is List) {
-      return (q['options'] as List).map((e) => e.toString()).toList();
+      return (q['options'] as List).map((e) {
+        // Options come in two shapes depending on the source: plain
+        // strings (Question model) or {text, imageUrl, isSvg} objects
+        // (AssessmentQuestion / Course practice questions). Calling
+        // e.toString() on the latter dumped the raw Map representation
+        // onto the smartboard instead of the option text.
+        if (e is String) return e;
+        if (e is Map) {
+          final text = (e['text'] ?? '').toString().trim();
+          if (text.isNotEmpty) return text;
+          final imageUrl = (e['imageUrl'] ?? '').toString().trim();
+          if (imageUrl.isNotEmpty) return '[Image]';
+          return '';
+        }
+        return e.toString();
+      }).toList();
     }
     return [];
   }
