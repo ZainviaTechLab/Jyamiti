@@ -393,17 +393,24 @@ class _StudentSlideViewerScreenState extends State<StudentSlideViewerScreen> {
                 // Top Custom Header Navigation Bar
                 _buildHeaderBar(context, isDark, totalSlides, isBookmarked),
 
-                // Slide Progress Indicator Line
-                LinearProgressIndicator(
-                  value: (_currentSlideIndex + 1) / totalSlides,
-                  backgroundColor: isDark
-                      ? const Color(0xFF334155)
-                      : const Color(0xFFE2E8F0),
-                  valueColor: const AlwaysStoppedAnimation<Color>(
-                    Color(0xFF6366F1),
+                // Slide Progress Indicator Line -- thicker + rounded +
+                // brighter than the original bare 3px bar, which was easy
+                // to miss entirely against the header above it.
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: LinearProgressIndicator(
+                    value: (_currentSlideIndex + 1) / totalSlides,
+                    backgroundColor: isDark
+                        ? const Color(0xFF334155)
+                        : const Color(0xFFE2E8F0),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFF818CF8),
+                    ),
+                    minHeight: 6,
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                  minHeight: 3,
                 ),
+                const SizedBox(height: 4),
 
                 // Slide Content View
                 Expanded(
