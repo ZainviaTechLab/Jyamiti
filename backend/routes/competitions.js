@@ -170,7 +170,7 @@ router.get('/batch/:batchId/topics', authenticateToken, async (req, res) => {
 });
 
 // 1. Create a new Live Competition Arena Room
-router.post('/create', authenticateToken, requireRole(['tutor', 'admin']), async (req, res) => {
+router.post('/create', authenticateToken, requireRole(['TUTOR', 'ADMIN']), async (req, res) => {
   try {
     const { title, batchId, grade, timePerQuestion, numberOfRounds, roundDurationMinutes, selectedTopics, questionCount, questions, mode } = req.body;
 
@@ -381,7 +381,7 @@ router.post('/join', authenticateToken, async (req, res) => {
 });
 
 // 2c. Start competition via HTTP endpoint
-router.post('/start', authenticateToken, requireRole(['tutor', 'admin']), async (req, res) => {
+router.post('/start', authenticateToken, requireRole(['TUTOR', 'ADMIN']), async (req, res) => {
   try {
     const { roomCode } = req.body;
     if (!roomCode) return res.status(400).json({ message: 'roomCode is required.' });
