@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:jyamiti/providers/auth_provider.dart';
 import 'package:jyamiti/providers/theme_provider.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import 'package:jyamiti/presentation/widgets/inline_youtube_player.dart';
@@ -177,6 +179,8 @@ class _SyllabusExplorerScreenState extends State<SyllabusExplorerScreen> {
   @override
   Widget build(BuildContext context) {
     final isLargeScreen = MediaQuery.of(context).size.width > 700;
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final isAdmin = auth.userRole?.toUpperCase() == 'ADMIN';
 
     return Scaffold(
       extendBodyBehindAppBar: false,
@@ -194,26 +198,27 @@ class _SyllabusExplorerScreenState extends State<SyllabusExplorerScreen> {
         elevation: 1,
         iconTheme: IconThemeData(color: context.textColor),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_note_rounded, color: Color(0xFF10B981)),
-            onPressed: () {
-              final courseId = (widget.batch['course'] != null)
-                  ? (widget.batch['course']['id'] ?? widget.batch['course']['_id'] ?? widget.batch['courseId'])
-                  : (widget.batch['courseId'] ?? widget.batch['id'] ?? widget.batch['_id']);
-              final courseName = widget.batch['name'] ?? widget.batch['title'] ?? 'Course';
-              if (courseId != null) {
-                Navigator.push(
-                  context,
-                  CourseSyllabusScreen.route(
-                    context: context,
-                    courseId: courseId.toString(),
-                    courseName: courseName.toString(),
-                  ),
-                );
-              }
-            },
-            tooltip: 'Manage Course / Edit Syllabus',
-          ),
+          if (isAdmin)
+            IconButton(
+              icon: const Icon(Icons.edit_note_rounded, color: Color(0xFF10B981)),
+              onPressed: () {
+                final courseId = (widget.batch['course'] != null)
+                    ? (widget.batch['course']['id'] ?? widget.batch['course']['_id'] ?? widget.batch['courseId'])
+                    : (widget.batch['courseId'] ?? widget.batch['id'] ?? widget.batch['_id']);
+                final courseName = widget.batch['name'] ?? widget.batch['title'] ?? 'Course';
+                if (courseId != null) {
+                  Navigator.push(
+                    context,
+                    CourseSyllabusScreen.route(
+                      context: context,
+                      courseId: courseId.toString(),
+                      courseName: courseName.toString(),
+                    ),
+                  );
+                }
+              },
+              tooltip: 'Manage Course / Edit Syllabus',
+            ),
         ],
       ),
       body: Row(

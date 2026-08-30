@@ -13,7 +13,6 @@ import '../../../../domain/models/slide_deck_models.dart';
 import '../../slides/screens/student_slide_viewer_screen.dart' deferred as slide_viewer;
 import 'syllabus_explorer_screen.dart';
 import '../../admin/screens/course_syllabus_screen.dart';
-import '../../competitions/screens/student_competition_game_screen.dart';
 import 'live_classroom_presentation_screen.dart';
 
 class StudentLearningPathScreen extends StatefulWidget {
@@ -353,6 +352,9 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final isAdmin = auth.userRole?.toUpperCase() == 'ADMIN';
+
     return Scaffold(
       extendBodyBehindAppBar: true,
       backgroundColor: Colors.transparent,
@@ -384,38 +386,27 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
         ),
         iconTheme: IconThemeData(color: context.textColor),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.sports_esports_rounded, color: Color(0xFF6366F1)),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const StudentCompetitionGameScreen(),
-                ),
-              );
-            },
-            tooltip: 'Join Live Arena Competition',
-          ),
-          IconButton(
-            icon: const Icon(Icons.edit_note_rounded, color: Color(0xFF10B981)),
-            onPressed: () {
-              final courseId = (widget.batch['course'] != null)
-                  ? (widget.batch['course']['id'] ?? widget.batch['course']['_id'] ?? widget.batch['courseId'])
-                  : (widget.batch['courseId'] ?? widget.batch['id'] ?? widget.batch['_id']);
-              final courseName = widget.batch['name'] ?? widget.batch['title'] ?? 'Course';
-              if (courseId != null) {
-                Navigator.push(
-                  context,
-                  CourseSyllabusScreen.route(
-                    context: context,
-                    courseId: courseId.toString(),
-                    courseName: courseName.toString(),
-                  ),
-                );
-              }
-            },
-            tooltip: 'Manage Course / Edit Syllabus',
-          ),
+          if (isAdmin)
+            IconButton(
+              icon: const Icon(Icons.edit_note_rounded, color: Color(0xFF10B981)),
+              onPressed: () {
+                final courseId = (widget.batch['course'] != null)
+                    ? (widget.batch['course']['id'] ?? widget.batch['course']['_id'] ?? widget.batch['courseId'])
+                    : (widget.batch['courseId'] ?? widget.batch['id'] ?? widget.batch['_id']);
+                final courseName = widget.batch['name'] ?? widget.batch['title'] ?? 'Course';
+                if (courseId != null) {
+                  Navigator.push(
+                    context,
+                    CourseSyllabusScreen.route(
+                      context: context,
+                      courseId: courseId.toString(),
+                      courseName: courseName.toString(),
+                    ),
+                  );
+                }
+              },
+              tooltip: 'Manage Course / Edit Syllabus',
+            ),
           IconButton(
             icon: Icon(
               _showResourcesAsList

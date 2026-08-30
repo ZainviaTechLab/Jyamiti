@@ -31,6 +31,7 @@ import '../bloc/student_dashboard/student_dashboard_event.dart';
 import '../bloc/student_dashboard/student_dashboard_state.dart';
 import '../../../../services/api_service.dart';
 import '../../chat/screens/chat_list_screen.dart';
+import '../../competitions/screens/student_competition_game_screen.dart';
 
 class StudentDashboard extends StatefulWidget {
   const StudentDashboard({super.key});
@@ -377,6 +378,11 @@ class _StudentDashboardState extends State<StudentDashboard> {
         return StudentLearningPathScreen(batch: batches[0], isInline: true);
       case 7:
         return const StudentAssignmentsScreen(isInline: true);
+      case 8:
+        return StudentCompetitionGameScreen(
+          isInline: true,
+          onBack: () => setState(() => _selectedSidebarTab = 0),
+        );
       case 9:
         return ParentMeetingsDashboardScreen(
           isInline: true,
@@ -431,6 +437,19 @@ class _StudentDashboardState extends State<StudentDashboard> {
                 //   tooltip: 'Ask Jyammy AI',
                 //   onPressed: () => AskJyammyDialog.show(context),
                 // ),
+                IconButton(
+                  icon: const Icon(
+                    Icons.sports_esports_rounded,
+                    color: Color(0xFF6366F1),
+                  ),
+                  tooltip: 'Join Live Arena',
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const StudentCompetitionGameScreen(),
+                    ),
+                  ),
+                ),
                 IconButton(
                   icon: Icon(
                     Icons.chat_bubble_outline_rounded,
@@ -547,6 +566,11 @@ class _StudentDashboardState extends State<StudentDashboard> {
                           7,
                           'Assignments',
                           Icons.assignment_rounded,
+                        ),
+                        _buildSidebarItem(
+                          8,
+                          'Live Arena',
+                          Icons.sports_esports_rounded,
                         ),
                         _buildSidebarItem(
                           9,
@@ -1105,6 +1129,24 @@ class _StudentDashboardState extends State<StudentDashboard> {
                   Icons.play_circle_filled_rounded,
                   const Color(0xFFEC4899),
                   () => _handleGridNavigation(context, profile, 'tutorials'),
+                ),
+                _buildGridAction(
+                  context,
+                  'Live Arena',
+                  Icons.sports_esports_rounded,
+                  const Color(0xFF6366F1),
+                  () {
+                    if (MediaQuery.of(context).size.width > 900) {
+                      setState(() => _selectedSidebarTab = 8);
+                    } else {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const StudentCompetitionGameScreen(),
+                        ),
+                      );
+                    }
+                  },
                 ),
                 _buildGridAction(
                   context,

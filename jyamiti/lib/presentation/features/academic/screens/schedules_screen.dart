@@ -895,6 +895,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                           SizedBox(height: 8),
                         ],
                         if (isToday &&
+                            schedule['isCancelled'] != true &&
                             ((schedule['batch']['classLink'] != null &&
                                     schedule['batch']['classLink']
                                         .toString()
@@ -1094,7 +1095,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                                 ],
                               ),
                             )
-                          else if (!isPast)
+                          else if (!isPast && schedule['isCancelled'] != true)
                             ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF3B82F6),
