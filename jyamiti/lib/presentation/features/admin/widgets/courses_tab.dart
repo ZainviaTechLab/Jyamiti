@@ -822,79 +822,86 @@ class _CoursesTabState extends State<CoursesTab> {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Container(
-          decoration: BoxDecoration(
-            color: context.glassBg,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.3)),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF8B5CF6).withOpacity(0.05),
-                blurRadius: 10,
-                spreadRadius: 0,
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _showCourseDetails(course),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 16, 44, 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          course['name'] ?? '',
-                          style: TextStyle(
-                            color: context.textColor,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 8),
-                        if (hasBadge)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF8B5CF6).withOpacity(context.isDark ? 0.15 : 0.08),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: const Color(0xFF8B5CF6).withOpacity(context.isDark ? 0.3 : 0.2),
+        // Positioned.fill is required here: a plain (non-positioned) Stack
+        // child only gets loose constraints, so without this the card would
+        // shrink-wrap to its own text width instead of filling the grid
+        // cell — that's what caused the uneven card widths.
+        Positioned.fill(
+          child:
+              Container(
+                decoration: BoxDecoration(
+                  color: context.glassBg,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.3)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF8B5CF6).withOpacity(0.05),
+                      blurRadius: 10,
+                      spreadRadius: 0,
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => _showCourseDetails(course),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 16, 44, 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                course['name'] ?? '',
+                                style: TextStyle(
+                                  color: context.textColor,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                            child: Text(
-                              '$grade • $subject',
-                              style: TextStyle(
-                                color: context.isDark ? const Color(0xFFD8B4FE) : const Color(0xFF6D28D9),
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
+                              const SizedBox(height: 8),
+                              if (hasBadge)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF8B5CF6).withOpacity(context.isDark ? 0.15 : 0.08),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: const Color(0xFF8B5CF6).withOpacity(context.isDark ? 0.3 : 0.2),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    '$grade • $subject',
+                                    style: TextStyle(
+                                      color: context.isDark ? const Color(0xFFD8B4FE) : const Color(0xFF6D28D9),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(height: 8),
+                              Expanded(
+                                child: Text(
+                                  description.isEmpty ? 'No description' : description,
+                                  style: TextStyle(color: context.textColor60, fontSize: 12.5, height: 1.35),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
-                          ),
-                        const SizedBox(height: 8),
-                        Expanded(
-                          child: Text(
-                            description.isEmpty ? 'No description' : description,
-                            style: TextStyle(color: context.textColor60, fontSize: 12.5, height: 1.35),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                            ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-          ),
-        ).animate().fade(duration: 400.ms, delay: animationDelay.ms).slideY(begin: 0.05, end: 0),
+              ).animate().fade(duration: 400.ms, delay: animationDelay.ms).slideY(begin: 0.05, end: 0),
+        ),
         Positioned(
           top: 6,
           right: 6,
