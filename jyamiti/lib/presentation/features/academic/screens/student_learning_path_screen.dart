@@ -14,6 +14,7 @@ import '../../slides/screens/student_slide_viewer_screen.dart' deferred as slide
 import 'syllabus_explorer_screen.dart';
 import '../../admin/screens/course_syllabus_screen.dart';
 import '../../competitions/screens/student_competition_game_screen.dart';
+import 'live_classroom_presentation_screen.dart';
 
 class StudentLearningPathScreen extends StatefulWidget {
   final Map<String, dynamic> batch;
@@ -293,6 +294,49 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
     }
   }
 
+  /// Tutor-only: launches the smartboard (LiveClassroomPresentationScreen)
+  /// with this chapter/topic/subtopic's own practice questions — scoped to
+  /// the node the tutor is currently on, same as _takePracticeTest, rather
+  /// than dumping the whole course's question bank onto one screen.
+  void _presentOnSmartboard(Map<String, dynamic> item) {
+    final List<dynamic> sets = item['practiceSets'] ?? [];
+    final List<dynamic> allQuestions = [];
+
+    if (sets.isNotEmpty) {
+      for (var s in sets) {
+        if (s is Map && s['questions'] is List) {
+          allQuestions.addAll(s['questions'] as List);
+        }
+      }
+    } else {
+      allQuestions.addAll(item['practiceQuestions'] ?? []);
+    }
+
+    if (allQuestions.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'No practice questions available to present for this topic.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LiveClassroomPresentationScreen(
+          title:
+              (widget.batch['name'] ?? widget.batch['title'] ?? 'Class')
+                  .toString(),
+          questions: allQuestions,
+          topicName: item['title']?.toString(),
+        ),
+      ),
+    );
+  }
+
   void _navigateToExplorer(Map<String, dynamic> item, String type, String pathText) {
     Navigator.push(
       context,
@@ -492,7 +536,7 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                                       ),
                                     ),
                                     _showResourcesAsList
-                                        ? (isTutor ? _buildAssignButtonOnly(chapter) : const SizedBox.shrink())
+                                        ? (isTutor ? _buildTutorTrailingActions(chapter) : const SizedBox.shrink())
                                         : _buildItemActions(chapter),
                                   ],
                                 ),
@@ -539,7 +583,7 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                                         ),
                                       ),
                                       trailing: _showResourcesAsList
-                                          ? (isTutor ? _buildAssignButtonOnly(topics[tIndex]) : const SizedBox.shrink())
+                                          ? (isTutor ? _buildTutorTrailingActions(topics[tIndex]) : const SizedBox.shrink())
                                           : _buildItemActions(topics[tIndex]),
                                       children: [
                                         if (_showResourcesAsList)
@@ -587,7 +631,7 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
                                                   ),
                                                 ),
                                                 trailing: _showResourcesAsList
-                                                    ? (isTutor ? _buildAssignButtonOnly(topics[tIndex]['subTopics'][sIndex]) : const SizedBox.shrink())
+                                                    ? (isTutor ? _buildTutorTrailingActions(topics[tIndex]['subTopics'][sIndex]) : const SizedBox.shrink())
                                                     : _buildItemActions(
                                                         topics[tIndex]['subTopics'][sIndex],
                                                       ),
@@ -693,15 +737,37 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
     );
   }
 
-  Widget _buildAssignButtonOnly(Map<String, dynamic> item) {
-    return IconButton(
-      icon: const Icon(
-        Icons.add_task_rounded,
-        color: Color(0xFF3B82F6),
-        size: 20,
-      ),
-      onPressed: () => _openAssignDialog(item),
-      tooltip: 'Assign Resource',
+  /// Tutor-only trailing actions shown in "list" view mode: Present (only
+  /// when the node has practice questions) + Assign. Grid/card view mode
+  /// uses the fuller _buildItemActions below instead.
+  Widget _buildTutorTrailingActions(Map<String, dynamic> item) {
+    final List<dynamic> questions = item['practiceQuestions'] ?? [];
+    final List<dynamic> sets = item['practiceSets'] ?? [];
+    final hasPractice = questions.isNotEmpty || sets.isNotEmpty;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (hasPractice)
+          IconButton(
+            icon: const Icon(
+              Icons.tv_rounded,
+              color: Color(0xFF6366F1),
+              size: 20,
+            ),
+            onPressed: () => _presentOnSmartboard(item),
+            tooltip: 'Present on Smartboard',
+          ),
+        IconButton(
+          icon: const Icon(
+            Icons.add_task_rounded,
+            color: Color(0xFF3B82F6),
+            size: 20,
+          ),
+          onPressed: () => _openAssignDialog(item),
+          tooltip: 'Assign Resource',
+        ),
+      ],
     );
   }
 
@@ -749,6 +815,16 @@ class _StudentLearningPathScreenState extends State<StudentLearningPathScreen> {
             ),
             onPressed: () => _takePracticeTest(item),
             tooltip: 'Practice Quiz',
+          ),
+        if (isTutor && hasPractice)
+          IconButton(
+            icon: const Icon(
+              Icons.tv_rounded,
+              color: Color(0xFF6366F1),
+              size: 20,
+            ),
+            onPressed: () => _presentOnSmartboard(item),
+            tooltip: 'Present on Smartboard',
           ),
         if (isTutor)
           IconButton(
