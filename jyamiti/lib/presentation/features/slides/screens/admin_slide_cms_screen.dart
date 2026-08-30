@@ -324,15 +324,22 @@ class _AdminSlideCmsScreenState extends State<AdminSlideCmsScreen> {
       isDownloadedOffline: true,
     );
 
-    await SlideCacheService.instance.saveDeck(deck);
+    final bool savedOnline = await SlideCacheService.instance.saveDeck(deck);
 
     setState(() => _isSaving = false);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Slide Deck Saved Successfully!'),
-          backgroundColor: Color(0xFF10B981),
+        SnackBar(
+          content: Text(
+            savedOnline
+                ? 'Slide Deck Saved Successfully!'
+                : "Couldn't reach the server -- saved locally and will "
+                      'sync automatically once back online.',
+          ),
+          backgroundColor: savedOnline
+              ? const Color(0xFF10B981)
+              : const Color(0xFFF59E0B),
         ),
       );
     }
