@@ -1174,7 +1174,7 @@ Return a JSON ARRAY, one object per PPTX slide, in slide order:
 
 Each slide object:
 - "title" (string, required) — a short slide title, even if the PPTX slide has no explicit title text (summarize it).
-- "theme" (string, optional) — one of: darkGlass, jyamitiCosmos, midnightNeon, emeraldSlate, sunsetViolet, cleanLight. Pick one that suits the content; darkGlass is a safe default.
+- "theme" (string, optional) — one of: darkGlass, jyamitiCosmos, midnightNeon, emeraldSlate, sunsetViolet, cleanLight. Pick one that suits the content; jyamitiCosmos is a safe default.
 - "blocks" (array, required) — the slide's content, as block objects (see below), in visual top-to-bottom order.
 
 === BLOCK OBJECT SHAPE ===
@@ -1259,7 +1259,7 @@ Never invent a fake image URL — it will render as a broken image.
 [
   {
     "title": "What is Place Value?",
-    "theme": "darkGlass",
+    "theme": "jyamitiCosmos",
     "blocks": [
       { "type": "heading", "content": "What is Place Value?" },
       { "type": "paragraph", "content": "Every digit in a number has a place value based on its position." },
@@ -1277,7 +1277,7 @@ Never invent a fake image URL — it will render as a broken image.
   },
   {
     "title": "Even and Odd Numbers",
-    "theme": "darkGlass",
+    "theme": "jyamitiCosmos",
     "blocks": [
       { "type": "heading", "content": "Even and Odd Numbers" },
       {
