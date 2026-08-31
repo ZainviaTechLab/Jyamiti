@@ -429,6 +429,7 @@ class _TutorCompetitionHostScreenState
           setState(() {
             _overallTimerSeconds = 0;
           });
+          _endRound();
         }
       } else {
         if (mounted) {
@@ -470,6 +471,7 @@ class _TutorCompetitionHostScreenState
           setState(() {
             _overallTimerSeconds = 0;
           });
+          _endRound();
         }
       } else {
         if (mounted) {
@@ -1585,218 +1587,251 @@ class _TutorCompetitionHostScreenState
                 style: TextStyle(color: context.textColor60, fontSize: 14),
               ),
             )
-          else
-            ...List.generate(sortedList.length, (index) {
-              final p = sortedList[index];
-              final String name = p['name'] ?? 'Student';
-              final int score = p['totalScore'] ?? 0;
-              final int streak = p['streak'] ?? 0;
-              final int roundsComp = p['roundsCompleted'] ?? 0;
-              final double avgSpeed = (p['avgSpeedSec'] ?? 0.0).toDouble();
-              final double rawPct = (p['progressPct'] ?? (totalRounds > 0 ? (roundsComp / totalRounds) : 0.0)).toDouble();
-              final double progressPct = rawPct.clamp(0.0, 1.0);
-              final bool isFinished = p['isFinished'] == true || roundsComp >= totalRounds;
+          else ...[
+            Builder(
+              builder: (context) {
+                final num leaderScore = sortedList.fold<num>(0, (prev, p) => max(prev, (p['totalScore'] ?? 0)));
+                final num leaderCorrect = sortedList.fold<num>(0, (prev, p) => max(prev, (p['correctCount'] ?? (p['roundsCompleted'] ?? 0))));
+                final bool isRoundFinished = _overallTimerSeconds <= 0;
 
-              final String rankBadge = index == 0
-                  ? '🥇'
-                  : (index == 1 ? '🥈' : (index == 2 ? '🥉' : '#${index + 1}'));
+                return Column(
+                  children: List.generate(sortedList.length, (index) {
+                    final p = sortedList[index];
+                    final String name = p['name'] ?? 'Student';
+                    final int score = p['totalScore'] ?? 0;
+                    final int streak = p['streak'] ?? 0;
+                    final int correct = p['correctCount'] ?? (p['roundsCompleted'] ?? 0);
+                    final int attempted = p['totalAttempted'] ?? (p['roundsCompleted'] ?? 0);
+                    final int accuracy = p['accuracyPct'] ?? (attempted > 0 ? ((correct / attempted) * 100).round() : 0);
+                    final double avgSpeed = (p['avgSpeedSec'] ?? 0.0).toDouble();
 
-              return Container(
-                margin: const EdgeInsets.only(bottom: 14),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: isFinished
-                        ? const Color(0xFF10B981)
-                        : (index == 0 ? const Color(0xFFF59E0B) : context.glassBorder),
-                    width: isFinished || index == 0 ? 2 : 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    // Lane Header Info
-                    Row(
-                      children: [
-                        Text(rankBadge, style: const TextStyle(fontSize: 18)),
-                        const SizedBox(width: 8),
-                        CircleAvatar(
-                          radius: 13,
-                          backgroundColor: const Color(0xFF6366F1),
-                          child: Text(
-                            name.isNotEmpty ? name[0].toUpperCase() : 'S',
-                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                          ),
+                    double progressPct;
+                    if (isRoundFinished) {
+                      // When round ends, the 1st rank student reaches the end of the track (1.0)
+                      if (index == 0 && (score > 0 || correct > 0 || sortedList.length == 1)) {
+                        progressPct = 1.0;
+                      } else if (leaderScore > 0) {
+                        progressPct = (score / leaderScore).clamp(0.08, 1.0);
+                      } else if (leaderCorrect > 0) {
+                        progressPct = (correct / leaderCorrect).clamp(0.08, 1.0);
+                      } else {
+                        progressPct = 0.08;
+                      }
+                    } else {
+                      // Live during the round: dynamic progress based on score & correct answers
+                      if (leaderScore > 0) {
+                        final double leaderTarget = min(0.92, max(0.15, correct * 0.08));
+                        progressPct = ((score / leaderScore) * leaderTarget).clamp(0.06, 0.95);
+                      } else if (correct > 0) {
+                        progressPct = min(0.90, correct * 0.1);
+                      } else {
+                        progressPct = 0.06;
+                      }
+                    }
+
+                    final bool isLeaderAtFinish = progressPct >= 0.99;
+                    final String rankBadge = index == 0
+                        ? '🥇'
+                        : (index == 1 ? '🥈' : (index == 2 ? '🥉' : '#${index + 1}'));
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 14),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: context.isDark ? const Color(0xFF1E293B) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isLeaderAtFinish
+                              ? const Color(0xFF10B981)
+                              : (index == 0 ? const Color(0xFFF59E0B) : context.glassBorder),
+                          width: isLeaderAtFinish || index == 0 ? 2 : 1,
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Row(
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.04),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          // Lane Header Info
+                          Row(
                             children: [
-                              Text(
-                                name,
-                                style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold, fontSize: 14),
-                              ),
-                              if (streak >= 2) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.orange.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '🔥 ${streak}x',
-                                    style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 10),
-                                  ),
+                              Text(rankBadge, style: const TextStyle(fontSize: 18)),
+                              const SizedBox(width: 8),
+                              CircleAvatar(
+                                radius: 13,
+                                backgroundColor: const Color(0xFF6366F1),
+                                child: Text(
+                                  name.isNotEmpty ? name[0].toUpperCase() : 'S',
+                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                                 ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        // Speed Indicator Badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF3B82F6).withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.bolt_rounded, color: Color(0xFF3B82F6), size: 14),
-                              const SizedBox(width: 2),
-                              Text(
-                                avgSpeed > 0 ? '${avgSpeed.toStringAsFixed(1)}s/Q' : '--',
-                                style: const TextStyle(color: Color(0xFF3B82F6), fontWeight: FontWeight.bold, fontSize: 11),
                               ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        // Score
-                        Text(
-                          '$score pts',
-                          style: const TextStyle(color: Color(0xFF6366F1), fontWeight: FontWeight.w900, fontSize: 14),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Race Track Animation Line
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final trackWidth = constraints.maxWidth;
-                        const carWidth = 32.0;
-                        final maxCarOffset = trackWidth - carWidth;
-                        final currentCarPosition = progressPct * maxCarOffset;
-
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Stack(
-                              clipBehavior: Clip.none,
-                              alignment: Alignment.centerLeft,
-                              children: [
-                                // Background Track Line
-                                Container(
-                                  height: 12,
-                                  width: double.infinity,
-                                  decoration: BoxDecoration(
-                                    color: context.isDark ? const Color(0xFF0F172A) : const Color(0xFFE2E8F0),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                ),
-                                // Filled Progress Track
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 600),
-                                  curve: Curves.easeOutCubic,
-                                  height: 12,
-                                  width: trackWidth * progressPct,
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: isFinished
-                                          ? [const Color(0xFF10B981), const Color(0xFF059669)]
-                                          : [const Color(0xFF6366F1), const Color(0xFF8B5CF6)],
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      name,
+                                      style: TextStyle(color: context.textColor, fontWeight: FontWeight.bold, fontSize: 14),
                                     ),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                ),
-                                // Moving Racer Icon
-                                AnimatedPositioned(
-                                  duration: const Duration(milliseconds: 600),
-                                  curve: Curves.easeOutCubic,
-                                  left: currentCarPosition,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(2),
-                                    decoration: BoxDecoration(
-                                      color: isFinished ? const Color(0xFF10B981) : const Color(0xFF6366F1),
-                                      shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: (isFinished ? const Color(0xFF10B981) : const Color(0xFF6366F1)).withOpacity(0.5),
-                                          blurRadius: 8,
+                                    if (streak >= 2) ...[
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.orange.withOpacity(0.2),
+                                          borderRadius: BorderRadius.circular(8),
                                         ),
-                                      ],
+                                        child: Text(
+                                          '🔥 ${streak}x',
+                                          style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 10),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              // Live Correct / Accuracy Badge
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981).withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 14),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '$correct/$attempted ($accuracy%)',
+                                      style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 11),
                                     ),
-                                    child: const Text('🏎️', style: TextStyle(fontSize: 14)),
-                                  ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text('START 🚩', style: TextStyle(fontSize: 10, color: context.textColor60, fontWeight: FontWeight.bold)),
-                                Text(
-                                  isFinished ? '🏁 FINISHED ($roundsComp/$totalRounds)' : 'Round $roundsComp of $totalRounds',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: isFinished ? const Color(0xFF10B981) : context.textColor60,
-                                    fontWeight: isFinished ? FontWeight.bold : FontWeight.normal,
-                                  ),
+                              ),
+                              const SizedBox(width: 8),
+                              // Speed Indicator Badge
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF3B82F6).withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
-                                Text('FINISH 🏁', style: TextStyle(fontSize: 10, color: context.textColor60, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              );
-            }),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.bolt_rounded, color: Color(0xFF3B82F6), size: 14),
+                                    const SizedBox(width: 2),
+                                    Text(
+                                      avgSpeed > 0 ? '${avgSpeed.toStringAsFixed(1)}s/Q' : '--',
+                                      style: const TextStyle(color: Color(0xFF3B82F6), fontWeight: FontWeight.bold, fontSize: 11),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              // Score
+                              Text(
+                                '$score pts',
+                                style: const TextStyle(color: Color(0xFF6366F1), fontWeight: FontWeight.w900, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
 
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _endRound,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    elevation: 4,
-                  ),
-                  icon: const Icon(Icons.leaderboard_rounded),
-                  label: Text(
-                    'END ROUND ${_currentRoundIndex + 1} & VIEW LEADERBOARD ➔',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                ),
-              ),
-            ],
-          ),
+                          // Race Track Animation Line
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final trackWidth = constraints.maxWidth;
+                              const carWidth = 32.0;
+                              final maxCarOffset = trackWidth - carWidth;
+                              final currentCarPosition = progressPct * maxCarOffset;
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Stack(
+                                    clipBehavior: Clip.none,
+                                    alignment: Alignment.centerLeft,
+                                    children: [
+                                      // Background Track Line
+                                      Container(
+                                        height: 12,
+                                        width: double.infinity,
+                                        decoration: BoxDecoration(
+                                          color: context.isDark ? const Color(0xFF0F172A) : const Color(0xFFE2E8F0),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                      ),
+                                      // Filled Progress Track
+                                      AnimatedContainer(
+                                        duration: const Duration(milliseconds: 600),
+                                        curve: Curves.easeOutCubic,
+                                        height: 12,
+                                        width: (trackWidth * progressPct).clamp(12.0, trackWidth),
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: isLeaderAtFinish
+                                                ? [const Color(0xFF10B981), const Color(0xFF059669)]
+                                                : [const Color(0xFF6366F1), const Color(0xFF8B5CF6)],
+                                          ),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                      ),
+                                      // Moving Racer Icon
+                                      AnimatedPositioned(
+                                        duration: const Duration(milliseconds: 600),
+                                        curve: Curves.easeOutCubic,
+                                        left: currentCarPosition,
+                                        child: Container(
+                                          padding: const EdgeInsets.all(2),
+                                          decoration: BoxDecoration(
+                                            color: isLeaderAtFinish ? const Color(0xFF10B981) : const Color(0xFF6366F1),
+                                            shape: BoxShape.circle,
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: (isLeaderAtFinish ? const Color(0xFF10B981) : const Color(0xFF6366F1)).withOpacity(0.5),
+                                                blurRadius: 8,
+                                              ),
+                                            ],
+                                          ),
+                                          child: const Text('🏎️', style: TextStyle(fontSize: 14)),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text('START 🚩', style: TextStyle(fontSize: 10, color: context.textColor60, fontWeight: FontWeight.bold)),
+                                      Text(
+                                        isLeaderAtFinish ? '🏁 FINISHED ($correct Correct)' : '$correct Correct ($accuracy%)',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: isLeaderAtFinish ? const Color(0xFF10B981) : context.textColor60,
+                                          fontWeight: isLeaderAtFinish ? FontWeight.bold : FontWeight.normal,
+                                        ),
+                                      ),
+                                      Text('FINISH 🏁', style: TextStyle(fontSize: 10, color: context.textColor60, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                );
+              },
+            ),
+          ],
+
+          const SizedBox(height: 20),
           const SizedBox(height: 12),
           // Button to view Full Analytics Dashboard
           SizedBox(

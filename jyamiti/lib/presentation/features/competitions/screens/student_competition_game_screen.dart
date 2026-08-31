@@ -56,6 +56,9 @@ class _StudentCompetitionGameScreenState
   String _explanation = '';
   List<dynamic> _roundLeaderboard = [];
   List<dynamic> _finalPodium = [];
+  int _correctCount = 0;
+  int _totalAttempted = 0;
+  int _streak = 0;
 
   // Math Fundamentals (NUMERIC answerType) free-response input
   final TextEditingController _numericAnswerCtrl = TextEditingController();
@@ -142,8 +145,17 @@ class _StudentCompetitionGameScreenState
 
     socket.on('competition:player_progress', (data) {
       if (mounted && data['participants'] != null) {
+        final auth = Provider.of<AuthProvider>(context, listen: false);
+        final myUId = (auth.user?['id'] ?? auth.user?['_id'])?.toString();
+        final List<dynamic> parts = _cleanParticipants(data['participants']);
+        final myPart = parts.firstWhere((p) => p['userId']?.toString() == myUId, orElse: () => null);
         setState(() {
-          _participants = _cleanParticipants(data['participants']);
+          _participants = parts;
+          if (myPart != null) {
+            _correctCount = myPart['correctCount'] ?? _correctCount;
+            _totalAttempted = myPart['totalAttempted'] ?? _totalAttempted;
+            _streak = myPart['streak'] ?? _streak;
+          }
         });
       }
     });
@@ -373,9 +385,32 @@ class _StudentCompetitionGameScreenState
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final uId = auth.user?['id'] ?? auth.user?['_id'] ?? '';
 
+    // Optimistic local update for instantaneous status feedback
+    bool isCorrect = false;
+    if (_isNumericQuestion) {
+      final actualAns = _currentQuestion?['correctAnswer']?.toString().trim();
+      final typedAns = (answerText ?? _numericAnswerCtrl.text).trim();
+      if (actualAns != null && actualAns.isNotEmpty) {
+        final dTyped = double.tryParse(typedAns);
+        final dActual = double.tryParse(actualAns);
+        isCorrect = (dTyped != null && dActual != null && (dTyped - dActual).abs() < 0.0001) || typedAns == actualAns;
+      } else {
+        isCorrect = true;
+      }
+    } else {
+      isCorrect = selectedOptionIndex == _currentQuestion?['correctOptionIndex'];
+    }
+
     setState(() {
       _selectedOptionIndex = selectedOptionIndex;
       _answerSubmitted = true;
+      _totalAttempted += 1;
+      if (isCorrect) {
+        _correctCount += 1;
+        _streak += 1;
+      } else {
+        _streak = 0;
+      }
     });
 
     CompetitionService.submitAnswer(
@@ -624,18 +659,18 @@ class _StudentCompetitionGameScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Round & Timer Gauge Header
+          // Round, Live Status (Correct / Total), and Timer Gauge Header
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
                   color: const Color(0xFF6366F1).withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
-                  'PROBLEM #${_currentRoundIndex + 1}',
+                  '#${_currentRoundIndex + 1}',
                   style: const TextStyle(
                     color: Color(0xFF6366F1),
                     fontWeight: FontWeight.bold,
@@ -643,6 +678,43 @@ class _StudentCompetitionGameScreenState
                   ),
                 ),
               ),
+
+              // Live Status: Correct / Total Attempted Badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF10B981).withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 16),
+                    const SizedBox(width: 6),
+                    Text(
+                      '$_correctCount / $_totalAttempted Correct',
+                      style: const TextStyle(
+                        color: Color(0xFF10B981),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                    if (_streak >= 2) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        '🔥$_streak',
+                        style: const TextStyle(
+                          color: Color(0xFFF59E0B),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
               Row(
                 children: [
                   const Icon(Icons.timer_outlined, color: Colors.amber, size: 20),

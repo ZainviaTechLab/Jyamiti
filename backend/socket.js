@@ -233,6 +233,9 @@ export const initSocket = async (httpServer) => {
         // Prepare live progress list for tutor & room
         const participantsProgress = competition.participants.map(p => {
           const roundsCompleted = p.responseHistory ? p.responseHistory.length : 0;
+          const correctCount = p.responseHistory ? p.responseHistory.filter(r => r.isCorrect).length : 0;
+          const totalAttempted = roundsCompleted;
+          const accuracyPct = totalAttempted > 0 ? Math.round((correctCount / totalAttempted) * 100) : 0;
           const totalTimeSec = p.responseHistory ? p.responseHistory.reduce((sum, r) => sum + (r.timeTakenSec || 0), 0) : 0;
           const avgSpeedSec = roundsCompleted > 0 ? parseFloat((totalTimeSec / roundsCompleted).toFixed(1)) : 0;
           const totalRounds = competition.questions.length;
@@ -245,6 +248,9 @@ export const initSocket = async (httpServer) => {
             totalScore: p.totalScore,
             streak: p.streak,
             currentRank: p.currentRank,
+            correctCount,
+            totalAttempted,
+            accuracyPct,
             roundsCompleted,
             totalRounds,
             progressPct,
