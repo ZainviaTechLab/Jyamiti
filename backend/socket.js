@@ -334,26 +334,30 @@ export const initSocket = async (httpServer) => {
         if (!competition) return;
 
         const nextRound = competition.currentRoundIndex + 1;
-        if (nextRound >= competition.questions.length) return;
-
         competition.currentRoundIndex = nextRound;
         competition.status = 'IN_PROGRESS';
         await competition.save();
 
-        const q = competition.questions[nextRound];
+        const formattedQuestions = competition.questions.map((q, idx) => ({
+          id: q.id || `q_${idx}`,
+          text: q.text,
+          answerType: q.answerType || 'MCQ',
+          options: q.options,
+          correctOptionIndex: q.answerType === 'NUMERIC' ? undefined : q.correctOptionIndex,
+          explanation: q.explanation,
+          category: q.category,
+          subtopic: q.subtopic
+        }));
+
+        const currentQ = formattedQuestions[nextRound % formattedQuestions.length];
+
         io.to(code).emit('competition:round_started', {
           roomCode: code,
           roundIndex: nextRound,
           totalRounds: competition.questions.length,
           timePerQuestion: competition.timePerQuestion,
-          question: {
-            id: q.id || `q_${nextRound}`,
-            text: q.text,
-            answerType: q.answerType || 'MCQ',
-            options: q.options,
-            category: q.category,
-            subtopic: q.subtopic
-          }
+          questions: formattedQuestions,
+          question: currentQ
         });
       } catch (err) {
         console.error('Error handling competition:next_round', err);

@@ -116,14 +116,15 @@ class _StudentCompetitionGameScreenState
       _waitingPollTimer?.cancel();
       _countdownTimer?.cancel();
       if (mounted) {
-        final List<dynamic> questions = data['questions'] ?? (data['question'] != null ? [data['question']] : []);
+        final List<dynamic> newQuestions = data['questions'] ?? [];
+        final List<dynamic> pool = newQuestions.isNotEmpty ? newQuestions : (_allQuestions ?? []);
         final int rIdx = data['roundIndex'] ?? 0;
-        final currentQ = data['question'] ?? (questions.isNotEmpty ? questions[rIdx < questions.length ? rIdx : 0] : null);
-        final int totalRounds = data['totalRounds'] ?? (questions.isNotEmpty ? questions.length : _totalRounds);
+        final currentQ = data['question'] ?? (pool.isNotEmpty ? pool[rIdx % pool.length] : null);
+        final int totalRounds = data['totalRounds'] ?? (pool.isNotEmpty ? pool.length : _totalRounds);
         final int timePerQ = data['timePerQuestion'] ?? _timePerQuestion;
 
         setState(() {
-          _allQuestions = questions.isNotEmpty ? questions : _allQuestions;
+          _allQuestions = pool.isNotEmpty ? pool : (currentQ != null ? [currentQ] : []);
           _gameState = 'QUESTION';
           _currentRoundIndex = rIdx;
           _totalRounds = totalRounds;
@@ -302,9 +303,13 @@ class _StudentCompetitionGameScreenState
           });
         }
       } else {
+        final List<dynamic> questions = competition['questions'] ?? [];
         setState(() {
+          _allQuestions = questions;
+          _totalRounds = questions.length;
+          _timePerQuestion = competition['timePerQuestion'] ?? 60;
           _gameState = 'LOBBY';
-          _participants = competition['participants'] ?? [];
+          _participants = _cleanParticipants(competition['participants'] ?? []);
           _isLoading = false;
         });
         _startWaitingPollTimer();
