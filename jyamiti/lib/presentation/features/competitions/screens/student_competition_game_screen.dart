@@ -59,7 +59,11 @@ class _StudentCompetitionGameScreenState
 
   // Math Fundamentals (NUMERIC answerType) free-response input
   final TextEditingController _numericAnswerCtrl = TextEditingController();
-  bool get _isNumericQuestion => _currentQuestion?['answerType'] == 'NUMERIC';
+  bool get _isNumericQuestion {
+    final type = _currentQuestion?['answerType']?.toString().toUpperCase();
+    final List<dynamic> options = _currentQuestion?['options'] ?? [];
+    return type == 'NUMERIC' || options.isEmpty;
+  }
 
   @override
   void initState() {
@@ -647,9 +651,18 @@ class _StudentCompetitionGameScreenState
 
           if (_isNumericQuestion)
             _buildNumericAnswerInput()
-          else
-          // Option Cards Grid
-          GridView.builder(
+          else ...[
+            Text(
+              '👇 Tap an option below to submit your answer:',
+              style: TextStyle(
+                color: context.textColor70,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Option Cards Grid
+            GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -714,6 +727,7 @@ class _StudentCompetitionGameScreenState
               );
             },
           ),
+          ],
 
           if (_answerSubmitted) ...[
             const SizedBox(height: 20),
