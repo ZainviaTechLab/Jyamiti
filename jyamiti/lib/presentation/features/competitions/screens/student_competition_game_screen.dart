@@ -359,11 +359,11 @@ class _StudentCompetitionGameScreenState
   }
 
   /// Shared by both answer types: records the response, sends it to the
-  /// server, and advances to the next question in the arena.
+  /// server, and immediately advances to the next question as long as there are
+  /// questions remaining and time on the round timer.
   void _submitAnswer({int? selectedOptionIndex, String? answerText}) {
     if (_answerSubmitted || _gameState != 'QUESTION' || _roomCode == null) return;
 
-    _countdownTimer?.cancel();
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final uId = auth.user?['id'] ?? auth.user?['_id'] ?? '';
 
@@ -381,29 +381,26 @@ class _StudentCompetitionGameScreenState
       timeTakenSec: _timeTakenSec,
     );
 
-    // Auto-advance to next question after 400ms
-    Future.delayed(const Duration(milliseconds: 400), () {
-      if (!mounted) return;
+    final nextIndex = _currentRoundIndex + 1;
+    final totalQuestions = (_allQuestions != null && _allQuestions!.isNotEmpty)
+        ? _allQuestions!.length
+        : _totalRounds;
 
-      final nextRound = _currentRoundIndex + 1;
-      if (_allQuestions != null && nextRound < _allQuestions!.length) {
+    if (_allQuestions != null && nextIndex < totalQuestions) {
+      Future.delayed(const Duration(milliseconds: 250), () {
+        if (!mounted || _gameState != 'QUESTION') return;
         setState(() {
-          _currentRoundIndex = nextRound;
-          _currentQuestion = _allQuestions![nextRound];
+          _currentRoundIndex = nextIndex;
+          _currentQuestion = _allQuestions![nextIndex];
           _selectedOptionIndex = null;
           _answerSubmitted = false;
-          _secondsRemaining = _timePerQuestion;
-          _timeTakenSec = 0;
         });
         _numericAnswerCtrl.clear();
-        _startTimer();
-      } else if (_allQuestions != null && nextRound >= _allQuestions!.length) {
-        // Finished all questions in competition
-        setState(() {
-          _gameState = 'ROUND_RESULT';
-        });
-      }
-    });
+      });
+    } else {
+      // Completed all questions in the round
+      _countdownTimer?.cancel();
+    }
   }
 
   Widget _buildJoinState() {
@@ -791,14 +788,16 @@ class _StudentCompetitionGameScreenState
                 color: const Color(0xFF10B981).withOpacity(0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.check_circle_rounded, color: Color(0xFF10B981)),
-                  SizedBox(width: 8),
+                  const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981)),
+                  const SizedBox(width: 8),
                   Text(
-                    'Answer Submitted! Waiting for round results...',
-                    style: TextStyle(
+                    (_allQuestions != null && _currentRoundIndex + 1 >= _allQuestions!.length)
+                        ? '🏁 All questions completed! Waiting for leaderboard...'
+                        : 'Answer Submitted! Loading next question...',
+                    style: const TextStyle(
                       color: Color(0xFF10B981),
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
