@@ -321,6 +321,36 @@ class _StudentCompetitionGameScreenState
     _submitAnswer(selectedOptionIndex: idx);
   }
 
+  void _appendKey(String key) {
+    if (_answerSubmitted) return;
+    setState(() {
+      if (key == '-') {
+        if (_numericAnswerCtrl.text.startsWith('-')) {
+          _numericAnswerCtrl.text = _numericAnswerCtrl.text.substring(1);
+        } else {
+          _numericAnswerCtrl.text = '-${_numericAnswerCtrl.text}';
+        }
+      } else if (key == '.') {
+        if (!_numericAnswerCtrl.text.contains('.')) {
+          _numericAnswerCtrl.text += _numericAnswerCtrl.text.isEmpty ? '0.' : '.';
+        }
+      } else {
+        if (_numericAnswerCtrl.text.length < 12) {
+          _numericAnswerCtrl.text += key;
+        }
+      }
+    });
+  }
+
+  void _onBackspace() {
+    if (_answerSubmitted) return;
+    setState(() {
+      if (_numericAnswerCtrl.text.isNotEmpty) {
+        _numericAnswerCtrl.text = _numericAnswerCtrl.text.substring(0, _numericAnswerCtrl.text.length - 1);
+      }
+    });
+  }
+
   void _submitNumericAnswer() {
     if (_answerSubmitted) return;
     final text = _numericAnswerCtrl.text.trim();
@@ -761,73 +791,226 @@ class _StudentCompetitionGameScreenState
   }
 
   /// Free-response numeric input for Math Fundamentals (NUMERIC answerType)
-  /// questions, in place of the MCQ option grid.
+  /// with an on-screen 4-column custom keypad matching the requested layout.
   Widget _buildNumericAnswerInput() {
-    return Column(
-      children: [
-        TextField(
-          controller: _numericAnswerCtrl,
-          enabled: !_answerSubmitted,
-          autofocus: true,
-          textAlign: TextAlign.center,
-          keyboardType: const TextInputType.numberWithOptions(
-            decimal: true,
-            signed: true,
+    final bool isDark = context.isDark;
+    final text = _numericAnswerCtrl.text;
+
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent) {
+          if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+            _submitNumericAnswer();
+            return KeyEventResult.handled;
+          } else if (event.logicalKey == LogicalKeyboardKey.backspace) {
+            _onBackspace();
+            return KeyEventResult.handled;
+          } else if (event.character != null && RegExp(r'[0-9.\-]').hasMatch(event.character!)) {
+            _appendKey(event.character!);
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            children: [
+              // Display Card showing current typed answer
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: text.isNotEmpty ? const Color(0xFF6366F1) : context.glassBorder,
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: text.isNotEmpty
+                          ? const Color(0xFF6366F1).withOpacity(0.15)
+                          : Colors.black.withOpacity(0.04),
+                      blurRadius: 14,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        text.isEmpty ? 'Your answer' : text,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: text.isEmpty ? context.textColor60 : context.textColor,
+                          fontSize: 30,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ),
+                    if (text.isNotEmpty && !_answerSubmitted)
+                      IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 20),
+                        color: context.textColor60,
+                        onPressed: () => setState(() => _numericAnswerCtrl.clear()),
+                        tooltip: 'Clear',
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // 4-Column Keypad Layout
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  const double gap = 10;
+                  final double keyWidth = (constraints.maxWidth - (gap * 3)) / 4;
+                  final double keyHeight = keyWidth * 0.95;
+
+                  Widget buildKey(String label, {VoidCallback? onTap}) {
+                    return SizedBox(
+                      width: keyWidth,
+                      height: keyHeight,
+                      child: Material(
+                        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        elevation: 1.5,
+                        shadowColor: Colors.black.withOpacity(0.08),
+                        child: InkWell(
+                          onTap: _answerSubmitted ? null : (onTap ?? () => _appendKey(label)),
+                          borderRadius: BorderRadius.circular(16),
+                          child: Center(
+                            child: Text(
+                              label,
+                              style: TextStyle(
+                                color: context.textColor,
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Left 3 columns (digits, minus, decimal)
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          children: [
+                            // Row 1: 1, 2, 3
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                buildKey('1'),
+                                buildKey('2'),
+                                buildKey('3'),
+                              ],
+                            ),
+                            const SizedBox(height: gap),
+                            // Row 2: 4, 5, 6
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                buildKey('4'),
+                                buildKey('5'),
+                                buildKey('6'),
+                              ],
+                            ),
+                            const SizedBox(height: gap),
+                            // Row 3: 7, 8, 9
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                buildKey('7'),
+                                buildKey('8'),
+                                buildKey('9'),
+                              ],
+                            ),
+                            const SizedBox(height: gap),
+                            // Row 4: -, 0, .
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                buildKey('-'),
+                                buildKey('0'),
+                                buildKey('.'),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: gap),
+
+                      // Right 4th column (Backspace on Row 1 + Tall Submit Button spanning Rows 2..4)
+                      SizedBox(
+                        width: keyWidth,
+                        child: Column(
+                          children: [
+                            // Row 1: Backspace button
+                            SizedBox(
+                              width: keyWidth,
+                              height: keyHeight,
+                              child: Material(
+                                color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                borderRadius: BorderRadius.circular(16),
+                                elevation: 1.5,
+                                child: InkWell(
+                                  onTap: _answerSubmitted ? null : _onBackspace,
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.backspace_outlined,
+                                      color: isDark ? Colors.white70 : const Color(0xFF475569),
+                                      size: 22,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: gap),
+                            // Rows 2..4: Tall Submit Button
+                            SizedBox(
+                              width: keyWidth,
+                              height: (keyHeight * 3) + (gap * 2),
+                              child: Material(
+                                color: const Color(0xFF10B981),
+                                borderRadius: BorderRadius.circular(16),
+                                elevation: 3,
+                                shadowColor: const Color(0xFF10B981).withOpacity(0.4),
+                                child: InkWell(
+                                  onTap: _answerSubmitted ? null : _submitNumericAnswer,
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: const Center(
+                                    child: Icon(
+                                      Icons.arrow_forward_rounded,
+                                      color: Colors.white,
+                                      size: 32,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
           ),
-          inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
-          ],
-          style: TextStyle(
-            color: context.textColor,
-            fontSize: 30,
-            fontWeight: FontWeight.bold,
-          ),
-          decoration: InputDecoration(
-            hintText: 'Your answer',
-            hintStyle: TextStyle(
-              color: context.textColor60,
-              fontSize: 16,
-              fontWeight: FontWeight.normal,
-            ),
-            filled: true,
-            fillColor:
-                context.isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide(color: context.glassBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide(color: context.glassBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: const BorderSide(color: Color(0xFF6366F1), width: 2),
-            ),
-            contentPadding: const EdgeInsets.symmetric(vertical: 18),
-          ),
-          onSubmitted: (_) => _submitNumericAnswer(),
         ),
-        const SizedBox(height: 16),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: _answerSubmitted ? null : _submitNumericAnswer,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF10B981),
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: const Color(0xFF10B981).withOpacity(0.4),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            icon: const Icon(Icons.check_circle_rounded),
-            label: const Text(
-              'SUBMIT ANSWER',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
