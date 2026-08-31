@@ -67,7 +67,18 @@ export const initSocket = async (httpServer) => {
     // ----------------------------------------------------
     // LIVE BATCH COMPETITION ARENA REAL-TIME SOCKET HANDLERS
     // ----------------------------------------------------
-    socket.on('competition:join_room', async ({ roomCode, userId, name, avatar }) => {
+    socket.on('competition:host_join', async ({ roomCode }) => {
+      try {
+        if (!roomCode) return;
+        const code = roomCode.toUpperCase();
+        socket.join(code);
+        console.log(`Tutor host socket joined competition room ${code}`);
+      } catch (err) {
+        console.error('Error handling competition:host_join', err);
+      }
+    });
+
+    socket.on('competition:join_room', async ({ roomCode, userId, name, avatar, isHost }) => {
       try {
         const code = roomCode.toUpperCase();
         socket.join(code);
@@ -76,6 +87,19 @@ export const initSocket = async (httpServer) => {
         if (!competition) return;
 
         const uId = String(userId || socket.id);
+        const isTutor = isHost || (competition.tutorId && competition.tutorId.toString() === uId) || name === 'Tutor Host';
+
+        // Tutor is the host/observer and should never be added as a player participant
+        if (isTutor) {
+          console.log(`Tutor (${uId}) connected to room ${code} as Host/Observer (not added as player).`);
+          const payload = {
+            roomCode: code,
+            participants: competition.participants.filter(p => p.userId?.toString() !== competition.tutorId?.toString() && p.name !== 'Tutor Host'),
+            status: competition.status
+          };
+          socket.emit('competition:player_joined', payload);
+          return;
+        }
 
         // Add or update participant
         let participant = competition.participants.find(p => p.userId && p.userId.toString() === uId);
@@ -96,7 +120,7 @@ export const initSocket = async (httpServer) => {
         
         const payload = {
           roomCode: code,
-          participants: competition.participants,
+          participants: competition.participants.filter(p => p.userId?.toString() !== competition.tutorId?.toString() && p.name !== 'Tutor Host'),
           status: competition.status
         };
         io.to(code).emit('competition:player_joined', payload);

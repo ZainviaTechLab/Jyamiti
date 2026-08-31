@@ -329,7 +329,16 @@ router.get('/room/:roomCode', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Competition room not found. Check your Room Code.' });
     }
 
-    res.json({ competition });
+    // Filter out tutor if accidentally stored previously
+    const tutorIdStr = (competition.tutorId?._id || competition.tutorId)?.toString();
+    const cleanParticipants = competition.participants.filter(
+      p => p.userId?.toString() !== tutorIdStr && p.name !== 'Tutor Host'
+    );
+
+    const compObj = competition.toObject();
+    compObj.participants = cleanParticipants;
+
+    res.json({ competition: compObj });
   } catch (error) {
     console.error('Error fetching competition room:', error);
     res.status(500).json({ message: 'Server error.', error: error.message });
@@ -347,6 +356,17 @@ router.post('/join', authenticateToken, async (req, res) => {
     if (!competition) return res.status(404).json({ message: 'Competition room not found.' });
 
     const userId = String(req.user.id);
+    const isTutor = (competition.tutorId && competition.tutorId.toString() === userId) || req.user.role === 'TUTOR' || name === 'Tutor Host';
+
+    if (isTutor) {
+      const cleanParticipants = competition.participants.filter(
+        p => p.userId?.toString() !== competition.tutorId?.toString() && p.name !== 'Tutor Host'
+      );
+      const compObj = competition.toObject();
+      compObj.participants = cleanParticipants;
+      return res.json({ message: 'Tutor observed competition room.', competition: compObj });
+    }
+
     let participant = competition.participants.find(p => p.userId && p.userId.toString() === userId);
     if (!participant) {
       competition.participants.push({
@@ -361,19 +381,26 @@ router.post('/join', authenticateToken, async (req, res) => {
       await competition.save();
     }
 
+    const cleanParticipants = competition.participants.filter(
+      p => p.userId?.toString() !== competition.tutorId?.toString() && p.name !== 'Tutor Host'
+    );
+
     // Broadcast update via Socket.IO
     try {
       const io = getIO();
       io.to(code).emit('competition:player_joined', {
         roomCode: code,
-        participants: competition.participants,
+        participants: cleanParticipants,
         status: competition.status
       });
     } catch (e) {
       console.warn('Socket emit error on HTTP join:', e.message);
     }
 
-    res.json({ message: 'Joined competition successfully.', competition });
+    const compObj = competition.toObject();
+    compObj.participants = cleanParticipants;
+
+    res.json({ message: 'Joined competition successfully.', competition: compObj });
   } catch (error) {
     console.error('Error joining competition:', error);
     res.status(500).json({ message: 'Server error.', error: error.message });

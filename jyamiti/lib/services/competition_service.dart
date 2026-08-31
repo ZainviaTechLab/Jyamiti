@@ -114,27 +114,39 @@ class CompetitionService {
   }
 
   // Real-Time Socket Event Emitters
+  static void joinAsHost({
+    required String roomCode,
+  }) {
+    _socket?.emit('competition:host_join', {
+      'roomCode': roomCode,
+    });
+  }
+
   static Future<void> joinRoom({
     required String roomCode,
     required String userId,
     required String name,
     String avatar = '',
+    bool isHost = false,
   }) async {
     _socket?.emit('competition:join_room', {
       'roomCode': roomCode,
       'userId': userId,
       'name': name,
       'avatar': avatar,
+      'isHost': isHost,
     });
 
-    try {
-      await ApiService.post('/competitions/join', {
-        'roomCode': roomCode,
-        'name': name,
-        'avatar': avatar,
-      });
-    } catch (e) {
-      debugPrint('HTTP join backup error: $e');
+    if (!isHost) {
+      try {
+        await ApiService.post('/competitions/join', {
+          'roomCode': roomCode,
+          'name': name,
+          'avatar': avatar,
+        });
+      } catch (e) {
+        debugPrint('HTTP join backup error: $e');
+      }
     }
   }
 

@@ -85,6 +85,14 @@ class _StudentCompetitionGameScreenState
     super.dispose();
   }
 
+  List<dynamic> _cleanParticipants(List<dynamic> list) {
+    return list.where((p) {
+      final name = p['name']?.toString();
+      if (name == 'Tutor Host') return false;
+      return true;
+    }).toList();
+  }
+
   void _setupSocketListeners() {
     final socket = CompetitionService.socket;
     if (socket == null) {
@@ -95,7 +103,7 @@ class _StudentCompetitionGameScreenState
     socket.on('competition:player_joined', (data) {
       if (mounted) {
         setState(() {
-          _participants = data['participants'] ?? [];
+          _participants = _cleanParticipants(data['participants'] ?? []);
         });
       }
     });
@@ -123,7 +131,7 @@ class _StudentCompetitionGameScreenState
     socket.on('competition:player_progress', (data) {
       if (mounted && data['participants'] != null) {
         setState(() {
-          _participants = data['participants'];
+          _participants = _cleanParticipants(data['participants']);
         });
       }
     });
@@ -134,7 +142,7 @@ class _StudentCompetitionGameScreenState
         setState(() {
           _gameState = 'GAME_OVER';
           _finalPodium = data['finalPodium'] ?? [];
-          _roundLeaderboard = data['leaderboard'] ?? [];
+          _roundLeaderboard = _cleanParticipants(data['leaderboard'] ?? []);
         });
       }
     });
@@ -181,7 +189,7 @@ class _StudentCompetitionGameScreenState
           if (comp != null && mounted) {
             final List<dynamic> updatedParticipants = comp['participants'] ?? [];
             setState(() {
-              _participants = updatedParticipants;
+              _participants = _cleanParticipants(updatedParticipants);
             });
 
             if (comp['status'] == 'IN_PROGRESS') {
@@ -240,7 +248,7 @@ class _StudentCompetitionGameScreenState
       if (isAlreadyInProgress) {
         final List<dynamic> questions = competition['questions'] ?? [];
         final myUserId = (auth.user?['id'] ?? auth.user?['_id'])?.toString();
-        final List<dynamic> parts = competition['participants'] ?? [];
+        final List<dynamic> parts = _cleanParticipants(competition['participants'] ?? []);
         final myPart = parts.firstWhere((p) => p['userId']?.toString() == myUserId, orElse: () => null);
         final List<dynamic> resps = myPart != null ? (myPart['responseHistory'] ?? []) : [];
         final startIdx = resps.length;

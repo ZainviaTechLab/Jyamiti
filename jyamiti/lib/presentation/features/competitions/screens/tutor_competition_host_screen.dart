@@ -204,6 +204,20 @@ class _TutorCompetitionHostScreenState
     super.dispose();
   }
 
+  List<dynamic> _cleanParticipants(List<dynamic> list) {
+    final tutorId = (_competition?['tutorId'] is Map
+            ? _competition?['tutorId']?['_id']
+            : _competition?['tutorId'])
+        ?.toString();
+    return list.where((p) {
+      final uId = p['userId']?.toString();
+      final name = p['name']?.toString();
+      if (tutorId != null && uId == tutorId) return false;
+      if (name == 'Tutor Host') return false;
+      return true;
+    }).toList();
+  }
+
   void _setupSocketListeners() {
     final socket = CompetitionService.socket;
     if (socket == null) {
@@ -214,7 +228,7 @@ class _TutorCompetitionHostScreenState
     socket.on('competition:player_joined', (data) {
       if (mounted) {
         setState(() {
-          _participants = data['participants'] ?? [];
+          _participants = _cleanParticipants(data['participants'] ?? []);
         });
       }
     });
@@ -222,7 +236,7 @@ class _TutorCompetitionHostScreenState
     socket.on('competition:player_progress', (data) {
       if (mounted && data['participants'] != null) {
         setState(() {
-          _participants = data['participants'];
+          _participants = _cleanParticipants(data['participants']);
         });
       }
     });
@@ -242,7 +256,7 @@ class _TutorCompetitionHostScreenState
       if (mounted) {
         setState(() {
           _gameState = 'HOST_ROUND_RESULT';
-          _roundLeaderboard = data['leaderboard'] ?? [];
+          _roundLeaderboard = _cleanParticipants(data['leaderboard'] ?? []);
         });
       }
     });
@@ -262,7 +276,7 @@ class _TutorCompetitionHostScreenState
       final res = await CompetitionService.getRoomByCode(_roomCode!);
       if (mounted && res['competition'] != null) {
         setState(() {
-          _participants = res['competition']['participants'] ?? [];
+          _participants = _cleanParticipants(res['competition']['participants'] ?? []);
         });
       }
     } catch (_) {}
@@ -372,10 +386,8 @@ class _TutorCompetitionHostScreenState
       _roomCode = created['roomCode'];
       _competition = created;
 
-      CompetitionService.joinRoom(
+      CompetitionService.joinAsHost(
         roomCode: _roomCode!,
-        userId: created['tutorId']?.toString() ?? 'tutor',
-        name: 'Tutor Host',
       );
 
       _setupSocketListeners();
@@ -383,7 +395,7 @@ class _TutorCompetitionHostScreenState
 
       setState(() {
         _gameState = 'LOBBY';
-        _participants = created['participants'] ?? [];
+        _participants = _cleanParticipants(created['participants'] ?? []);
         _isLoading = false;
       });
     } catch (e) {
