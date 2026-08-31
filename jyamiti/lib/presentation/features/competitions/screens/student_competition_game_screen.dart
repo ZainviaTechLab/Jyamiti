@@ -358,9 +358,8 @@ class _StudentCompetitionGameScreenState
     _submitAnswer(answerText: text);
   }
 
-  /// Shared by both answer types: records the response and sends it to the
-  /// server. The student waits on this screen until the tutor ends the round,
-  /// at which point the round results and next round start in sync.
+  /// Shared by both answer types: records the response, sends it to the
+  /// server, and advances to the next question in the arena.
   void _submitAnswer({int? selectedOptionIndex, String? answerText}) {
     if (_answerSubmitted || _gameState != 'QUESTION' || _roomCode == null) return;
 
@@ -381,6 +380,30 @@ class _StudentCompetitionGameScreenState
       answerText: answerText,
       timeTakenSec: _timeTakenSec,
     );
+
+    // Auto-advance to next question after 400ms
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+
+      final nextRound = _currentRoundIndex + 1;
+      if (_allQuestions != null && nextRound < _allQuestions!.length) {
+        setState(() {
+          _currentRoundIndex = nextRound;
+          _currentQuestion = _allQuestions![nextRound];
+          _selectedOptionIndex = null;
+          _answerSubmitted = false;
+          _secondsRemaining = _timePerQuestion;
+          _timeTakenSec = 0;
+        });
+        _numericAnswerCtrl.clear();
+        _startTimer();
+      } else if (_allQuestions != null && nextRound >= _allQuestions!.length) {
+        // Finished all questions in competition
+        setState(() {
+          _gameState = 'ROUND_RESULT';
+        });
+      }
+    });
   }
 
   Widget _buildJoinState() {
