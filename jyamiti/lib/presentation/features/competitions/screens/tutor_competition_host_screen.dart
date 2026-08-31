@@ -410,15 +410,14 @@ class _TutorCompetitionHostScreenState
     if (_roomCode == null) return;
     CompetitionService.startGame(_roomCode!);
 
-    final numRounds = _numberOfRounds > 0 ? _numberOfRounds : (_competition?['questions']?.length ?? 3);
     final durationMins = _roundDurationMinutes > 0 ? _roundDurationMinutes : 1;
-    final int totalSecs = (durationMins * 60 * numRounds).toInt();
+    final int roundSecs = (durationMins * 60).toInt();
 
     setState(() {
       _gameState = 'HOST_QUESTION';
       _currentRoundIndex = 0;
       _answeredCount = 0;
-      _overallTimerSeconds = totalSecs;
+      _overallTimerSeconds = roundSecs;
     });
 
     _gameDurationTimer?.cancel();
@@ -442,16 +441,42 @@ class _TutorCompetitionHostScreenState
 
   void _endRound() {
     if (_roomCode == null) return;
+    _gameDurationTimer?.cancel();
     CompetitionService.endRound(_roomCode!);
+    setState(() {
+      _gameState = 'HOST_ROUND_RESULT';
+    });
   }
 
   void _nextRound() {
     if (_roomCode == null) return;
     CompetitionService.nextRound(_roomCode!);
+    final durationMins = _roundDurationMinutes > 0 ? _roundDurationMinutes : 1;
+    final int roundSecs = (durationMins * 60).toInt();
+
     setState(() {
       _gameState = 'HOST_QUESTION';
       _currentRoundIndex += 1;
       _answeredCount = 0;
+      _overallTimerSeconds = roundSecs;
+    });
+
+    _gameDurationTimer?.cancel();
+    _gameDurationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_overallTimerSeconds <= 1) {
+        timer.cancel();
+        if (mounted) {
+          setState(() {
+            _overallTimerSeconds = 0;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _overallTimerSeconds -= 1;
+          });
+        }
+      }
     });
   }
 
@@ -1750,10 +1775,32 @@ class _TutorCompetitionHostScreenState
             }),
 
           const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _endRound,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    elevation: 4,
+                  ),
+                  icon: const Icon(Icons.leaderboard_rounded),
+                  label: Text(
+                    'END ROUND ${_currentRoundIndex + 1} & VIEW LEADERBOARD ➔',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           // Button to view Full Analytics Dashboard
           SizedBox(
             width: double.infinity,
-            child: ElevatedButton.icon(
+            child: OutlinedButton.icon(
               onPressed: () {
                 final compId = _competition?['_id'] ?? _competition?['id'] ?? _roomCode;
                 if (compId != null) {
@@ -1765,14 +1812,14 @@ class _TutorCompetitionHostScreenState
                   );
                 }
               },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF6366F1),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF6366F1),
+                side: const BorderSide(color: Color(0xFF6366F1)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
               icon: const Icon(Icons.analytics_rounded),
-              label: const Text('VIEW LIVE BATCH ANALYTICS & WEAK POINTS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              label: const Text('VIEW LIVE BATCH ANALYTICS & WEAK POINTS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
             ),
           ),
         ],

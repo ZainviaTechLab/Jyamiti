@@ -110,20 +110,27 @@ class _StudentCompetitionGameScreenState
 
     socket.on('competition:round_started', (data) {
       _waitingPollTimer?.cancel();
+      _countdownTimer?.cancel();
       if (mounted) {
         final List<dynamic> questions = data['questions'] ?? (data['question'] != null ? [data['question']] : []);
+        final int rIdx = data['roundIndex'] ?? 0;
+        final currentQ = data['question'] ?? (questions.isNotEmpty ? questions[rIdx < questions.length ? rIdx : 0] : null);
+        final int totalRounds = data['totalRounds'] ?? (questions.isNotEmpty ? questions.length : _totalRounds);
+        final int timePerQ = data['timePerQuestion'] ?? _timePerQuestion;
+
         setState(() {
-          _allQuestions = questions;
+          _allQuestions = questions.isNotEmpty ? questions : _allQuestions;
           _gameState = 'QUESTION';
-          _currentRoundIndex = 0;
-          _totalRounds = questions.isNotEmpty ? questions.length : (data['totalRounds'] ?? 1);
-          _timePerQuestion = data['timePerQuestion'] ?? 60;
-          _currentQuestion = questions.isNotEmpty ? questions[0] : data['question'];
+          _currentRoundIndex = rIdx;
+          _totalRounds = totalRounds;
+          _timePerQuestion = timePerQ;
+          _currentQuestion = currentQ;
           _selectedOptionIndex = null;
           _answerSubmitted = false;
-          _secondsRemaining = _timePerQuestion;
+          _secondsRemaining = timePerQ;
           _timeTakenSec = 0;
         });
+        _numericAnswerCtrl.clear();
         _startTimer();
       }
     });
@@ -132,6 +139,19 @@ class _StudentCompetitionGameScreenState
       if (mounted && data['participants'] != null) {
         setState(() {
           _participants = _cleanParticipants(data['participants']);
+        });
+      }
+    });
+
+    socket.on('competition:round_ended', (data) {
+      _countdownTimer?.cancel();
+      if (mounted) {
+        setState(() {
+          _gameState = 'ROUND_RESULT';
+          _currentRoundIndex = data['roundIndex'] ?? _currentRoundIndex;
+          _roundLeaderboard = _cleanParticipants(data['leaderboard'] ?? []);
+          _correctOptionIndex = data['correctOptionIndex'] ?? 0;
+          _explanation = data['explanation'] ?? '';
         });
       }
     });
@@ -304,11 +324,9 @@ class _StudentCompetitionGameScreenState
     _submitAnswer(answerText: text);
   }
 
-  /// Shared by both answer types: records the response, sends it to the
-  /// server, then auto-advances to the next locally-cached question after
-  /// a short delay (this student moves at their own pace through
-  /// `_allQuestions` -- it doesn't wait for the tutor's round_ended/
-  /// next_round, which only drives the host's own view).
+  /// Shared by both answer types: records the response and sends it to the
+  /// server. The student waits on this screen until the tutor ends the round,
+  /// at which point the round results and next round start in sync.
   void _submitAnswer({int? selectedOptionIndex, String? answerText}) {
     if (_answerSubmitted || _gameState != 'QUESTION' || _roomCode == null) return;
 
@@ -329,29 +347,6 @@ class _StudentCompetitionGameScreenState
       answerText: answerText,
       timeTakenSec: _timeTakenSec,
     );
-
-    // Auto-advance to next question after 800ms
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (!mounted) return;
-
-      final nextRound = _currentRoundIndex + 1;
-      if (_allQuestions != null && nextRound < _allQuestions!.length) {
-        setState(() {
-          _currentRoundIndex = nextRound;
-          _currentQuestion = _allQuestions![nextRound];
-          _selectedOptionIndex = null;
-          _answerSubmitted = false;
-          _secondsRemaining = _timePerQuestion;
-          _timeTakenSec = 0;
-        });
-        _numericAnswerCtrl.clear();
-        _startTimer();
-      } else {
-        setState(() {
-          _gameState = 'GAME_OVER';
-        });
-      }
-    });
   }
 
   Widget _buildJoinState() {
@@ -882,6 +877,37 @@ class _StudentCompetitionGameScreenState
                     trailing: Text('${p['totalScore']} pts', style: const TextStyle(color: Color(0xFF6366F1), fontWeight: FontWeight.bold)),
                   );
                 }),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF6366F1).withOpacity(0.12),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.3)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    color: Color(0xFF6366F1),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Waiting for Tutor to start Round ${_currentRoundIndex + 2}...',
+                  style: const TextStyle(
+                    color: Color(0xFF6366F1),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
               ],
             ),
           ),
