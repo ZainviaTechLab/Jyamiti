@@ -359,10 +359,11 @@ class _StudentCompetitionGameScreenState
   }
 
   /// Shared by both answer types: records the response, sends it to the
-  /// server, and immediately advances to the next question as long as there are
-  /// questions remaining and time on the round timer.
+  /// server, and immediately advances to the next question in a continuous stream
+  /// as long as time remains on the round timer.
   void _submitAnswer({int? selectedOptionIndex, String? answerText}) {
     if (_answerSubmitted || _gameState != 'QUESTION' || _roomCode == null) return;
+    if (_secondsRemaining <= 0) return;
 
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final uId = auth.user?['id'] ?? auth.user?['_id'] ?? '';
@@ -381,25 +382,24 @@ class _StudentCompetitionGameScreenState
       timeTakenSec: _timeTakenSec,
     );
 
-    final nextIndex = _currentRoundIndex + 1;
-    final totalQuestions = (_allQuestions != null && _allQuestions!.isNotEmpty)
-        ? _allQuestions!.length
-        : _totalRounds;
+    // As long as there is time remaining in the round, advance to the next problem seamlessly!
+    if (_secondsRemaining > 0) {
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (!mounted || _gameState != 'QUESTION' || _secondsRemaining <= 0) return;
+        final pool = _allQuestions ?? [];
+        final nextIndex = _currentRoundIndex + 1;
+        final nextQuestion = pool.isNotEmpty
+            ? pool[nextIndex % pool.length]
+            : _currentQuestion;
 
-    if (_allQuestions != null && nextIndex < totalQuestions) {
-      Future.delayed(const Duration(milliseconds: 250), () {
-        if (!mounted || _gameState != 'QUESTION') return;
         setState(() {
           _currentRoundIndex = nextIndex;
-          _currentQuestion = _allQuestions![nextIndex];
+          _currentQuestion = nextQuestion;
           _selectedOptionIndex = null;
           _answerSubmitted = false;
         });
         _numericAnswerCtrl.clear();
       });
-    } else {
-      // Completed all questions in the round
-      _countdownTimer?.cancel();
     }
   }
 
@@ -630,7 +630,7 @@ class _StudentCompetitionGameScreenState
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
-                  'ROUND ${_currentRoundIndex + 1} / $_totalRounds',
+                  'PROBLEM #${_currentRoundIndex + 1}',
                   style: const TextStyle(
                     color: Color(0xFF6366F1),
                     fontWeight: FontWeight.bold,

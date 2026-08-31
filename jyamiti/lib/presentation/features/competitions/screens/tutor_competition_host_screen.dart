@@ -351,7 +351,8 @@ class _TutorCompetitionHostScreenState
         final ranges = _mfEffectiveRanges();
         final isDecimal = _mfSubtopic == 'decimals';
         final subtopicLabel = 'Addition (${isDecimal ? 'Decimals' : 'Integers'})';
-        for (int i = 0; i < _numberOfRounds; i++) {
+        const int problemPoolCount = 100;
+        for (int i = 0; i < problemPoolCount; i++) {
           final problem = generateAdditionProblem(
             ranges: ranges,
             isDecimal: isDecimal,

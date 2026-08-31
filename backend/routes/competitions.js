@@ -181,7 +181,7 @@ router.post('/create', authenticateToken, requireRole(['TUTOR', 'ADMIN']), async
     const rounds = parseInt(numberOfRounds) || parseInt(questionCount) || 3;
     const durationMinutes = parseInt(roundDurationMinutes) || (timePerQuestion ? Math.max(1, Math.round(timePerQuestion / 60)) : 1);
     const calculatedTimePerQuestion = durationMinutes * 60; // duration in seconds per round
-    const targetCount = rounds; // Number of questions = Number of rounds
+    const targetCount = Math.max(50, rounds * 10); // Generous question pool for continuous answering during rounds
 
     // Generate unique room code
     let roomCode = generateRoomCode();

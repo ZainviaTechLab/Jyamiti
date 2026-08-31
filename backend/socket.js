@@ -184,7 +184,9 @@ export const initSocket = async (httpServer) => {
         if (!participant) return;
 
         const rIdx = roundIndex !== undefined ? parseInt(roundIndex) : participant.responseHistory.length;
-        const question = competition.questions[rIdx];
+        if (competition.questions.length === 0) return;
+        const qIndex = rIdx % competition.questions.length;
+        const question = competition.questions[qIndex];
         if (!question) return;
 
         // Check if student already answered this round
